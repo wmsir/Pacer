@@ -1,0 +1,27 @@
+# Default values for wmdb.
+replicaCount: 2
+
+image:
+  backendRepository: wmdb/backend
+  frontendRepository: wmdb/frontend
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  backendPort: 8080
+  frontendPort: 80
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1024Mi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+env:
+  WMDB_JWT_SECRET: "changeme1234567890abcdef"
+  MINIO_ENDPOINT: "http://minio:9000"
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin"

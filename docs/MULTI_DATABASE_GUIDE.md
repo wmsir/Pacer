@@ -1,0 +1,264 @@
+# WMdb 智能云平台 - 多数据库与国产数据库部署使用实战教程
+
+> **版本**：v2.8 Enterprise  
+> **适用数据库**：MySQL 8.0 / 阿里云 RDS / 腾讯云 CDB、国产达梦数据库 (DM8/DM7)、国产人大金仓 (KingbaseES V8/V9)、国产华为 openGauss / MogDB、企业级 Oracle (12c/19c/21c)、国产分布式 TiDB / OceanBase  
+> **编写时间**：2026-09-05  
+
+---
+
+## 一、 核心架构与多数据库自动适配原理
+
+WMdb 智能云平台采用**「配置驱动 + 驱动元数据智能嗅探（Plan B 方案）」**的多数据库方言自适应架构。系统在后端容器（`wmdb-backend`）启动时，由 `DatabaseAutoInitializerRunner` 优先于业务逻辑自动嗅探当前连接的数据库类型，并精准加载该数据库专属方言的 DDL/DML 初始化脚本。
+
+### 1. 自动化初始化与建表流转机制
+
+```text
+                     Spring Boot 启动 (wmdb-backend)
+                                   │
+                                   ▼
+             [DatabaseAutoInitializerRunner (优先级 @Order(1))]
+                                   │
+                   嗅探 JDBC 连接串与 Connection MetaData
+                                   │
+       ┌───────────────────────────┼───────────────────────────┬──────────────────────┐
+       ▼                           ▼                           ▼                      ▼
+ 【国产达梦 DM8】            【国产人大金仓 KES】        【国产华为 openGauss】    【MySQL / TiDB】
+classpath:db/dameng/        classpath:db/kingbase/      classpath:db/opengauss/ classpath:db/mysql/
+  schema.sql                  schema.sql                  schema.sql             schema.sql
+       │                           │                           │                      │
+       └───────────────────────────┼───────────────────────────┴──────────────────────┘
+                                   │
+                                   ▼
+                     执行方言专属 DDL 脚本 (建表与索引)
+                                   │
+                                   ▼
+             [TestDataInitializerRunner (优先级 @Order(2))]
+             自动同步系统角色、8大业务资源组、真实工单及用户数据
+                                   │
+                                   ▼
+                          平台就绪，对外提供服务！
+```
+
+### 2. 核心特性
+- **开箱即用，零手动介入**：无需人工提前登录数据库客户端逐行执行建表脚本，服务容器启动后 5 秒内全自动完成建表与索引构建。
+- **多次部署幂等保护 (`continue-on-error: true`)**：系统建表语句均具备方言级的幂等保护（如 MySQL `CREATE TABLE IF NOT EXISTS`、达梦与金仓自动忽略已存在对象报错），重复发布、容器重启绝不影响已有业务数据。
+- **全量演练数据自动对齐**：建表完成后自动初始化核心角色权限、8 大业务资源组、测试人员账号以及 60+ 笔流转工单数据。
+
+---
+
+## 二、 核心配置参数清单 (`application.yml` 与环境变量)
+
+系统支持通过配置文件（`application.yml`）、Java 命令行参数或 Docker `-e` 环境变量进行无侵入式配置：
+
+| 配置项 | 对应环境变量 | 默认值 | 作用与说明 |
+| :--- | :--- | :--- | :--- |
+| `wmdb.database.auto-init` | `WMDB_DB_AUTO_INIT` | `true` | 是否开启系统启动时自动建表与表结构检查 |
+| `wmdb.database.type` | `WMDB_DB_TYPE` | `auto` | 指定数据库方言。可选：`auto` (智能嗅探)、`mysql`、`dameng`、`kingbase`、`opengauss`、`oracle`、`tidb`、`oceanbase` |
+| `wmdb.database.continue-on-error` | `WMDB_DB_CONTINUE_ON_ERROR` | `true` | 执行初始化脚本遇错时是否平滑继续（保证已有表结构不报错中断） |
+| `spring.datasource.url` | `WMDB_DB_URL` | 云 RDS 地址 | 目标数据库的 JDBC 完整连接串 |
+| `spring.datasource.username` | `WMDB_DB_USERNAME` | `root` | 数据库登录用户名 |
+| `spring.datasource.password` | `WMDB_DB_PASSWORD` | - | 数据库登录密码 |
+| `spring.datasource.driver-class-name` | `WMDB_DB_DRIVER` | `com.mysql.cj.jdbc.Driver` | 数据库 JDBC 驱动全类名 |
+
+---
+
+## 三、 各数据库实战部署操作配方 (Recipes)
+
+### 配方 1：MySQL 8.0 / 阿里云 RDS / 腾讯云 CDB（标准推荐）
+
+- **方言脚本路径**：`backend/src/main/resources/db/mysql/schema.sql`
+- **驱动类名**：`com.mysql.cj.jdbc.Driver`
+- **JDBC 连接格式**：`jdbc:mysql://<IP>:3306/<DB_NAME>?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8&allowMultiQueries=true`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:mysql://192.168.1.50:3306/wmdb?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8" \
+  -e WMDB_DB_USERNAME="wmdb_user" \
+  -e WMDB_DB_PASSWORD="YourPassword123++" \
+  -e WMDB_DB_DRIVER="com.mysql.cj.jdbc.Driver" \
+  -e WMDB_DB_TYPE="mysql" \
+  wmdb-backend:latest
+```
+
+---
+
+### 配方 2：国产达梦数据库 (DaMeng DM8 / DM7)
+
+- **支持版本**：达梦数据库 DM7 / DM8 各信创生产版本
+- **内置驱动**：`dm.jdbc.driver.DmDriver`（系统 POM 已内置 `com.dameng:DmJdbcDriver18:8.1.3.140`）
+- **方言脚本路径**：`backend/src/main/resources/db/dameng/schema.sql`
+- **特性适配**：已适配达梦 `IDENTITY(1,1)` 纯自增主键语法、表名与列名大小写规范、大文本及注释语法。
+- **JDBC 连接格式**：`jdbc:dm://<IP>:5236/<DB_NAME>?schema=SYSDBA&compatibleMode=mysql`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:dm://192.168.1.60:5236/DAMENG?schema=SYSDBA" \
+  -e WMDB_DB_USERNAME="SYSDBA" \
+  -e WMDB_DB_PASSWORD="SYSDBA_PASSWORD_HERE" \
+  -e WMDB_DB_DRIVER="dm.jdbc.driver.DmDriver" \
+  -e WMDB_DB_TYPE="dameng" \
+  wmdb-backend:latest
+```
+
+#### 启动成功日志标识：
+```text
+[DB-AUTO-INIT] 📌 底层驱动检测产品: 【DM DBMS】
+[DB-AUTO-INIT] 🇨🇳 识别为国产【达梦数据库 (DaMeng DM)】引擎
+[DB-AUTO-INIT] 📂 正在加载并执行初始化脚本: 【classpath:db/dameng/schema.sql】
+[DB-AUTO-INIT] 🌟 脚本【schema.sql】批量执行完毕！
+```
+
+---
+
+### 配方 3：国产人大金仓 (KingbaseES KES V8R3 / V8R6 / V9)
+
+- **支持版本**：北京人大金仓 KingbaseES V8 系列及 V9 系列
+- **内置驱动**：`com.kingbase8.Driver`（系统 POM 已内置 `cn.com.kingbase:kingbase8:8.6.0`）
+- **方言脚本路径**：`backend/src/main/resources/db/kingbase/schema.sql`
+- **特性适配**：支持金仓 `BIGINT GENERATED BY DEFAULT AS IDENTITY` 自增序列与序列级幂等，兼容 PostgreSQL 语法。
+- **JDBC 连接格式**：`jdbc:kingbase8://<IP>:54321/<DB_NAME>?currentSchema=public`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:kingbase8://192.168.1.61:54321/wmdb?currentSchema=public" \
+  -e WMDB_DB_USERNAME="system" \
+  -e WMDB_DB_PASSWORD="KingbasePassword++" \
+  -e WMDB_DB_DRIVER="com.kingbase8.Driver" \
+  -e WMDB_DB_TYPE="kingbase" \
+  wmdb-backend:latest
+```
+
+#### 启动成功日志标识：
+```text
+[DB-AUTO-INIT] 📌 底层驱动检测产品: 【KingbaseES】
+[DB-AUTO-INIT] 🇨🇳 识别为国产【人大金仓 (KingbaseES)】引擎
+[DB-AUTO-INIT] 📂 正在加载并执行初始化脚本: 【classpath:db/kingbase/schema.sql】
+[DB-AUTO-INIT] 🌟 脚本【schema.sql】批量执行完毕！
+```
+
+---
+
+### 配方 4：国产华为 openGauss / MogDB / 统信 UOS
+
+- **支持版本**：华为开源 openGauss 2.0+ / 3.0+ / 5.0+、云和恩墨 MogDB
+- **内置驱动**：`org.opengauss.Driver`（兼容 `org.postgresql.Driver`）
+- **方言脚本路径**：`backend/src/main/resources/db/opengauss/schema.sql`
+- **特性适配**：适配 openGauss 原生 `BIGSERIAL` 自增列、模式隔离与时区特性。
+- **JDBC 连接格式**：`jdbc:opengauss://<IP>:5432/<DB_NAME>?currentSchema=public`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:opengauss://192.168.1.62:5432/wmdb?currentSchema=public" \
+  -e WMDB_DB_USERNAME="opengauss" \
+  -e WMDB_DB_PASSWORD="OpenGaussPassword++" \
+  -e WMDB_DB_DRIVER="org.opengauss.Driver" \
+  -e WMDB_DB_TYPE="opengauss" \
+  wmdb-backend:latest
+```
+
+---
+
+### 配方 5：企业商业数据库 Oracle 12c / 19c / 21c
+
+- **支持版本**：Oracle Database 12c / 18c / 19c / 21c
+- **内置驱动**：`oracle.jdbc.OracleDriver`（系统 POM 已引入 `com.oracle.database.jdbc:ojdbc8`）
+- **方言脚本路径**：`backend/src/main/resources/db/oracle/schema.sql`
+- **特性适配**：采用 `NUMBER(20) GENERATED ALWAYS AS IDENTITY` 现代主键定义，兼容大写对象字典。
+- **JDBC 连接格式**：`jdbc:oracle:thin:@//<IP>:1521/<SERVICE_NAME>`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:oracle:thin:@//192.168.1.70:1521/ORCLPDB1" \
+  -e WMDB_DB_USERNAME="wmdb_user" \
+  -e WMDB_DB_PASSWORD="OraclePassword123" \
+  -e WMDB_DB_DRIVER="oracle.jdbc.OracleDriver" \
+  -e WMDB_DB_TYPE="oracle" \
+  wmdb-backend:latest
+```
+
+---
+
+### 配方 6：国产云原生分布式数据库 TiDB / OceanBase
+
+- **支持版本**：PingCAP TiDB 5.0+ / 6.0+ / 7.0+；蚂蚁金服 OceanBase 3.x / 4.x (MySQL 模式)
+- **驱动类名**：`com.mysql.cj.jdbc.Driver`
+- **方言脚本路径**：`backend/src/main/resources/db/mysql/schema.sql` (100% 协议与 DDL 兼容)
+- **JDBC 连接格式**：`jdbc:mysql://<IP>:4000/<DB_NAME>?useSSL=false&allowMultiQueries=true`
+
+#### Docker 一键部署命令：
+```bash
+docker run -d --name wmdb-backend \
+  --restart always \
+  -p 8088:8088 \
+  -e WMDB_DB_URL="jdbc:mysql://192.168.1.80:4000/wmdb?useSSL=false&allowMultiQueries=true" \
+  -e WMDB_DB_USERNAME="root" \
+  -e WMDB_DB_PASSWORD="TiDBPassword++" \
+  -e WMDB_DB_TYPE="tidb" \
+  wmdb-backend:latest
+```
+
+---
+
+## 四、 本地开发与 Java 命令行直启测试
+
+如果不使用 Docker 容器，直接在服务器或本地运行 JAR 包，只需传入对应参数：
+
+```bash
+# 以达梦数据库为例：
+java -jar wmdb-backend-1.0.0-SNAPSHOT.jar \
+  --server.port=8088 \
+  --spring.datasource.url="jdbc:dm://127.0.0.1:5236/DAMENG" \
+  --spring.datasource.username="SYSDBA" \
+  --spring.datasource.password="SYSDBA001" \
+  --spring.datasource.driver-class-name="dm.jdbc.driver.DmDriver" \
+  --wmdb.database.type="dameng" \
+  --wmdb.database.auto-init=true
+```
+
+---
+
+## 五、 方言脚本文件结构与二次定制扩展指引
+
+如需在企业特定场景下扩展建表字段或追加默认数据，直接编辑如下工程目录对应文件并重新编译打包即可：
+
+```text
+backend/src/main/resources/db/
+├── dameng/
+│   └── schema.sql       # 达梦专用：包含 IDENTITY 自增列及达梦注释 DDL
+├── kingbase/
+│   └── schema.sql       # 人大金仓专用：包含 KES 自增序列及标准表空间定义
+├── opengauss/
+│   └── schema.sql       # 华为 openGauss 专用：包含 SERIAL 主键及模式约束
+├── oracle/
+│   └── schema.sql       # Oracle 专用：包含 NUMBER(20) IDENTITY 定义
+└── mysql/
+    └── schema.sql       # MySQL / TiDB / OceanBase 专用：包含标准 AUTO_INCREMENT 定义
+```
+
+---
+
+## 六、 常见问题与排障指南 (FAQ)
+
+### Q1：启动时报告用户表或工单表已存在 (`Table already exists`) 会导致启动失败吗？
+> **不会**。系统内置了 `wmdb.database.continue-on-error: true` 配置，并在各方言 SQL 中加入了幂等性控制。遇到已存在的表会自动跳过该建表语句并继续执行后续流程，保证生产平滑升级与热部署。
+
+### Q2：达梦数据库提示表名找不到或大写问题？
+> 达梦默认会对无双引号的对象名称转为大写。WMdb 的达梦方言脚本已采用规范的大写对象名称；若使用自定义用户，请确认 JDBC 连接参数中添加了 `?schema=YOUR_SCHEMA`。
+
+### Q3：国产数据库驱动需要单独找厂商购买或下载吗？
+> 系统 Maven 工程内已预置各大国产数据库主流官方稳定版驱动包（达梦 DmJdbcDriver18、金仓 kingbase8、openGauss 等），统一打入了 Fat JAR（`wmdb-backend.jar`），用户无需额外下载驱动即可一键运行。

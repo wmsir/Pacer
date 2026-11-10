@@ -1,0 +1,58 @@
+server:
+  port: 8088
+
+spring:
+  application:
+    name: wmdb-backend
+  redis:
+    host: localhost
+    port: 6379
+    password:
+  sql:
+    init:
+      mode: never
+  datasource:
+    url: ${WMDB_DB_URL:jdbc:mysql://127.0.0.1:3306/huiqitong_erp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${WMDB_DB_USERNAME:root}
+    password: ${WMDB_DB_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    dynamic:
+      primary: master
+      datasource:
+        master:
+          url: ${WMDB_DB_URL:jdbc:mysql://127.0.0.1:3306/huiqitong_erp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+          username: ${WMDB_DB_USERNAME:root}
+          password: ${WMDB_DB_PASSWORD}
+          driver-class-name: com.mysql.cj.jdbc.Driver
+
+mybatis-plus:
+  configuration:
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+wmdb:
+  jwt:
+    secret: ${WMDB_JWT_SECRET}
+    expiration: ${WMDB_JWT_EXPIRATION:7200000}
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:}
+    secret-key: ${MINIO_SECRET_KEY:}
+    bucket: ${MINIO_BUCKET:wmdb-attachments}
+  rsa:
+    private-key: ${WMDB_RSA_PRIVATE_KEY:}
+  db:
+    aes-key: ${WMDB_DB_AES_KEY:}
+  database:
+    # 是否在系统启动/部署时根据数据库引擎自动执行对应方言的 SQL 脚本
+    auto-init: ${WMDB_DB_AUTO_INIT:true}
+    # 数据库类型：auto(根据JDBC驱动与连接自动识别)、mysql、dameng(达梦)、kingbase(人大金仓)、opengauss(华为高斯)、oracle、tidb
+    type: ${WMDB_DB_TYPE:auto}
+    # 遇到已存在的表或对象时是否忽略报错平滑继续执行
+    continue-on-error: ${WMDB_DB_CONTINUE_ON_ERROR:true}
+  mail:
+    host: ${WMDB_MAIL_HOST:smtp.exmail.qq.com}
+    port: ${WMDB_MAIL_PORT:465}
+    username: ${WMDB_MAIL_USERNAME:admin@fwpt.cn}
+    password: ${WMDB_MAIL_PASSWORD}
+    sender-name: ${WMDB_MAIL_SENDER_NAME:FWPT 官方支持}
+    enabled: ${WMDB_MAIL_ENABLED:true}

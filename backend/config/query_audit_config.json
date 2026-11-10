@@ -1,0 +1,5 @@
+{
+  "globalEnabled" : true,
+  "disabledDatabases" : [ "test_temp_db" ],
+  "enabledDatabases" : [ "huiqitong_erp" ]
+}

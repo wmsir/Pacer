@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "wmdb.fullname" . }}-backend
+  labels:
+    app: {{ include "wmdb.name" . }}-backend
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ include "wmdb.name" . }}-backend
+  template:
+    metadata:
+      labels:
+        app: {{ include "wmdb.name" . }}-backend
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.image.backendRepository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.backendPort }}
+              protocol: TCP
+          env:
+            - name: WMDB_JWT_SECRET
+              value: {{ .Values.env.WMDB_JWT_SECRET | quote }}
+            - name: MINIO_ENDPOINT
+              value: {{ .Values.env.MINIO_ENDPOINT | quote }}
+            - name: MINIO_ACCESS_KEY
+              value: {{ .Values.env.MINIO_ACCESS_KEY | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ .Values.env.MINIO_SECRET_KEY | quote }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}

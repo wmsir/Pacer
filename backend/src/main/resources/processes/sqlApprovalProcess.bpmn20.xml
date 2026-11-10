@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+             xmlns:flowable="http://flowable.org/bpmn"
+             typeLanguage="http://www.w3.org/2001/XMLSchema"
+             expressionLanguage="http://www.w3.org/1999/XPath"
+             targetNamespace="http://www.flowable.org/processdef">
+
+    <process id="sqlApprovalProcess" name="SQL Approval Process" isExecutable="true">
+        <!-- Start Event -->
+        <startEvent id="startEvent" name="Start"/>
+
+        <!-- Exclusive Gateway for Automatic Risk Routing -->
+        <exclusiveGateway id="riskGateway" name="Risk Gateway"/>
+        <sequenceFlow id="flowToRisk" sourceRef="startEvent" targetRef="riskGateway"/>
+
+        <!-- Low Risk: Auto Execute if affectRowsEstimate < 100 -->
+        <sequenceFlow id="flowLowRisk" sourceRef="riskGateway" targetRef="executionTask">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${affectRowsEstimate < 100}]]></conditionExpression>
+        </sequenceFlow>
+
+        <!-- High Risk: Requires Multi-Sign / DBA Approval -->
+        <sequenceFlow id="flowHighRisk" sourceRef="riskGateway" targetRef="dbaApprovalTask">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${affectRowsEstimate >= 100}]]></conditionExpression>
+        </sequenceFlow>
+
+        <!-- User Task for DBA Approval -->
+        <userTask id="dbaApprovalTask" name="DBA Approval" flowable:candidateGroups="DBA"/>
+
+        <sequenceFlow id="flow2" sourceRef="dbaApprovalTask" targetRef="approvalGateway"/>
+
+        <!-- Exclusive Gateway to check manual approval result -->
+        <exclusiveGateway id="approvalGateway" name="Approval Gateway"/>
+
+        <sequenceFlow id="flowApproved" sourceRef="approvalGateway" targetRef="executionTask">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${approved == true}]]></conditionExpression>
+        </sequenceFlow>
+
+        <sequenceFlow id="flowRejected" sourceRef="approvalGateway" targetRef="endEventRejected">
+            <conditionExpression xsi:type="tFormalExpression"><![CDATA[${approved == false}]]></conditionExpression>
+        </sequenceFlow>
+
+        <!-- Script/Service Task for automatic execution post-approval -->
+        <!-- In a real scenario, this delegates to TicketService. In this skeleton, it's just a passthrough before the end event. -->
+        <scriptTask id="executionTask" name="Execute SQL" scriptFormat="javascript" flowable:autoStoreVariables="false">
+            <script><![CDATA[
+                print('Execution initiated for ticketId: ' + ticketId);
+            ]]></script>
+        </scriptTask>
+
+        <sequenceFlow id="flow3" sourceRef="executionTask" targetRef="endEventApproved"/>
+
+        <!-- End Events -->
+        <endEvent id="endEventApproved" name="Approved and Executed"/>
+        <endEvent id="endEventRejected" name="Rejected"/>
+    </process>
+
+</definitions>

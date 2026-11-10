@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <!-- 模拟 ELK (Logstash) JSON 格式输出 -->
+    <appender name="LOGSTASH" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <!-- 这里使用简单的 JSON 格式替代 logstash-logback-encoder 以减少依赖 -->
+            <layout class="ch.qos.logback.classic.PatternLayout">
+                <pattern>{"@timestamp":"%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX}", "level":"%level", "thread":"%thread", "logger":"%logger{36}", "message":"%msg", "traceId":"%X{traceId:-}"}%n</pattern>
+            </layout>
+        </encoder>
+    </appender>
+
+    <!-- SkyWalking TraceId 注入已通过 MDC.put("traceId", ...) 模拟实现 -->
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE" />
+        <appender-ref ref="LOGSTASH" />
+    </root>
+</configuration>

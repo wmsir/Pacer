@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f172a" />
+    <meta name="description" content="稳骥 PacerSQL - 企业级数据库协同治理与高可用变更自治云平台，支持多云混合架构、SQL 防火墙、智能工单与数据脱敏。" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>稳骥 PacerSQL - 企业级数据库协同治理与高可用变更自治云平台 (fwpt.cn)</title>
+    <style>
+      .pacer-assistant-pill {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 99999;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: rgba(15,23,42,0.88);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        padding: 6px 14px;
+        border-radius: 980px;
+        border: 1px solid rgba(255,255,255,0.15);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+        font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
+        font-size: 12px;
+      }
+      .pacer-assistant-pill a { text-decoration: none; display: flex; align-items: center; gap: 4px; font-weight: 500; }
+      .pacer-assistant-pill .link-home { color: #e2e8f0; }
+      .pacer-assistant-pill .link-arch { color: #38bdf8; font-weight: 600; }
+      .pacer-assistant-pill .link-app { color: #4ade80; font-weight: 600; }
+      .pacer-assistant-pill .divider { color: rgba(255,255,255,0.25); }
+      .pacer-assistant-pill .close-btn { border: none; background: transparent; color: #94a3b8; font-size: 13px; cursor: pointer; margin-left: 4px; padding: 0 2px; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="pacerGlobalAssistant" class="pacer-assistant-pill">
+      <a href="/" class="link-home" title="返回 FWPT 统一门户主页">
+        <span style="font-size:13px;">🏠</span>
+        <span>主站门户</span>
+      </a>
+      <span class="divider">|</span>
+      <a href="/pacer.html" class="link-arch" title="查看产品架构原理解读专页">
+        <span style="font-size:13px;">📑</span>
+        <span>架构专页</span>
+      </a>
+      <span class="divider">|</span>
+      <a href="/pacer_app-v1.0.5.apk" download class="link-app" title="下载 Android 移动审批端 APK (v1.0.5)">
+        <span style="font-size:13px;">📱</span>
+        <span>移动审批端 (v1.0.5)</span>
+      </a>
+      <button type="button" id="btnHidePacerAssistant" class="close-btn" title="收起悬浮助手">✕</button>
+    </div>
+    <script>
+      document.getElementById('btnHidePacerAssistant')?.addEventListener('click', function() {
+        var el = document.getElementById('pacerGlobalAssistant');
+        if (el) el.style.display = 'none';
+      });
+    </script>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

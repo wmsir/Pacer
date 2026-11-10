@@ -1,0 +1,388 @@
+@import '../../../design/design-tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+:root {
+  /* 基础色彩系统 (基于 Slate / Indigo / Sky 顶级企业级 SaaS 配色) */
+  --primary-color: #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-light: #eff6ff;
+  
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  --danger-color: #ef4444;
+  --info-color: #64748b;
+  
+  --bg-color: #f8fafc;
+  --bg-card: #ffffff;
+  
+  --text-main: #0f172a;
+  --text-regular: #334155;
+  --text-secondary: #64748b;
+  --text-muted: #94a3b8;
+  
+  --border-color: #e2e8f0;
+  --border-light: #f1f5f9;
+  
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  color: var(--text-main);
+  background-color: var(--bg-color);
+}
+
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  text-align: left;
+}
+
+/* ===================================================
+   统一页面容器与标题规范
+   =================================================== */
+.page-container {
+  width: 100%;
+  box-sizing: border-box;
+  background-color: var(--bg-card);
+  border-radius: var(--radius-md);
+  padding: 22px 24px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.2s ease;
+}
+
+.page-container:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.page-title {
+  margin-top: 0;
+  margin-bottom: 6px;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--text-main);
+  letter-spacing: -0.2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+/* 统一常用文字辅助类 */
+.text-success { color: var(--success-color); }
+.text-warning { color: var(--warning-color); }
+.text-danger { color: var(--danger-color); }
+.text-primary { color: var(--primary-color); }
+.text-info { color: var(--text-secondary); }
+
+/* ===================================================
+   Element Plus 深度组件视觉美化
+   =================================================== */
+
+/* 1. 卡片 Card (通过提升选择器特异性避免 !important 强覆盖) */
+body .el-card {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-sm);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body .el-card:hover {
+  box-shadow: var(--shadow-md);
+}
+
+.el-card__header {
+  padding: 14px 20px !important;
+  border-bottom: 1px solid var(--border-color) !important;
+  background: #fafbfc;
+  font-weight: 600;
+  font-size: 14.5px;
+}
+
+/* 2. 表格 Table */
+.el-table {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid var(--border-color) !important;
+}
+
+.el-table th.el-table__cell {
+  background-color: #f8fafc !important;
+  color: #475569 !important;
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  border-bottom: 1px solid var(--border-color) !important;
+}
+
+.el-table td.el-table__cell {
+  border-bottom: 1px solid var(--border-light) !important;
+  font-size: 13px;
+  padding: 10px 0 !important;
+}
+
+.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background-color: #fafbfc;
+}
+
+.el-table .el-table__body tr:hover > td.el-table__cell {
+  background-color: #f1f5f9 !important;
+}
+
+/* 3. 按钮 Button 体系规范（确保所有场景下文字与背景高对比度清晰可见） */
+.el-button {
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.el-button:active {
+  transform: scale(0.97);
+}
+
+/* 3.1 实心主按钮 (Solid Primary) - 确保文字为纯正高对比度白色 */
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain) {
+  background-color: var(--primary-color) !important;
+  border-color: var(--primary-color) !important;
+  color: #ffffff !important;
+}
+
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):hover,
+.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):focus {
+  background-color: var(--primary-hover) !important;
+  border-color: var(--primary-hover) !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.25);
+}
+
+/* 3.2 链接型按钮 (Link / Text) - 彻底移除实心底色，确保高对比度文字与柔和悬浮态 */
+.el-button.is-link,
+.el-button.is-text {
+  background-color: transparent !important;
+  border-color: transparent !important;
+  padding: 4px 8px !important;
+  height: auto !important;
+  font-weight: 600 !important;
+}
+
+.el-button--primary.is-link,
+.el-button--primary.is-text {
+  color: #2563eb !important;
+}
+.el-button--primary.is-link:hover,
+.el-button--primary.is-text:hover {
+  color: #1d4ed8 !important;
+  background-color: #eff6ff !important;
+  border-radius: 4px;
+}
+
+.el-button--success.is-link,
+.el-button--success.is-text {
+  color: #059669 !important;
+}
+.el-button--success.is-link:hover,
+.el-button--success.is-text:hover {
+  color: #047857 !important;
+  background-color: #ecfdf5 !important;
+  border-radius: 4px;
+}
+
+.el-button--warning.is-link,
+.el-button--warning.is-text {
+  color: #d97706 !important;
+}
+.el-button--warning.is-link:hover,
+.el-button--warning.is-text:hover {
+  color: #b45309 !important;
+  background-color: #fffbeb !important;
+  border-radius: 4px;
+}
+
+.el-button--danger.is-link,
+.el-button--danger.is-text {
+  color: #dc2626 !important;
+}
+.el-button--danger.is-link:hover,
+.el-button--danger.is-text:hover {
+  color: #b91c1c !important;
+  background-color: #fef2f2 !important;
+  border-radius: 4px;
+}
+
+/* 3.3 朴素型按钮 (Plain) */
+.el-button--primary.is-plain {
+  color: #2563eb !important;
+  background-color: #eff6ff !important;
+  border-color: #bfdbfe !important;
+}
+.el-button--primary.is-plain:hover {
+  color: #ffffff !important;
+  background-color: #2563eb !important;
+  border-color: #2563eb !important;
+}
+
+.el-button--success.is-plain {
+  color: #059669 !important;
+  background-color: #ecfdf5 !important;
+  border-color: #a7f3d0 !important;
+}
+.el-button--success.is-plain:hover {
+  color: #ffffff !important;
+  background-color: #059669 !important;
+  border-color: #059669 !important;
+}
+
+.el-button--danger.is-plain {
+  color: #dc2626 !important;
+  background-color: #fef2f2 !important;
+  border-color: #fecaca !important;
+}
+.el-button--danger.is-plain:hover {
+  color: #ffffff !important;
+  background-color: #dc2626 !important;
+  border-color: #dc2626 !important;
+}
+
+/* 4. 输入框与下拉选择 Input & Select */
+.el-input__wrapper,
+.el-select__wrapper {
+  border-radius: var(--radius-sm) !important;
+  box-shadow: 0 0 0 1px var(--border-color) inset !important;
+  transition: all 0.2s ease !important;
+}
+
+.el-input__wrapper:hover,
+.el-select__wrapper:hover {
+  box-shadow: 0 0 0 1px #94a3b8 inset !important;
+}
+
+.el-input__wrapper.is-focus,
+.el-select__wrapper.is-focused {
+  box-shadow: 0 0 0 1px var(--primary-color) inset, 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
+}
+
+/* 5. 标签 Tag */
+.el-tag {
+  border-radius: 4px;
+  font-weight: 500;
+  padding: 0 8px;
+}
+
+.el-tag--small {
+  height: 22px;
+  line-height: 20px;
+}
+
+/* 6. 对话框 Dialog */
+.el-dialog {
+  border-radius: var(--radius-lg) !important;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+}
+
+.el-dialog__header {
+  padding: 18px 24px 14px 24px !important;
+  margin-right: 0 !important;
+  border-bottom: 1px solid var(--border-color);
+  background: #fafbfc;
+}
+
+.el-dialog__title {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: var(--text-main) !important;
+}
+
+.el-dialog__body {
+  padding: 24px !important;
+}
+
+.el-dialog__footer {
+  padding: 14px 24px 18px 24px !important;
+  border-top: 1px solid var(--border-color);
+  background: #fafbfc;
+}
+
+/* 7. 分页 Pagination */
+.el-pagination {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* ===================================================
+   优化全站滚动条样式
+   =================================================== */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ===================================================
+   配速 Pacer 统一工单详情头部与 SQL 代码区规范
+   =================================================== */
+.pacer-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 16px;
+}
+
+.pacer-sql-code {
+  font-family: var(--fwpt-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.6;
+  background: #0f172a;
+  color: #e2e8f0;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
