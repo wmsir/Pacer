@@ -558,49 +558,81 @@ public class AuthService {
     }
 
     /**
-     * 通过邮箱验证码重置登录密码
+     * 通过邮箱或手机验证码重置登录密码
      */
-    public void resetPasswordWithEmail(String email, String code, String newPassword) {
-        if (email == null || !email.matches("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) {
-            throw new com.wmdb.exception.BusinessException("A0400", "请输入有效的电子邮箱地址");
+    public void resetPasswordWithEmail(String target, String code, String newPassword) {
+        if (target == null || target.trim().isEmpty()) {
+            throw new com.wmdb.exception.BusinessException("A0400", "请输入绑定的电子邮箱或手机号码");
         }
         if (code == null || code.trim().isEmpty()) {
-            throw new com.wmdb.exception.BusinessException("A0400", "请输入邮箱收到的安全验证码");
+            throw new com.wmdb.exception.BusinessException("A0400", "请输入收到的 6 位安全验证码");
         }
         if (newPassword == null || newPassword.trim().length() < 6) {
             throw new com.wmdb.exception.BusinessException("A0400", "新密码长度至少需 6 位");
         }
 
         String trimCode = code.trim();
-        String trimEmail = email.trim();
+        String trimTarget = target.trim();
+        boolean isEmail = trimTarget.contains("@");
 
-        // 验证验证码
-        boolean codeValid = isDevEnvironment() && "123456".equals(trimCode);
-        if (!codeValid) {
-            SmsCodeRecord record = EMAIL_CODE_CACHE.get(trimEmail);
-            if (record != null && record.isValid(trimCode)) {
-                codeValid = true;
-                EMAIL_CODE_CACHE.remove(trimEmail);
+        List<SysUser> users;
+        if (isEmail) {
+            String trimEmail = trimTarget.toLowerCase();
+            if (!trimEmail.matches("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")) {
+                throw new com.wmdb.exception.BusinessException("A0400", "请输入有效的电子邮箱地址");
             }
-        }
-        if (!codeValid && redisTemplate != null) {
-            try {
-                Object cached = redisTemplate.opsForValue().get("email_code:" + trimEmail);
-                if (cached != null && cached.toString().equals(trimCode)) {
+            boolean codeValid = isDevEnvironment() && "123456".equals(trimCode);
+            if (!codeValid) {
+                SmsCodeRecord record = EMAIL_CODE_CACHE.get(trimEmail);
+                if (record != null && record.isValid(trimCode)) {
                     codeValid = true;
-                    redisTemplate.delete("email_code:" + trimEmail);
+                    EMAIL_CODE_CACHE.remove(trimEmail);
                 }
-            } catch (Exception ignored) {}
-        }
-
-        if (!codeValid) {
-            throw new com.wmdb.exception.BusinessException("A0400", "邮箱验证码错误或已失效，请重新获取");
-        }
-
-        // 查询绑定该邮箱的用户
-        List<SysUser> users = sysUserMapper.selectList(new QueryWrapper<SysUser>().eq("email", trimEmail));
-        if (users == null || users.isEmpty()) {
-            throw new com.wmdb.exception.BusinessException("A0404", "未找到与该邮箱绑定的通行证账号");
+            }
+            if (!codeValid && redisTemplate != null) {
+                try {
+                    Object cached = redisTemplate.opsForValue().get("email_code:" + trimEmail);
+                    if (cached != null && cached.toString().equals(trimCode)) {
+                        codeValid = true;
+                        redisTemplate.delete("email_code:" + trimEmail);
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (!codeValid) {
+                throw new com.wmdb.exception.BusinessException("A0400", "邮箱验证码错误或已失效，请重新获取");
+            }
+            users = sysUserMapper.selectList(new QueryWrapper<SysUser>().eq("email", trimEmail));
+            if (users == null || users.isEmpty()) {
+                throw new com.wmdb.exception.BusinessException("A0404", "未找到与该邮箱绑定的通行证账号");
+            }
+        } else {
+            if (!trimTarget.matches("^1[3-9]\\d{9}$")) {
+                throw new com.wmdb.exception.BusinessException("A0400", "请输入正确的 11 位手机号码或电子邮箱");
+            }
+            boolean codeValid = isDevEnvironment() && "123456".equals(trimCode);
+            if (!codeValid) {
+                SmsCodeRecord record = SMS_CODE_CACHE.get(trimTarget);
+                if (record != null && record.isValid(trimCode)) {
+                    codeValid = true;
+                    SMS_CODE_CACHE.remove(trimTarget);
+                }
+            }
+            if (!codeValid && redisTemplate != null) {
+                try {
+                    Object cached = redisTemplate.opsForValue().get("sms_code:" + trimTarget);
+                    if (cached != null && cached.toString().equals(trimCode)) {
+                        codeValid = true;
+                        redisTemplate.delete("sms_code:" + trimTarget);
+                    }
+                } catch (Exception ignored) {}
+            }
+            if (!codeValid) {
+                throw new com.wmdb.exception.BusinessException("A0400", "手机短信验证码错误或已失效，请重新获取");
+            }
+            users = sysUserMapper.selectList(new QueryWrapper<SysUser>().eq("phone", trimTarget));
+            if (users == null || users.isEmpty()) {
+                throw new com.wmdb.exception.BusinessException("A0404", "未找到与该手机号绑定的通行证账号");
+            }
         }
 
         String password = newPassword.trim();
@@ -612,7 +644,11 @@ public class AuthService {
         for (SysUser user : users) {
             user.setPasswordCipher(passwordHash);
             user.setPasswordHash(passwordHash);
-            user.setEmailVerified(1);
+            if (isEmail) {
+                user.setEmailVerified(1);
+            } else {
+                user.setPhoneVerified(1);
+            }
             sysUserMapper.updateById(user);
         }
     }

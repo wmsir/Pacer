@@ -140,17 +140,24 @@ public class AuthController {
     }
 
     /**
-     * 通过邮箱验证码重置密码
+     * 通过邮箱或手机验证码重置密码
      */
-    @Operation(summary = "通过邮箱验证码重置密码", description = "校验邮箱及验证码后更新账号密码")
+    @Operation(summary = "通过邮箱或手机验证码重置密码", description = "校验邮箱/手机号及验证码后更新账号密码")
     @RateLimit(time = 60, count = 10)
     @PostMapping("/reset-password")
     public Result<Map<String, String>> resetPassword(@RequestBody ResetPasswordRequest req, HttpServletRequest request) {
         if (req == null) {
             throw new com.wmdb.exception.BusinessException("A0400", "请求参数不能为空");
         }
-        authService.resetPasswordWithEmail(req.getEmail(), req.getCode(), req.getNewPassword());
-        recordAuthAuditTrace(req.getEmail(), null, "RESET_PASSWORD", request);
+        String accountTarget = req.getEmail();
+        if (accountTarget == null || accountTarget.trim().isEmpty()) {
+            accountTarget = req.getPhone();
+        }
+        if (accountTarget == null || accountTarget.trim().isEmpty()) {
+            accountTarget = req.getTarget();
+        }
+        authService.resetPasswordWithEmail(accountTarget, req.getCode(), req.getNewPassword());
+        recordAuthAuditTrace(accountTarget, null, "RESET_PASSWORD", request);
 
         Map<String, String> response = new HashMap<>();
         response.put("message", "密码重置成功，请使用新密码重新登录");
@@ -283,6 +290,8 @@ public class AuthController {
     @Data
     public static class ResetPasswordRequest {
         private String email;
+        private String phone;
+        private String target;
         private String code;
         private String newPassword;
     }
