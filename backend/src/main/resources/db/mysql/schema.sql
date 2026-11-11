@@ -34,7 +34,9 @@ CREATE TABLE IF NOT EXISTS sys_user (
   avatar_url varchar(255),
   created_at datetime DEFAULT CURRENT_TIMESTAMP,
   updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_tenant_username (tenant_id, username)
+  UNIQUE KEY uk_tenant_username (tenant_id, username),
+  KEY idx_sys_user_tenant_idcard (tenant_id, id_card),
+  KEY idx_sys_user_tenant_phone (tenant_id, phone)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 3. 业务资源组与审批责任人映射表
@@ -63,7 +65,8 @@ CREATE TABLE IF NOT EXISTS db_instance (
   password_cipher varchar(255),
   env varchar(20),
   status varchar(20) DEFAULT 'APPROVED',
-  UNIQUE KEY uk_tenant_name (tenant_id, name)
+  UNIQUE KEY uk_tenant_name (tenant_id, name),
+  KEY idx_db_inst_tenant_env (tenant_id, env, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 5. SQL 变更审批工单主表
@@ -91,7 +94,13 @@ CREATE TABLE IF NOT EXISTS sql_ticket (
   interval_ms int,
   affect_rows_estimate int,
   actual_affect_rows int,
-  create_time datetime DEFAULT CURRENT_TIMESTAMP
+  create_time datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_ticket_tenant_status (tenant_id, status),
+  KEY idx_ticket_instance (instance_id),
+  KEY idx_ticket_applicant (applicant_id_card),
+  KEY idx_ticket_submitter (submitter_id),
+  KEY idx_ticket_create_time (create_time),
+  KEY idx_ticket_sched (status, execution_mode, scheduled_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 6. SQL 变更工单大文本与附件详情表
@@ -102,7 +111,9 @@ CREATE TABLE IF NOT EXISTS sql_ticket_detail (
   sql_text text,
   attachment_oss_key varchar(255),
   affect_rows_estimate int,
-  actual_affect_rows int
+  actual_affect_rows int,
+  KEY idx_ticket_detail_ticket (ticket_id),
+  KEY idx_ticket_detail_tenant (tenant_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 7. 工单操作流水与审批催办审计表
@@ -115,7 +126,9 @@ CREATE TABLE IF NOT EXISTS ticket_operation_log (
   node_name varchar(100),
   comment text,
   tenant_id varchar(50) NOT NULL,
-  created_time varchar(50)
+  created_time varchar(50),
+  KEY idx_ticket_oplog_ticket (ticket_id),
+  KEY idx_ticket_oplog_tenant_time (tenant_id, created_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 8. SQL 执行审计与回滚日志表
@@ -130,7 +143,10 @@ CREATE TABLE IF NOT EXISTS sql_audit_log (
   previous_hash varchar(255),
   current_hash varchar(255),
   rollback_sql text,
-  created_at datetime DEFAULT CURRENT_TIMESTAMP
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_sql_audit_ticket (ticket_id),
+  KEY idx_sql_audit_tenant_status (tenant_id, status),
+  KEY idx_sql_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 9. 数据库查询审计日志表
@@ -143,7 +159,9 @@ CREATE TABLE IF NOT EXISTS query_audit_log (
   cost_time_ms bigint,
   affect_rows bigint,
   operator_name varchar(100),
-  created_time datetime DEFAULT CURRENT_TIMESTAMP
+  created_time datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_query_audit_tenant_inst (tenant_id, instance_id),
+  KEY idx_query_audit_created (created_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 10. 动态脱敏规则表
@@ -155,7 +173,8 @@ CREATE TABLE IF NOT EXISTS data_masking_rule (
   algorithm varchar(50),
   params varchar(255),
   status int DEFAULT 1,
-  created_at datetime DEFAULT CURRENT_TIMESTAMP
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_mask_rule_tenant_status (tenant_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 11. 动态审批流模板配置表
@@ -170,7 +189,8 @@ CREATE TABLE IF NOT EXISTS workflow_template (
   condition_expression varchar(255),
   is_pinned int DEFAULT 0,
   description varchar(255),
-  created_at datetime DEFAULT CURRENT_TIMESTAMP
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_wf_tpl_tenant_type (tenant_id, flow_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 基础初始化种子数据 (MySQL)

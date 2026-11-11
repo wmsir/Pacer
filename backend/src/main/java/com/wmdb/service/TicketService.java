@@ -545,6 +545,59 @@ public class TicketService {
         return result;
     }
 
+    private Map<String, SysUser> batchGetSysUsersByIdentifiers(Collection<String> identifiers) {
+        if (identifiers == null || identifiers.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        Set<String> cleanIds = new LinkedHashSet<>();
+        for (String id : identifiers) {
+            if (id != null && !id.trim().isEmpty()) {
+                cleanIds.add(id.trim());
+            }
+        }
+        if (cleanIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        List<SysUser> users = sysUserMapper.selectList(new QueryWrapper<SysUser>()
+                .and(w -> w.in("id_card", cleanIds).or().in("username", cleanIds).or().in("phone", cleanIds)));
+        Map<String, SysUser> userMap = new HashMap<>();
+        if (users != null) {
+            for (SysUser u : users) {
+                if (u.getIdCard() != null && !u.getIdCard().trim().isEmpty()) {
+                    userMap.putIfAbsent(u.getIdCard().trim(), u);
+                }
+                if (u.getUsername() != null && !u.getUsername().trim().isEmpty()) {
+                    userMap.putIfAbsent(u.getUsername().trim(), u);
+                }
+                if (u.getPhone() != null && !u.getPhone().trim().isEmpty()) {
+                    userMap.putIfAbsent(u.getPhone().trim(), u);
+                }
+            }
+        }
+        return userMap;
+    }
+
+    private void enrichTicketsDisplayInfo(List<SqlTicket> tickets) {
+        if (tickets == null || tickets.isEmpty()) return;
+        List<String> identifiers = new ArrayList<>(tickets.size());
+        for (SqlTicket t : tickets) {
+            if (t != null && t.getApplicantIdCard() != null && !t.getApplicantIdCard().trim().isEmpty()) {
+                identifiers.add(t.getApplicantIdCard().trim());
+            }
+        }
+        Map<String, SysUser> userMap = batchGetSysUsersByIdentifiers(identifiers);
+        for (SqlTicket ticket : tickets) {
+            if (ticket == null) continue;
+            String key = ticket.getApplicantIdCard() != null ? ticket.getApplicantIdCard().trim() : "";
+            SysUser u = key.isEmpty() ? null : userMap.get(key);
+            if (u != null && u.getRealName() != null && !u.getRealName().trim().isEmpty()) {
+                ticket.setApplicantName(u.getRealName().replaceAll("[\\(（].*?[\\)）]", "").trim());
+            } else if (ticket.getApplicantName() != null) {
+                ticket.setApplicantName(ticket.getApplicantName().replaceAll("[\\(（].*?[\\)）]", "").trim());
+            }
+        }
+    }
+
     private void enrichTicketDisplayInfo(SqlTicket ticket) {
         if (ticket == null) return;
         SysUser u = getSysUserByIdentifier(ticket.getApplicantIdCard());
@@ -562,7 +615,7 @@ public class TicketService {
             qw.eq("applicant_id_card", idCard);
         }
         List<SqlTicket> list = sqlTicketMapper.selectList(qw);
-        list.forEach(this::enrichTicketDisplayInfo);
+        enrichTicketsDisplayInfo(list);
         return list;
     }
 
@@ -582,7 +635,7 @@ public class TicketService {
         com.baomidou.mybatisplus.extension.plugins.pagination.Page<SqlTicket> mpPage =
                 new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(page, size);
         com.baomidou.mybatisplus.extension.plugins.pagination.Page<SqlTicket> result = sqlTicketMapper.selectPage(mpPage, qw);
-        result.getRecords().forEach(this::enrichTicketDisplayInfo);
+        enrichTicketsDisplayInfo(result.getRecords());
         return PageResultDTO.<SqlTicket>builder().records(result.getRecords()).total(result.getTotal())
                 .current(result.getCurrent()).size(result.getSize()).pages(result.getPages()).build();
     }
@@ -1620,13 +1673,14 @@ public class TicketService {
                 || "testadmin2".equalsIgnoreCase(idCard) || "testadmin3".equalsIgnoreCase(idCard);
         if (!canApprove) return Collections.emptyList();
         List<SqlTicket> pending = sqlTicketMapper.selectList(new QueryWrapper<SqlTicket>().eq("status", "AUDITING").orderByAsc("id").last("LIMIT 20"));
+        enrichTicketsDisplayInfo(pending);
         List<PendingApprovalDTO> result = new ArrayList<>();
         for (SqlTicket t : pending) {
-            enrichTicketDisplayInfo(t);
             PendingApprovalDTO dto = new PendingApprovalDTO();
             dto.setId(t.getId()); dto.setBusinessKey(t.getBusinessKey()); dto.setType(t.getType());
             dto.setDbName(t.getDbName()); dto.setApplicantIdCard(t.getApplicantIdCard()); dto.setApplicantName(t.getApplicantName());
             dto.setReason(t.getReason());
+            result.add(dto);
         }
         return result;
     }

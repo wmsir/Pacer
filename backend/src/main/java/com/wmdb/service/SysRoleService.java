@@ -10,7 +10,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -323,19 +327,31 @@ public class SysRoleService {
             return;
         }
         ensureRoleColumnSize();
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        Set<Long> validUserIds = new LinkedHashSet<>();
         for (Object raw : userIds) {
-            Long uid = null;
             if (raw instanceof Number num) {
-                uid = num.longValue();
+                validUserIds.add(num.longValue());
             } else if (raw != null) {
                 try {
-                    uid = Long.parseLong(raw.toString().trim());
+                    validUserIds.add(Long.parseLong(raw.toString().trim()));
                 } catch (Exception ignored) {}
             }
-            if (uid == null) continue;
-
-            com.wmdb.model.SysUser user = sysUserMapper.selectById(uid);
+        }
+        if (validUserIds.isEmpty()) {
+            return;
+        }
+        List<com.wmdb.model.SysUser> fetchedUsers = sysUserMapper.selectBatchIds(validUserIds);
+        Map<Long, com.wmdb.model.SysUser> userMap = new HashMap<>();
+        if (fetchedUsers != null) {
+            for (com.wmdb.model.SysUser u : fetchedUsers) {
+                if (u != null && u.getId() != null) {
+                    userMap.put(u.getId(), u);
+                }
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (Long uid : validUserIds) {
+            com.wmdb.model.SysUser user = userMap.get(uid);
             if (user != null) {
                 List<String> roles = new ArrayList<>(userDisplayNameService.parseRoles(user.getRole()));
                 if (!roles.contains(roleCode)) {
@@ -364,19 +380,31 @@ public class SysRoleService {
             return;
         }
         ensureRoleColumnSize();
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        Set<Long> validUserIds = new LinkedHashSet<>();
         for (Object raw : userIds) {
-            Long uid = null;
             if (raw instanceof Number num) {
-                uid = num.longValue();
+                validUserIds.add(num.longValue());
             } else if (raw != null) {
                 try {
-                    uid = Long.parseLong(raw.toString().trim());
+                    validUserIds.add(Long.parseLong(raw.toString().trim()));
                 } catch (Exception ignored) {}
             }
-            if (uid == null) continue;
-
-            com.wmdb.model.SysUser user = sysUserMapper.selectById(uid);
+        }
+        if (validUserIds.isEmpty()) {
+            return;
+        }
+        List<com.wmdb.model.SysUser> fetchedUsers = sysUserMapper.selectBatchIds(validUserIds);
+        Map<Long, com.wmdb.model.SysUser> userMap = new HashMap<>();
+        if (fetchedUsers != null) {
+            for (com.wmdb.model.SysUser u : fetchedUsers) {
+                if (u != null && u.getId() != null) {
+                    userMap.put(u.getId(), u);
+                }
+            }
+        }
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        for (Long uid : validUserIds) {
+            com.wmdb.model.SysUser user = userMap.get(uid);
             if (user != null) {
                 List<String> roles = new ArrayList<>(userDisplayNameService.parseRoles(user.getRole()));
                 roles.remove(roleCode);

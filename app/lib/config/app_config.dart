@@ -1,7 +1,7 @@
 // 稳骥 PacerSQL · 全局网络配置与三网自适应引擎
 class AppConfig {
   static const String appName = '稳骥 PacerSQL';
-  static const String appVersion = 'v1.1.0';
+  static const String appVersion = '1.0.5';
   static const String buildNumber = '20261103.1';
   static const String officialWebsite = 'https://fwpt.cn';
   static const String officialEmail = 'admin@fwpt.cn';

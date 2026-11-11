@@ -10,7 +10,12 @@ CREATE TABLE IF NOT EXISTS sql_ticket (
   submitter_id bigint,
   submitter_id_card varchar(50),
   submit_time datetime,
-  process_instance_id varchar(64)
+  process_instance_id varchar(64),
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_ticket_tenant_status (tenant_id, status),
+  KEY idx_ticket_instance (instance_id),
+  KEY idx_ticket_submitter (submitter_id),
+  KEY idx_ticket_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 CREATE TABLE IF NOT EXISTS sql_ticket_detail (
@@ -19,7 +24,9 @@ CREATE TABLE IF NOT EXISTS sql_ticket_detail (
   ticket_id bigint NOT NULL,
   sql_text text,
   attachment_oss_key varchar(255),
-  affect_rows_estimate int
+  affect_rows_estimate int,
+  KEY idx_ticket_detail_ticket (ticket_id),
+  KEY idx_ticket_detail_tenant (tenant_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS db_instance (
@@ -33,7 +40,8 @@ CREATE TABLE IF NOT EXISTS db_instance (
   password_cipher varchar(255),
   env varchar(20),
   status varchar(20) DEFAULT 'APPROVED',
-  UNIQUE KEY uk_tenant_name (tenant_id, name)
+  UNIQUE KEY uk_tenant_name (tenant_id, name),
+  KEY idx_db_inst_tenant_env (tenant_id, env, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sql_audit_log (
@@ -46,7 +54,11 @@ CREATE TABLE IF NOT EXISTS sql_audit_log (
   error_trace text,
   previous_hash varchar(255),
   current_hash varchar(255),
-  rollback_sql text
+  rollback_sql text,
+  created_at datetime DEFAULT CURRENT_TIMESTAMP,
+  KEY idx_sql_audit_ticket (ticket_id),
+  KEY idx_sql_audit_tenant_status (tenant_id, status),
+  KEY idx_sql_audit_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS sys_role (

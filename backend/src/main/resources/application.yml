@@ -4,17 +4,18 @@ server:
 spring:
   application:
     name: wmdb-backend
-  redis:
-    host: localhost
-    port: 6379
-    password:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password:
   sql:
     init:
       mode: never
   datasource:
     url: ${WMDB_DB_URL:jdbc:mysql://127.0.0.1:3306/huiqitong_erp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${WMDB_DB_USERNAME:root}
-    password: ${WMDB_DB_PASSWORD}
+    password: ${WMDB_DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
     dynamic:
       primary: master
@@ -22,7 +23,7 @@ spring:
         master:
           url: ${WMDB_DB_URL:jdbc:mysql://127.0.0.1:3306/huiqitong_erp?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
           username: ${WMDB_DB_USERNAME:root}
-          password: ${WMDB_DB_PASSWORD}
+          password: ${WMDB_DB_PASSWORD:root}
           driver-class-name: com.mysql.cj.jdbc.Driver
 
 mybatis-plus:
@@ -31,7 +32,7 @@ mybatis-plus:
 
 wmdb:
   jwt:
-    secret: ${WMDB_JWT_SECRET}
+    secret: ${WMDB_JWT_SECRET:PacerDefaultDevJwtSecretKeyMustBeAtLeast32BytesLong2026}
     expiration: ${WMDB_JWT_EXPIRATION:7200000}
   minio:
     endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
@@ -53,6 +54,6 @@ wmdb:
     host: ${WMDB_MAIL_HOST:smtp.exmail.qq.com}
     port: ${WMDB_MAIL_PORT:465}
     username: ${WMDB_MAIL_USERNAME:admin@fwpt.cn}
-    password: ${WMDB_MAIL_PASSWORD}
+    password: ${WMDB_MAIL_PASSWORD:}
     sender-name: ${WMDB_MAIL_SENDER_NAME:FWPT 官方支持}
     enabled: ${WMDB_MAIL_ENABLED:true}

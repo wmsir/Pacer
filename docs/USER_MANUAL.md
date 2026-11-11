@@ -34,8 +34,8 @@ wmDB (完美数据库) 是一款高可用、高安全性的企业级变更管控
 
 wmDB 集成了 **SpringDoc OpenAPI 3.0 / Swagger UI**，支持接口在线浏览、参数模拟与调试：
 
-- **Swagger UI 在线管理控制台**：[http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
-- **OpenAPI 3.0 元数据接口**：[http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
+- **Swagger UI 在线管理控制台**：[http://localhost:8088/swagger-ui/index.html](http://localhost:8088/swagger-ui/index.html)
+- **OpenAPI 3.0 元数据接口**：[http://localhost:8088/v3/api-docs](http://localhost:8088/v3/api-docs)
 
 ### Swagger 在线调试指引：
 1. 访问 Swagger UI 控制台；

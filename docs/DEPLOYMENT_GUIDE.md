@@ -121,7 +121,7 @@ WORKDIR /app
 COPY wmdb-backend.jar app.jar
 EXPOSE 8088
 ENV JAVA_OPTS="-Xms256m -Xmx600m -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai"
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar --server.port=8088 --spring.redis.host=172.17.0.1 --spring.redis.port=6379"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar --server.port=8088 --spring.data.redis.host=172.17.0.1 --spring.data.redis.port=6379"]
 ```
 
 #### 4.3 构建后端镜像并启动

@@ -98,7 +98,6 @@ services:
     restart: always
     environment:
       - TZ=Asia/Shanghai
-      - SPRING_PROFILES_ACTIVE=prod
       - WMDB_DB_URL=jdbc:mysql://wmdb-mysql:3306/wmdb?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia/Shanghai
       - WMDB_DB_USERNAME=root
       - WMDB_DB_PASSWORD=${WMDB_DB_PASSWORD:?WMDB_DB_PASSWORD is required}
@@ -106,13 +105,13 @@ services:
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
       - MINIO_BUCKET=${MINIO_BUCKET:-wmdb-attachments}
-      - SPRING_REDIS_HOST=wmdb-redis
-      - SPRING_REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - SPRING_DATA_REDIS_HOST=wmdb-redis
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:?REDIS_PASSWORD is required}
       - WMDB_JWT_SECRET=${WMDB_JWT_SECRET:?WMDB_JWT_SECRET is required}
       - WMDB_RSA_PRIVATE_KEY=${WMDB_RSA_PRIVATE_KEY}
       - WMDB_DB_AES_KEY=${WMDB_DB_AES_KEY}
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8088:8088"
     depends_on:
       wmdb-mysql:
         condition: service_healthy
@@ -123,7 +122,7 @@ services:
     networks:
       - wmdb-network
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8088/actuator/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
