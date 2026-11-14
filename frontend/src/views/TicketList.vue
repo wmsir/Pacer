@@ -123,7 +123,7 @@
           style="width: 100%"
           v-loading="loading"
           row-class-name="ticket-row"
-          :header-cell-style="{ background: '#f8fafc', color: '#475569', fontWeight: 700, fontSize: '12.5px' }"
+          :header-cell-style="{ background: 'var(--c-muted-bg)', color: 'var(--c-text-3)', fontWeight: 600, fontSize: '12.5px' }"
           @row-click="(row: any) => viewDetail(row.id)"
         >
           <template #empty>
@@ -1004,7 +1004,7 @@ onMounted(() => {
 }
 
 .status-chip {
-  --c: #64748b;
+  --c: var(--c-text-3);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1055,12 +1055,12 @@ onMounted(() => {
   color: #ffffff;
 }
 
-.chip-info    { --c: #475569; }
-.chip-warning { --c: #d97706; }
+.chip-info    { --c: var(--c-text-3); }
+.chip-warning { --c: var(--c-warning); }
 .chip-orange  { --c: #ea580c; }
-.chip-primary { --c: #2563eb; }
-.chip-success { --c: #059669; }
-.chip-danger  { --c: #dc2626; }
+.chip-primary { --c: var(--c-accent); }
+.chip-success { --c: var(--c-success); }
+.chip-danger  { --c: var(--c-danger); }
 
 .filter-toolbar {
   display: flex;
@@ -1281,15 +1281,15 @@ onMounted(() => {
 }
 
 .status-pill {
-  --c: #64748b;
-  --bg: #f1f5f9;
+  --c: var(--c-text-3);
+  --bg: var(--c-subtle);
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 2px 10px;
   border-radius: 999px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--c);
   background: var(--bg);
 }
@@ -1301,11 +1301,11 @@ onMounted(() => {
   background: var(--c);
 }
 
-.st-success { --c: #047857; --bg: #ecfdf5; }
-.st-warning { --c: #b45309; --bg: #fffbeb; }
-.st-primary { --c: #1d4ed8; --bg: #eff6ff; }
-.st-danger  { --c: #b91c1c; --bg: #fef2f2; }
-.st-info    { --c: #475569; --bg: #f1f5f9; }
+.st-success { --c: var(--c-success-strong); --bg: var(--c-success-soft); }
+.st-warning { --c: var(--c-warning-strong); --bg: var(--c-warning-soft); }
+.st-primary { --c: var(--c-accent); --bg: var(--c-accent-soft); }
+.st-danger  { --c: var(--c-danger-strong); --bg: var(--c-danger-soft); }
+.st-info    { --c: var(--c-text-3); --bg: var(--c-subtle); }
 
 .st-warning .st-dot,
 .st-primary .st-dot {
