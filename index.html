@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <script>self["MonacoEnvironment"] = (function (paths) {
+          return {
+            globalAPI: false,
+            getWorkerUrl : function (moduleId, label) {
+              var result =  paths[label];
+              if (/^((http:)|(https:)|(file:)|(\/\/))/.test(result)) {
+                var currentUrl = String(window.location);
+                var currentOrigin = currentUrl.substr(0, currentUrl.length - window.location.hash.length - window.location.search.length - window.location.pathname.length);
+                if (result.substring(0, currentOrigin.length) !== currentOrigin) {
+                  var js = '/*' + label + '*/importScripts("' + result + '");';
+                  var blob = new Blob([js], { type: 'application/javascript' });
+                  return URL.createObjectURL(blob);
+                }
+              }
+              return result;
+            }
+          };
+        })({
+  "editorWorkerService": "/pacer/monacoeditorwork/editor.worker.bundle.js",
+  "css": "/pacer/monacoeditorwork/css.worker.bundle.js",
+  "html": "/pacer/monacoeditorwork/html.worker.bundle.js",
+  "json": "/pacer/monacoeditorwork/json.worker.bundle.js",
+  "typescript": "/pacer/monacoeditorwork/ts.worker.bundle.js",
+  "javascript": "/pacer/monacoeditorwork/ts.worker.bundle.js",
+  "less": "/pacer/monacoeditorwork/css.worker.bundle.js",
+  "scss": "/pacer/monacoeditorwork/css.worker.bundle.js",
+  "handlebars": "/pacer/monacoeditorwork/html.worker.bundle.js",
+  "razor": "/pacer/monacoeditorwork/html.worker.bundle.js"
+});</script>
+
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f6f6f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)" />
+    <meta name="description" content="稳骥 PacerSQL - 企业级数据库协同治理与高可用变更自治云平台，支持多云混合架构、SQL 防火墙、智能工单与数据脱敏。" />
+    <link rel="icon" type="image/svg+xml" href="/pacer/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <title>稳骥 PacerSQL - 企业级数据库协同治理与高可用变更自治云平台 (fwpt.cn)</title>
+    <style>
+      /* 只在登录页显示（路由切换时给 body 加 route-login），关闭后记住 */
+      .pacer-assistant-pill { display: none !important; }
+      body.route-login:not(.assistant-dismissed) .pacer-assistant-pill { display: flex !important; }
+      .pacer-assistant-pill {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 99999;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        background: rgba(24,24,27,0.9);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Segoe UI', sans-serif;
+        font-size: 12px;
+      }
+      .pacer-assistant-pill a { text-decoration: none; display: flex; align-items: center; gap: 4px; font-weight: 500; }
+      .pacer-assistant-pill a { color: #e4e4e7; }
+      .pacer-assistant-pill a:hover { color: #ffffff; }
+      .pacer-assistant-pill .divider { color: rgba(255,255,255,0.25); }
+      .pacer-assistant-pill .close-btn { border: none; background: transparent; color: #94a3b8; font-size: 13px; cursor: pointer; margin-left: 4px; padding: 0 2px; }
+    </style>
+    <script type="module" crossorigin src="/pacer/assets/index-DEeBaEIu.js"></script>
+    <link rel="modulepreload" crossorigin href="/pacer/assets/rolldown-runtime-QTnfLwEv.js">
+    <link rel="modulepreload" crossorigin href="/pacer/assets/element-plus-BDvjhTY-.js">
+    <link rel="modulepreload" crossorigin href="/pacer/assets/vendor-DcpvAngZ.js">
+    <link rel="modulepreload" crossorigin href="/pacer/assets/vue-vendor-ClV2L0sO.js">
+    <link rel="stylesheet" crossorigin href="/pacer/assets/element-plus-BDTeg99L.css">
+    <link rel="stylesheet" crossorigin href="/pacer/assets/index-EvftunGX.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="pacerGlobalAssistant" class="pacer-assistant-pill">
+      <a href="/" class="link-home" title="返回 FWPT 统一门户主页">
+        <span>主站门户</span>
+      </a>
+      <span class="divider">|</span>
+      <a href="/pacer.html" class="link-arch" title="查看产品架构原理解读专页">
+        <span>架构专页</span>
+      </a>
+      <span class="divider">|</span>
+      <a href="/pacer_app-v1.0.5.apk" download class="link-app" title="下载 Android 移动审批端 APK (v1.0.5)">
+        <span>移动审批端 (v1.0.5)</span>
+      </a>
+      <button type="button" id="btnHidePacerAssistant" class="close-btn" title="收起悬浮助手">✕</button>
+    </div>
+    <script>
+      try { if (localStorage.getItem('pacer_assistant_dismissed') === '1') document.body.classList.add('assistant-dismissed'); } catch (e) {}
+      document.getElementById('btnHidePacerAssistant')?.addEventListener('click', function() {
+        document.body.classList.add('assistant-dismissed');
+        try { localStorage.setItem('pacer_assistant_dismissed', '1'); } catch (e) {}
+      });
+    </script>
+  </body>
+</html>
