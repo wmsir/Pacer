@@ -116,7 +116,9 @@
   --el-font-family: var(--font-sans);
   --el-box-shadow-light: var(--shadow-md);
   --el-box-shadow: var(--shadow-lg);
-  --el-mask-color: rgba(24, 24, 27, 0.4);
+  /* 加载遮罩：用半透明的面板色轻轻罩住旧内容，而不是压一层灰 */
+  --el-mask-color: color-mix(in srgb, var(--c-surface) 65%, transparent);
+  --el-mask-color-extra-light: color-mix(in srgb, var(--c-surface) 30%, transparent);
   color-scheme: light;
 }
 
@@ -167,7 +169,8 @@ html.dark {
   --el-color-error: #f87171;
   --el-color-info: #a1a1aa;
   --el-color-info-light-9: #232327;
-  --el-mask-color: rgba(0, 0, 0, 0.6);
+  --el-mask-color: color-mix(in srgb, var(--c-surface) 65%, transparent);
+  --el-mask-color-extra-light: color-mix(in srgb, var(--c-surface) 30%, transparent);
   color-scheme: dark;
 }
 
@@ -403,4 +406,24 @@ body .el-empty__description p { color: var(--c-text-3); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
+
+/* ===================================================
+   加载状态（v-loading）
+   - 300ms 内返回的请求不显示遮罩，避免一闪而过
+   - 超过 300ms 才淡入一层很浅的遮罩和细线转圈，旧数据仍然看得清
+   =================================================== */
+.el-loading-mask {
+  animation: pacer-mask-in 0.2s ease 0.3s both;
+}
+.el-loading-mask.is-fullscreen { animation-delay: 0s; }
+.el-loading-spinner .circular { width: 28px; height: 28px; }
+.el-loading-spinner .path { stroke-width: 2; stroke: var(--c-text-3); }
+.el-loading-spinner .el-loading-text { color: var(--c-text-3); font-size: 13px; }
+@keyframes pacer-mask-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .el-loading-mask { animation-duration: 0.01s; }
 }
