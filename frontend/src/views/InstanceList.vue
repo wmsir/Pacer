@@ -48,9 +48,9 @@
             >
               <template #title>
                 <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                  <span style="font-weight: 600; color: var(--c-accent);">💡 流程设计指引：没有符合当前业务需要的审批流程？</span>
+                  <span style="font-weight: 600; color: var(--c-accent);">流程设计指引：没有符合当前业务需要的审批流程？</span>
                   <el-button type="primary" link :icon="Share" @click="goToWorkflowDesigner" style="font-weight: 600;">
-                    前往【审批流设计中心】新建/编辑 BPMN 审批流程 ➔
+                    前往【审批流设计中心】新建/编辑 BPMN 审批流程 →
                   </el-button>
                 </div>
               </template>
@@ -490,7 +490,7 @@
                     clearable
                     style="width: 100%;"
                   >
-                    <el-option label="🎯 不固定专属流 (根据变更类型和影响行数动态智能决策)" value="" />
+                    <el-option label="不固定专属流 (根据变更类型和影响行数动态智能决策)" value="" />
                     <el-option
                       v-for="wf in workflowOptions"
                       :key="wf.name"

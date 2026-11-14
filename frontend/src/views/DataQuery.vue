@@ -10,7 +10,7 @@
       </div>
       <div class="header-right">
         <el-tag effect="plain" type="danger" style="font-weight: 600; margin-right: 8px;">
-          🔒 严格只读模式 (Read-Only)
+          严格只读模式 (Read-Only)
         </el-tag>
         <el-button :icon="CopyDocument" @click="openInNewWindow">在新窗口打开</el-button>
       </div>
@@ -106,10 +106,10 @@
             :disabled="!isQuerySupported"
             @click="handleExecuteExplain"
           >
-            ⚡ 执行计划 (EXPLAIN)
+            执行计划 (EXPLAIN)
           </el-button>
           <el-button type="warning" plain :icon="Hide" @click="() => handleGoToMasking()">
-            🛡️ 脱敏配置
+            脱敏配置
           </el-button>
           <el-tooltip
             :disabled="isQueryExportSupported"
@@ -294,7 +294,7 @@
                         style="margin-left: 8px; font-weight: 500;"
                         :title="currentTab.result.routeDescription"
                       >
-                        {{ currentTab.result.routeNode === 'SLAVE' ? '🟢 只读从库 (Slave)' : '🟡 核心主库 (Master)' }}
+                        {{ currentTab.result.routeNode === 'SLAVE' ? '只读从库 (Slave)' : '核心主库 (Master)' }}
                       </el-tag>
                     </span>
                     <span v-else class="meta-text">
@@ -352,7 +352,7 @@
                             effect="light"
                             style="font-size: 10px; padding: 0 4px; height: 18px; line-height: 16px; border-radius: 3px;"
                           >
-                            🛡️ {{ getMaskRuleForCol(col) }}
+                            {{ getMaskRuleForCol(col) }}
                           </el-tag>
                         </div>
                       </template>
@@ -363,7 +363,7 @@
                           </span>
                           <el-tooltip
                             v-if="getMaskRuleForCol(col) && row[col] !== 'NULL'"
-                            :content="`🔒 该字段已生效【${getMaskRuleForCol(col)}】动态脱敏保护`"
+                            :content="`该字段已生效【${getMaskRuleForCol(col)}】动态脱敏保护`"
                             placement="top"
                           >
                             <el-tag size="small" type="danger" effect="plain" style="font-size: 10px; height: 16px; line-height: 14px; padding: 0 3px; margin-left: 4px;">
@@ -441,7 +441,7 @@
 
     <!-- SQL 执行计划 (EXPLAIN) 深度分析弹窗 -->
     <el-dialog
-      title="⚡ SQL 执行计划深度分析 (EXPLAIN Analysis)"
+      title="SQL 执行计划深度分析 (EXPLAIN Analysis)"
       v-model="explainDialogVisible"
       width="920px"
       append-to-body
@@ -457,7 +457,7 @@
         <!-- 智能诊断建议卡片 -->
         <div style="margin-bottom: 14px; background: var(--c-success-soft); border: 1px solid var(--c-success-border); border-radius: 6px; padding: 12px 16px;">
           <div style="font-weight: 700; color: var(--c-success-strong); font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-            <span>💡 性能与索引命中智能诊断建议：</span>
+            <span>性能与索引命中智能诊断建议：</span>
           </div>
           <div style="font-size: 12px; color: var(--c-success); line-height: 1.6;">
             <div v-for="(tip, idx) in explainDiagnostics" :key="idx" style="margin-bottom: 3px;">

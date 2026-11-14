@@ -2,7 +2,6 @@
   <div class="license-container page-container">
     <div class="license-hero">
       <div class="hero-left">
-        <div class="hero-icon">🛡️</div>
         <div>
           <div class="hero-title-row">
             <h2 class="hero-title">商业授权证书管理 (Enterprise License)</h2>
@@ -24,7 +23,7 @@
       <el-card shadow="never" class="cert-card">
         <template #header>
           <div class="card-hdr">
-            <span class="card-hdr-title">📜 授权证书核心凭证</span>
+            <span class="card-hdr-title">授权证书核心凭证</span>
             <span class="cert-serial">证书编号：{{ licenseData.serialNo }}</span>
           </div>
         </template>
@@ -57,7 +56,7 @@
       <el-card shadow="never" class="feature-card">
         <template #header>
           <div class="card-hdr">
-            <span class="card-hdr-title">⚡ 已激活企业级功能矩阵</span>
+            <span class="card-hdr-title">已激活企业级功能矩阵</span>
             <el-tag size="small" type="success" effect="plain">全模块已解锁</el-tag>
           </div>
         </template>

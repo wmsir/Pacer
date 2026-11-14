@@ -1,12 +1,11 @@
 <template>
-  <div class="ticket-list-container page-container">
+  <div class="ticket-list-container">
     <!-- 页头：标题 + 主操作 -->
     <div class="list-hero">
       <div class="hero-left">
-        <div class="hero-icon"><el-icon :size="22"><Tickets /></el-icon></div>
         <div>
-          <h2 class="hero-title">SQL 工单中心</h2>
-          <div class="hero-subtitle">SQL 变更与安全审批流转 · 全生命周期追踪 · 多维组合筛选</div>
+          <h2 class="hero-title">工单</h2>
+          <div class="hero-subtitle">提交、审批与执行 SQL 变更，点上方数字可快速筛选</div>
         </div>
       </div>
       <div class="hero-actions">
@@ -29,7 +28,6 @@
       >
         <div class="kpi-top">
           <span class="kpi-label">{{ k.label }}</span>
-          <span class="kpi-icon">{{ k.icon }}</span>
         </div>
         <div class="kpi-value">{{ k.value }}</div>
         <div class="kpi-foot">{{ activeStatusTab === k.key ? '已筛选 · 再次点击取消' : k.hint }}</div>
@@ -130,7 +128,6 @@
         >
           <template #empty>
             <div class="empty-state">
-              <div class="empty-icon">🗂️</div>
               <div class="empty-title">{{ tickets.length === 0 ? '还没有任何工单' : '没有符合条件的工单' }}</div>
               <div class="empty-desc">
                 {{ tickets.length === 0 ? '发起第一张 SQL 变更工单，系统将自动匹配审批流。' : '尝试调整状态、视角或关键字等筛选条件。' }}
@@ -185,7 +182,7 @@
                   </span>
                 </div>
                 <div class="db-line">
-                  <span v-if="row.dbName" class="db-name">🗃️ {{ row.dbName }}</span>
+                  <span v-if="row.dbName" class="db-name">{{ row.dbName }}</span>
                   <span v-else class="db-empty">全局 / 默认库</span>
                 </div>
               </div>
@@ -210,10 +207,10 @@
                   {{ getPendingApprovalRole(row).icon }} 待{{ getPendingApprovalRole(row).roleName }}
                 </span>
                 <span v-else-if="row.status === 'WAITING_EXECUTION'" class="status-sub status-sub-warn">
-                  ⏰ {{ formatExecutionWindow(row.executionWindow) }}
+                  {{ formatExecutionWindow(row.executionWindow) }}
                 </span>
                 <span v-else-if="row.status === 'MANUAL_PROCESSING'" class="status-sub status-sub-warn">
-                  🛠️ 待 DBA 线下执行
+                  待 DBA 线下执行
                 </span>
               </div>
             </template>
@@ -611,11 +608,11 @@ const statusTabs = [
 
 // KPI 概览卡片
 const kpiCards = computed(() => [
-  { key: 'AUDITING', label: '待审批', icon: '⏳', tone: 'warning', value: statusCounts.value.AUDITING, hint: '初审 / 复核流转中' },
-  { key: 'MANUAL_PROCESSING', label: '待线下执行', icon: '🛠️', tone: 'orange', value: statusCounts.value.MANUAL_PROCESSING, hint: '等待 DBA 反馈结果' },
-  { key: 'APPROVED_OR_EXEC', label: '已通过 / 执行中', icon: '⚡', tone: 'primary', value: statusCounts.value.APPROVED_OR_EXEC + statusCounts.value.WAITING_EXECUTION, hint: '含定时等待触发' },
-  { key: 'EXECUTED', label: '已执行归档', icon: '✅', tone: 'success', value: statusCounts.value.EXECUTED, hint: '变更已完成归档' },
-  { key: 'FAILED', label: '执行失败', icon: '⚠️', tone: 'danger', value: statusCounts.value.FAILED, hint: `另有驳回 ${statusCounts.value.REJECTED} 单` }
+  { key: 'AUDITING', label: '待审批', tone: 'warning', value: statusCounts.value.AUDITING, hint: '初审 / 复核流转中' },
+  { key: 'MANUAL_PROCESSING', label: '待线下执行', tone: 'orange', value: statusCounts.value.MANUAL_PROCESSING, hint: '等待 DBA 反馈结果' },
+  { key: 'APPROVED_OR_EXEC', label: '已通过 / 执行中', tone: 'primary', value: statusCounts.value.APPROVED_OR_EXEC + statusCounts.value.WAITING_EXECUTION, hint: '含定时等待触发' },
+  { key: 'EXECUTED', label: '已执行归档', tone: 'success', value: statusCounts.value.EXECUTED, hint: '变更已完成归档' },
+  { key: 'FAILED', label: '执行失败', tone: 'danger', value: statusCounts.value.FAILED, hint: `另有驳回 ${statusCounts.value.REJECTED} 单` }
 ])
 
 // 视角筛选选项
@@ -856,139 +853,66 @@ onMounted(() => {
 .list-hero {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-end;
   flex-wrap: wrap;
   gap: 12px;
-  padding: 16px 20px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
+  padding: 4px 0 6px;
 }
-
-.hero-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.hero-icon {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: var(--c-accent);
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--shadow-sm);
-  flex-shrink: 0;
-}
-
+.hero-left { display: flex; align-items: center; gap: 14px; }
 .hero-title {
   margin: 0;
-  font-size: 20px;
-  font-weight: 800;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   color: var(--c-text);
 }
+.hero-subtitle { margin-top: 4px; font-size: 13px; color: var(--c-text-3); }
+.hero-actions { display: flex; align-items: center; gap: 8px; }
+.hero-actions .el-button + .el-button { margin-left: 0; }
 
-.hero-subtitle {
-  margin-top: 3px;
-  font-size: 12.5px;
-  color: var(--c-text-3);
-}
-
-.hero-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* ===== KPI 卡片 ===== */
+/* ===== KPI：一条可点击的数字行 ===== */
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.kpi-card {
-  --tone: #2563eb;
-  --tone-bg: #eff6ff;
-  position: relative;
-  background: var(--c-surface);
+  gap: 1px;
+  background: var(--c-border);
   border: 1px solid var(--c-border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  cursor: pointer;
+  border-radius: var(--radius-md);
   overflow: hidden;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
-
-.kpi-card::after {
+.kpi-card {
+  background: var(--c-surface);
+  --tone: var(--c-text);
+  position: relative;
+  padding: 14px 18px;
+  cursor: pointer;
+}
+.kpi-card:hover { background: var(--c-muted-bg); }
+.kpi-card.is-active { background: var(--c-subtle); }
+.kpi-card.is-active::after {
   content: '';
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  height: 3px;
-  background: var(--tone);
-  opacity: 0.85;
+  height: 2px;
+  background: var(--c-text);
 }
-
-.kpi-card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-sm);
-}
-
-.kpi-card.is-active {
-  border-color: var(--tone);
-  background: var(--tone-bg);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tone) 15%, transparent);
-}
-
-.kpi-warning { --tone: #f59e0b; --tone-bg: #fffbeb; }
-.kpi-orange  { --tone: #ea580c; --tone-bg: #fff7ed; }
-.kpi-primary { --tone: #2563eb; --tone-bg: #eff6ff; }
-.kpi-success { --tone: #10b981; --tone-bg: #ecfdf5; }
-.kpi-danger  { --tone: #ef4444; --tone-bg: #fef2f2; }
-
-.kpi-top {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.kpi-label {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--c-text-2);
-}
-
-.kpi-icon {
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  background: var(--tone-bg);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-}
-
+.kpi-warning { --tone: var(--c-warning-strong); }
+.kpi-danger { --tone: var(--c-danger); }
+.kpi-label { font-size: 12.5px; color: var(--c-text-3); }
 .kpi-value {
-  margin-top: 6px;
-  font-size: 26px;
-  font-weight: 800;
-  color: var(--c-text);
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  line-height: 1.1;
-}
-
-.kpi-foot {
   margin-top: 4px;
-  font-size: 11.5px;
-  color: var(--c-text-4);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
 }
+.kpi-warning .kpi-value:not(:empty),
+.kpi-danger .kpi-value { color: var(--tone); }
+.kpi-foot { margin-top: 2px; font-size: 12px; color: var(--c-text-4); }
 
 /* ===== 筛选面板 ===== */
 .filter-panel {

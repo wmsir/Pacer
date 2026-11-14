@@ -128,7 +128,7 @@
       <el-card shadow="hover">
         <el-tabs v-model="activeAuditTab" type="border-card">
           <!-- ==================== Tab 1：变更工单与底层执行防篡改审计 ==================== -->
-          <el-tab-pane label="📜 变更工单与底层执行防篡改审计" name="ticket_audit">
+          <el-tab-pane label="变更工单与底层执行防篡改审计" name="ticket_audit">
             <div class="section-header-flex" style="margin-bottom: 14px;">
               <div class="section-title">
                 <el-icon><Search /></el-icon>
@@ -211,7 +211,7 @@
           </el-tab-pane>
 
           <!-- ==================== Tab 2：在线安全查询与 EXPLAIN 操作审计 ==================== -->
-          <el-tab-pane label="🔍 在线查询与 EXPLAIN 操作审计" name="query_audit">
+          <el-tab-pane label="在线查询与 EXPLAIN 操作审计" name="query_audit">
             <div class="section-header-flex" style="margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
               <div class="section-title">
                 <el-icon><Search /></el-icon>
@@ -249,7 +249,7 @@
                 </el-select>
                 <el-button type="primary" :icon="Search" @click="fetchQueryLogs">查询</el-button>
                 <el-button type="warning" plain :icon="Setting" @click="openQueryAuditConfigModal">
-                  ⚙️ 数据库审计策略配置
+                  数据库审计策略配置
                 </el-button>
               </div>
             </div>
@@ -375,7 +375,7 @@
 
     <!-- 在线查询审计明细弹窗 -->
     <el-dialog
-      title="🔍 在线查询操作审计完整明细"
+      title="在线查询操作审计完整明细"
       v-model="queryDetailModalVisible"
       width="680px"
       append-to-body
@@ -421,13 +421,13 @@
 
     <!-- 数据库查询审计策略配置弹窗 -->
     <el-dialog
-      title="⚙️ 数据库在线查询审计策略配置"
+      title="数据库在线查询审计策略配置"
       v-model="auditConfigModalVisible"
       width="640px"
       append-to-body
     >
       <div style="margin-bottom: 12px; font-size: 13px; color: var(--c-text-2); background: var(--c-success-soft); border: 1px solid var(--c-success-border); border-radius: 6px; padding: 10px 14px;">
-        💡 <b>审计策略说明</b>：您可以按具体数据库维度配置是否开启在线查询与 EXPLAIN 审计。支持对核心生产库全量审计，对测试/非敏感库灵活关闭审计。
+        <b>审计策略说明</b>：您可以按具体数据库维度配置是否开启在线查询与 EXPLAIN 审计。支持对核心生产库全量审计，对测试/非敏感库灵活关闭审计。
       </div>
 
       <el-form label-width="140px" size="default">

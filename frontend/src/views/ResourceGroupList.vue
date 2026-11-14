@@ -248,7 +248,7 @@
                   <el-col :xs="24" :md="12">
                     <div class="policy-card">
                       <div class="policy-title">
-                        <span style="color: var(--c-warning); font-weight: 700;">⚡ 预检执行策略</span>
+                        <span style="color: var(--c-warning); font-weight: 700;">预检执行策略</span>
                         <el-tooltip content="配置申请人在提单时是否必须点击并通过事务级预执行校验" placement="top">
                           <el-icon><InfoFilled /></el-icon>
                         </el-tooltip>
@@ -264,7 +264,7 @@
                           <el-radio :value="true" v-model="tab.rgPolicyConfig.enforceDryRun" class="custom-card-radio">
                             <div class="radio-content-block">
                               <div class="radio-title-text danger-text">
-                                🛡️ 强制预执行校验 (必须通过)
+                                强制预执行校验 (必须通过)
                               </div>
                               <div class="radio-desc-text">
                                 必须在目标库点击预执行且比对影响行数一致通过后，才允许提交工单
@@ -282,7 +282,7 @@
                           <el-radio :value="false" v-model="tab.rgPolicyConfig.enforceDryRun" class="custom-card-radio">
                             <div class="radio-content-block">
                               <div class="radio-title-text success-text">
-                                💡 推荐预执行校验 (允许跳过)
+                                推荐预执行校验 (允许跳过)
                               </div>
                               <div class="radio-desc-text">
                                 提供预执行校验工具辅助审查，未执行或校验异常时允许继续提单
@@ -298,7 +298,7 @@
                   <el-col :xs="24" :md="12">
                     <div class="policy-card">
                       <div class="policy-title">
-                        <span style="color: var(--c-accent); font-weight: 700;">📑 工单提单步骤启用开关</span>
+                        <span style="color: var(--c-accent); font-weight: 700;">工单提单步骤启用开关</span>
                         <el-tooltip content="控制新建 SQL 变更工单中心是否显示回滚方案与预执行校验步骤" placement="top">
                           <el-icon><InfoFilled /></el-icon>
                         </el-tooltip>
@@ -349,7 +349,7 @@
                       :icon="Share"
                       @click="handleOpenWorkflowDesignerTab"
                     >
-                      📐 新建/设计审批流程 (打开独立页签)
+                      新建/设计审批流程 (打开独立页签)
                     </el-button>
                     <el-button
                       size="small"
@@ -369,7 +369,7 @@
                 <div class="matrix-jump-guide-bar">
                   <div class="guide-left">
                     <el-icon><InfoFilled /></el-icon>
-                    <span>💡 如果没有符合当前业务需要的审批流程，可点击右侧按钮直接打开新页签新建/配置 BPMN 流程：</span>
+                    <span>如果没有符合当前业务需要的审批流程，可点击右侧按钮直接打开新页签新建/配置 BPMN 流程：</span>
                   </div>
                   <el-button
                     type="success"
@@ -395,7 +395,7 @@
                     <el-table-column prop="dbName" label="目标数据库" min-width="160">
                       <template #default="{ row }">
                         <el-tag size="small" type="success" effect="light" style="font-weight: 600;">
-                          🗃️ {{ row.dbName }}
+                          {{ row.dbName }}
                         </el-tag>
                       </template>
                     </el-table-column>
@@ -409,11 +409,11 @@
                             style="flex: 1;"
                             size="small"
                           >
-                            <el-option label="⚡ 跟随资源组通用/默认流程" value="DEFAULT" />
+                            <el-option label="跟随资源组通用/默认流程" value="DEFAULT" />
                             <el-option
                               v-for="tpl in availableWorkflowTemplates"
                               :key="tpl.id"
-                              :label="`🎯 ${tpl.templateName} (${tpl.flowType})`"
+                              :label="`${tpl.templateName} (${tpl.flowType})`"
                               :value="tpl.templateName"
                             />
                           </el-select>
@@ -441,7 +441,7 @@
                           :icon="Setting"
                           @click="handleJumpToInstanceConfig(row)"
                         >
-                          ⚙️ 参数配置
+                          参数配置
                         </el-button>
                       </template>
                     </el-table-column>
@@ -485,7 +485,7 @@
         <template #label>
           <div class="tab-label-item">
             <el-icon><Share /></el-icon>
-            <span>📐 审批流设计与模板中心 (Workflow Designer)</span>
+            <span>审批流设计与模板中心 (Workflow Designer)</span>
           </div>
         </template>
 

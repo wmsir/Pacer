@@ -4,7 +4,6 @@
     <div class="header-action">
       <div class="title-area">
         <h2 class="page-title">
-          <span class="title-icon">🤖</span>
           AI 大模型集成与多提供商配置 (LLM Model Providers)
         </h2>
         <div class="page-subtitle">
@@ -37,7 +36,7 @@
                 effect="plain"
                 style="margin-left: 8px;"
               >
-                {{ currentActiveProvider?.hasApiKey || currentActiveProvider?.providerId === 'ollama' ? '✅ 已配置 API Key' : '⚠️ 尚未配置 API Key' }}
+                {{ currentActiveProvider?.hasApiKey || currentActiveProvider?.providerId === 'ollama' ? '已配置 API Key' : '尚未配置 API Key' }}
               </el-tag>
             </div>
             <div class="status-desc">
@@ -148,7 +147,7 @@
                     :underline="false"
                     style="margin-right: 12px; font-size: 13px;"
                   >
-                    🔑 获取 API Key
+                    获取 API Key
                   </el-link>
                   <el-link
                     v-if="editProvider.officialWebsite"
@@ -158,7 +157,7 @@
                     :underline="false"
                     style="font-size: 13px;"
                   >
-                    🌐 官方文档
+                    官方文档
                   </el-link>
                 </div>
               </div>
@@ -218,7 +217,7 @@
 
               <!-- 高级调节参数 -->
               <el-collapse class="advanced-collapse">
-                <el-collapse-item title="⚙️ 高级超参数设置 (Temperature / Max Tokens / Timeout)" name="1">
+                <el-collapse-item title="高级超参数设置 (Temperature / Max Tokens / Timeout)" name="1">
                   <el-row :gutter="16">
                     <el-col :span="12">
                       <el-form-item label="采样温度 Temperature (0.0 ~ 1.0)">
@@ -302,22 +301,22 @@
               <div v-else-if="testResult" class="test-result-box" :class="{ success: testResult.success, error: !testResult.success }">
                 <div class="result-header">
                   <span class="r-badge" :class="testResult.success ? 'r-success' : 'r-error'">
-                    {{ testResult.success ? '✅ 测试通过 (Connected)' : '❌ 连接失败 (Failed)' }}
+                    {{ testResult.success ? '测试通过 (Connected)' : '连接失败 (Failed)' }}
                   </span>
                   <span v-if="testResult.latencyMs" class="r-latency">
-                    ⏱️ 延迟: <b>{{ testResult.latencyMs }} ms</b>
+                    延迟: <b>{{ testResult.latencyMs }} ms</b>
                   </span>
                 </div>
 
                 <div class="result-message">{{ testResult.message }}</div>
 
                 <div v-if="testResult.responseText" class="result-response">
-                  <div class="response-label">🤖 模型实际响应内容：</div>
+                  <div class="response-label">模型实际响应内容：</div>
                   <div class="response-text">{{ testResult.responseText }}</div>
                 </div>
 
                 <div v-if="testResult.errorDetails" class="result-error-detail">
-                  <div class="error-label">📋 错误诊断详情：</div>
+                  <div class="error-label">错误诊断详情：</div>
                   <pre class="error-pre">{{ testResult.errorDetails }}</pre>
                 </div>
               </div>
@@ -353,7 +352,7 @@
                 placeholder="输入一条 SQL 诊断需求，例如：请为 SELECT * FROM t_policy_order WHERE user_id = 123 AND status = 'ACTIVE' 给出索引优化建议。"
               />
               <div v-if="sandboxReply" class="sandbox-reply">
-                <div class="reply-header">🤖 AI 诊断回复：</div>
+                <div class="reply-header">AI 诊断回复：</div>
                 <div class="reply-content markdown-body">{{ sandboxReply }}</div>
               </div>
             </div>

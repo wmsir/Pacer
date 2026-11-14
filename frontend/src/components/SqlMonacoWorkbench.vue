@@ -4,9 +4,9 @@
     <div class="workbench-toolbar">
       <div class="toolbar-left">
         <el-radio-group v-model="editorThemeMode" size="small" @change="handleThemeChange">
-          <el-radio-button value="auto">🌓 跟随系统</el-radio-button>
-          <el-radio-button value="light">☀️ 浅色模式</el-radio-button>
-          <el-radio-button value="dark">🌙 深色模式</el-radio-button>
+          <el-radio-button value="auto">跟随系统</el-radio-button>
+          <el-radio-button value="light">浅色模式</el-radio-button>
+          <el-radio-button value="dark">深色模式</el-radio-button>
         </el-radio-group>
 
         <el-divider direction="vertical" />
@@ -26,16 +26,16 @@
         <!-- 风险计数徽标 -->
         <div class="risk-badge-group">
           <el-tag v-if="riskSummary.high > 0" size="small" type="danger" effect="dark" class="risk-pill">
-            🚨 高危 {{ riskSummary.high }}
+            高危 {{ riskSummary.high }}
           </el-tag>
           <el-tag v-if="riskSummary.medium > 0" size="small" type="warning" effect="dark" class="risk-pill">
-            ⚠️ 中危 {{ riskSummary.medium }}
+            中危 {{ riskSummary.medium }}
           </el-tag>
           <el-tag v-if="riskSummary.low > 0" size="small" type="info" effect="plain" class="risk-pill">
-            💡 建议 {{ riskSummary.low }}
+            建议 {{ riskSummary.low }}
           </el-tag>
           <el-tag v-if="riskSummary.total === 0 && modelValue.trim()" size="small" type="success" effect="light" class="risk-pill">
-            ✅ 语法审核安全
+            语法审核安全
           </el-tag>
         </div>
 
@@ -63,12 +63,12 @@
       <div class="diagnostics-col" :class="{ 'collapsed': isPanelCollapsed }">
         <div class="panel-header">
           <div class="panel-title-wrap">
-            <span class="panel-title">🛡️ 风险诊断与修改建议</span>
+            <span class="panel-title">风险诊断与修改建议</span>
             <span class="panel-count" v-if="riskItems.length > 0">({{ riskItems.length }})</span>
           </div>
           <div class="panel-actions">
             <el-button size="small" link @click="isPanelCollapsed = !isPanelCollapsed">
-              {{ isPanelCollapsed ? '展开 ➔' : '收起 ✕' }}
+              {{ isPanelCollapsed ? '展开 →' : '收起 ✕' }}
             </el-button>
           </div>
         </div>
@@ -105,7 +105,7 @@
                   <span class="risk-line-num">第 <b>{{ item.line }}</b> 行</span>
                 </div>
                 <el-button size="small" type="primary" link @click.stop="jumpToLine(item.line, item.col)">
-                  定位 ➔
+                  定位 →
                 </el-button>
               </div>
 
@@ -125,7 +125,7 @@
 
               <div class="risk-card-actions" v-if="item.autoFix">
                 <el-button size="small" type="success" plain @click.stop="applyAutoFix(item)">
-                  ✨ 一键采纳建议
+                  一键采纳建议
                 </el-button>
               </div>
             </div>
@@ -139,7 +139,6 @@
               :image-size="60"
             />
             <div v-else class="safe-congratulations">
-              <div class="safe-icon">🎉</div>
               <div class="safe-title">未发现高危语法隐患</div>
               <div class="safe-desc">当前编写的 SQL 脚本符合防全表变更与语法合规规范，可正常发起预执行校验！</div>
             </div>
@@ -156,7 +155,7 @@
         <span class="sb-item">语句数: <b>{{ editorStats.stmtCount }}</b> (DML: {{ editorStats.dmlCount }})</span>
       </div>
       <div class="sb-right">
-        <span class="sb-tip">💡 在编辑器中风险行已用红/黄/蓝波浪线标识，鼠标悬浮可查看详细审核规则</span>
+        <span class="sb-tip">在编辑器中风险行已用红/黄/蓝波浪线标识，鼠标悬浮可查看详细审核规则</span>
       </div>
     </div>
 
@@ -177,7 +176,7 @@
         <!-- 左侧: 原 SQL -->
         <div class="diff-side-col diff-original">
           <div class="side-title-bar original-bar">
-            <span>📄 原提交 SQL (Original)</span>
+            <span>原提交 SQL (Original)</span>
             <el-tag size="small" type="info">原始输入</el-tag>
           </div>
           <div class="code-view-box">
@@ -191,7 +190,7 @@
         <!-- 右侧: 改后规范化 SQL -->
         <div class="diff-side-col diff-modified">
           <div class="side-title-bar modified-bar">
-            <span>✨ 改后/规范化 SQL (Modified & Safe)</span>
+            <span>改后/规范化 SQL (Modified & Safe)</span>
             <el-tag size="small" type="success">安全加固建议</el-tag>
           </div>
           <div class="code-view-box">

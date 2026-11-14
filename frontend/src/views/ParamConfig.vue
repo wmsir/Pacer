@@ -4,7 +4,7 @@
     <div class="header-action">
       <div class="title-area">
         <h2 class="page-title">
-          <span>⚙️ 全局参数查看 (Global System Variables)</span>
+          <span>全局参数查看 (Global System Variables)</span>
         </h2>
         <div class="page-subtitle">在线检索和查看底层数据库实例的全局运行变量与系统参数（连接数、缓冲区、超时时间、日志设置等）</div>
       </div>

@@ -4,7 +4,7 @@
     <div class="page-header-flex">
       <div>
         <h2 class="page-title">
-          <span>🔔 消息通知与告警通道配置中心</span>
+          <span>消息通知与告警通道配置中心</span>
         </h2>
         <div class="page-subtitle">
           构建协作即时通讯、移动短信服务、紧急语音电话三大梯队分类提醒体系，支持阿里巴巴与腾讯云多厂商配置及场景策略联动
@@ -32,7 +32,6 @@
           >
             <div class="category-head">
               <div class="category-badge im-badge">
-                <span class="badge-icon">💬</span>
                 <span class="badge-text">1. 协作即时通讯类 (IM)</span>
               </div>
               <el-tag size="small" type="success" effect="light">日常审批流转</el-tag>
@@ -64,7 +63,6 @@
           >
             <div class="category-head">
               <div class="category-badge sms-badge">
-                <span class="badge-icon">📱</span>
                 <span class="badge-text">2. 移动短信服务类 (SMS)</span>
               </div>
               <el-tag size="small" :type="form.sms?.enabled ? 'warning' : 'info'" effect="light">
@@ -91,7 +89,6 @@
           >
             <div class="category-head">
               <div class="category-badge voice-badge">
-                <span class="badge-icon">📞</span>
                 <span class="badge-text">3. 紧急电话语音类 (Voice)</span>
               </div>
               <el-tag size="small" :type="form.voiceCall?.enabled ? 'danger' : 'info'" effect="light">
@@ -116,7 +113,7 @@
       <!-- 1. 企业微信配置 -->
       <el-tab-pane name="wechat">
         <template #label>
-          <span class="tab-label">💬 🟢 企业微信工作通知 (WeChat Work)</span>
+          <span class="tab-label">企业微信工作通知 (WeChat Work)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -191,7 +188,7 @@
           <!-- 在线测试诊断控制台 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 企业微信通道在线联调测试</span>
+              <span>企业微信通道在线联调测试</span>
             </div>
             <div class="test-panel-desc">
               输入接收人的企业微信 ERP 账号或手机号，快速验证 WebService 连通性。
@@ -200,7 +197,7 @@
             <div class="test-field-group">
               <div class="field-label">测试接收人工号 / ERP：</div>
               <el-input v-model="wechatTestErp" placeholder="例如 zhangsan 或 102488" clearable>
-                <template #prepend>👤 接收人</template>
+                <template #prepend>接收人</template>
               </el-input>
             </div>
 
@@ -230,7 +227,7 @@
               <div class="feedback-status">
                 <el-icon v-if="testResultMap.WECHAT.success"><CircleCheckFilled /></el-icon>
                 <el-icon v-else><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.WECHAT.success ? '✅ 推送成功' : '❌ 推送失败' }}</span>
+                <span>{{ testResultMap.WECHAT.success ? '推送成功' : '推送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.WECHAT.latencyMs">耗时: {{ testResultMap.WECHAT.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.WECHAT.message }}</div>
@@ -242,7 +239,7 @@
       <!-- 2. 阿里钉钉群机器人配置 -->
       <el-tab-pane name="dingtalk">
         <template #label>
-          <span class="tab-label">💬 🔵 阿里钉钉群机器人 (DingTalk)</span>
+          <span class="tab-label">阿里钉钉群机器人 (DingTalk)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -287,7 +284,7 @@
 
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 钉钉机器人在线测试</span>
+              <span>钉钉机器人在线测试</span>
             </div>
             <div class="test-panel-desc">向钉钉群立即发送一条 Markdown 格式的数据库治理告警测试卡片。</div>
 
@@ -312,7 +309,7 @@
               <div class="feedback-status">
                 <el-icon v-if="testResultMap.DINGTALK.success"><CircleCheckFilled /></el-icon>
                 <el-icon v-else><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.DINGTALK.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
+                <span>{{ testResultMap.DINGTALK.success ? '发送成功' : '发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.DINGTALK.latencyMs">耗时: {{ testResultMap.DINGTALK.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.DINGTALK.message }}</div>
@@ -324,7 +321,7 @@
       <!-- 3. 字节跳动飞书 / Lark 配置 -->
       <el-tab-pane name="feishu">
         <template #label>
-          <span class="tab-label">💬 🟣 字节飞书 / Lark (Feishu)</span>
+          <span class="tab-label">字节飞书 / Lark (Feishu)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -359,7 +356,7 @@
 
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 飞书交互卡片在线测试</span>
+              <span>飞书交互卡片在线测试</span>
             </div>
             <div class="test-panel-desc">向飞书群下发一条彩色标题、带跳转按钮的 Interactive 流程卡片。</div>
 
@@ -384,7 +381,7 @@
               <div class="feedback-status">
                 <el-icon v-if="testResultMap.FEISHU.success"><CircleCheckFilled /></el-icon>
                 <el-icon v-else><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.FEISHU.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
+                <span>{{ testResultMap.FEISHU.success ? '发送成功' : '发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.FEISHU.latencyMs">耗时: {{ testResultMap.FEISHU.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.FEISHU.message }}</div>
@@ -396,7 +393,7 @@
       <!-- 4. 移动短信服务 (SMS) —— [阿里云/腾讯云等多厂商] -->
       <el-tab-pane name="sms">
         <template #label>
-          <span class="tab-label">📱 移动短信服务 (SMS Gateway)</span>
+          <span class="tab-label">移动短信服务 (SMS Gateway)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -417,16 +414,16 @@
               <el-form-item label="选择短信服务提供商">
                 <el-radio-group v-model="form.sms.provider" size="default">
                   <el-radio-button value="ALIYUN">
-                    <span style="font-weight: 600;">🟧 阿里巴巴 (阿里云短信 Dysmsapi)</span>
+                    <span style="font-weight: 600;">阿里巴巴 (阿里云短信 Dysmsapi)</span>
                   </el-radio-button>
                   <el-radio-button value="TENCENT">
-                    <span style="font-weight: 600;">🟦 腾讯云短信 (Tencent SMS)</span>
+                    <span style="font-weight: 600;">腾讯云短信 (Tencent SMS)</span>
                   </el-radio-button>
                   <el-radio-button value="HUAWEI">
-                    <span>🔴 华为云短信</span>
+                    <span>华为云短信</span>
                   </el-radio-button>
                   <el-radio-button value="CUSTOM_HTTP">
-                    <span>⚙️ 自建 HTTP 短信网关</span>
+                    <span>自建 HTTP 短信网关</span>
                   </el-radio-button>
                 </el-radio-group>
               </el-form-item>
@@ -448,7 +445,7 @@
 
               <!-- 阿里云短信专属参数配置 -->
               <div v-if="form.sms.provider === 'ALIYUN'" class="provider-config-box aliyun-box">
-                <div class="provider-box-title">🟧 阿里云短信服务参数设置 (Aliyun Dysmsapi)</div>
+                <div class="provider-box-title">阿里云短信服务参数设置 (Aliyun Dysmsapi)</div>
                 <el-row :gutter="16">
                   <el-col :span="12">
                     <el-form-item label="AccessKey ID">
@@ -468,7 +465,7 @@
 
               <!-- 腾讯云短信专属参数配置 -->
               <div v-else-if="form.sms.provider === 'TENCENT'" class="provider-config-box tencent-box">
-                <div class="provider-box-title">🟦 腾讯云短信服务参数设置 (Tencent Cloud SMS)</div>
+                <div class="provider-box-title">腾讯云短信服务参数设置 (Tencent Cloud SMS)</div>
                 <el-row :gutter="16">
                   <el-col :span="12">
                     <el-form-item label="SecretId">
@@ -497,7 +494,7 @@
 
               <!-- 华为云或自建网关 -->
               <div v-else class="provider-config-box custom-box">
-                <div class="provider-box-title">⚙️ 自建 HTTP / 华为云短信网关配置</div>
+                <div class="provider-box-title">自建 HTTP / 华为云短信网关配置</div>
                 <el-form-item label="网关 API 端点 URL">
                   <el-input v-model="form.sms.customApiEndpoint" placeholder="https://sms.yourdomain.com/v1/send" clearable />
                 </el-form-item>
@@ -526,7 +523,7 @@
           <!-- 在线短信测试控制台 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 移动短信通道在线下发测试 (Test SMS)</span>
+              <span>移动短信通道在线下发测试 (Test SMS)</span>
             </div>
             <div class="test-panel-desc">
               输入接收人手机号码，针对当前配置的服务商（阿里巴巴 / 腾讯云等）发起一条实时代发测试短信。
@@ -535,7 +532,7 @@
             <div class="test-field-group">
               <div class="field-label">测试目标手机号码：</div>
               <el-input v-model="smsTestPhone" placeholder="请输入 11 位测试手机号" clearable>
-                <template #prepend>📱 手机号</template>
+                <template #prepend>手机号</template>
               </el-input>
             </div>
 
@@ -565,7 +562,7 @@
               <div class="feedback-status">
                 <el-icon v-if="testResultMap.SMS.success"><CircleCheckFilled /></el-icon>
                 <el-icon v-else><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.SMS.success ? '✅ 短信下发成功' : '❌ 短信发送失败' }}</span>
+                <span>{{ testResultMap.SMS.success ? '短信下发成功' : '短信发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.SMS.latencyMs">耗时: {{ testResultMap.SMS.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.SMS.message }}</div>
@@ -581,7 +578,7 @@
       <!-- 5. 紧急电话语音外呼配置 -->
       <el-tab-pane name="voiceCall">
         <template #label>
-          <span class="tab-label">📞 紧急电话智能语音外呼 (Voice Call)</span>
+          <span class="tab-label">紧急电话智能语音外呼 (Voice Call)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -646,7 +643,7 @@
           <!-- 在线测试语音外呼 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 电话语音外呼在线拨测 (Test Voice Call)</span>
+              <span>电话语音外呼在线拨测 (Test Voice Call)</span>
             </div>
             <div class="test-panel-desc">
               输入被叫手机号码，发起一次自动化告警语音呼叫握手测试。
@@ -659,7 +656,7 @@
                 placeholder="请输入 11 位手机号码 (如 13800138000)"
                 clearable
               >
-                <template #prepend>📱 手机号</template>
+                <template #prepend>手机号</template>
               </el-input>
             </div>
 
@@ -679,7 +676,7 @@
               <div class="feedback-status">
                 <el-icon v-if="testResultMap.VOICE_CALL.success"><CircleCheckFilled /></el-icon>
                 <el-icon v-else><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.VOICE_CALL.success ? '✅ 外呼握手成功' : '❌ 外呼失败' }}</span>
+                <span>{{ testResultMap.VOICE_CALL.success ? '外呼握手成功' : '外呼失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.VOICE_CALL.latencyMs">耗时: {{ testResultMap.VOICE_CALL.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.VOICE_CALL.message }}</div>
@@ -691,7 +688,7 @@
       <!-- 6. 提醒方式分类使用与告警策略矩阵 (Policy & Usage Matrix) -->
       <el-tab-pane name="policy">
         <template #label>
-          <span class="tab-label">⚙️ 提醒方式分类使用与场景联动矩阵 (Policies)</span>
+          <span class="tab-label">提醒方式分类使用与场景联动矩阵 (Policies)</span>
         </template>
 
         <div style="max-width: 900px; padding: 12px 0;">
@@ -709,9 +706,9 @@
             <thead>
               <tr>
                 <th style="width: 240px;">业务事件 / 触发场景</th>
-                <th style="width: 160px;">💬 即时通讯类</th>
-                <th style="width: 160px;">📱 移动短信类</th>
-                <th style="width: 160px;">📞 电话语音类</th>
+                <th style="width: 160px;">即时通讯类</th>
+                <th style="width: 160px;">移动短信类</th>
+                <th style="width: 160px;">电话语音类</th>
                 <th>使用说明</th>
               </tr>
             </thead>
@@ -756,7 +753,7 @@
                 <td class="desc-cell">变更异常迅速告知申请人与审批主管</td>
               </tr>
               <tr class="highlight-p0-row">
-                <td><b>🚨 P0 核心故障 / 生产库宕机 / 恶意拦截</b></td>
+                <td><b>P0 核心故障 / 生产库宕机 / 恶意拦截</b></td>
                 <td>
                   <el-tag size="small" type="danger">紧急推送</el-tag>
                 </td>

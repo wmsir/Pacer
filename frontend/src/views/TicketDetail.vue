@@ -16,11 +16,11 @@
           <span class="meta-text">{{ getInstanceName(ticketDetail.ticket.instanceId) }}</span>
           <span v-if="ticketDetail.ticket.dbName" class="meta-sep">·</span>
           <el-tag v-if="ticketDetail.ticket.dbName" size="small" type="success" effect="plain" class="meta-tag">
-            🗃️ {{ ticketDetail.ticket.dbName }}
+            {{ ticketDetail.ticket.dbName }}
           </el-tag>
           <span class="meta-sep">·</span>
           <span class="meta-text">
-            👤 {{ cleanApplicantName(ticketDetail.ticket.applicantName || ticketDetail.ticket.applicantIdCard) }}
+            {{ cleanApplicantName(ticketDetail.ticket.applicantName || ticketDetail.ticket.applicantIdCard) }}
           </span>
         </div>
       </div>
@@ -35,7 +35,7 @@
           :icon="RefreshLeft"
           @click="handleWithdrawTicket"
         >
-          ↩️ 撤回工单并重新编辑
+          撤回工单并重新编辑
         </el-button>
 
 
@@ -48,7 +48,7 @@
           :icon="Refresh"
           @click="handleCloneTicket"
         >
-          🔄 再来一单 (重新申请)
+          再来一单 (重新申请)
         </el-button>
 
         <!-- 3. 主动终止工单 (所有人均可终止进行中或非终态工单) -->
@@ -60,7 +60,7 @@
           :icon="Close"
           @click="handleOpenTerminateDialog"
         >
-          🛑 终止工单
+          终止工单
         </el-button>
 
         <el-button
@@ -93,7 +93,7 @@
               size="small"
               style="margin-left: 8px; background: color-mix(in srgb, var(--c-surface) 15%, transparent); border-color: rgba(255,255,255,0.3); color: var(--c-accent-hover);"
             >
-              {{ ticketDetail?.workflowTemplateInfo?.isPinned ? '🔥 专属固定审批流：' : '流程模板：' }}{{ ticketDetail?.workflowTemplateInfo?.templateName || ticketDetail?.ticket?.workflowTemplateName || '标准生产 SQL 变更审批流' }}
+              {{ ticketDetail?.workflowTemplateInfo?.isPinned ? '专属固定审批流：' : '流程模板：' }}{{ ticketDetail?.workflowTemplateInfo?.templateName || ticketDetail?.ticket?.workflowTemplateName || '标准生产 SQL 变更审批流' }}
             </el-tag>
           </div>
           
@@ -108,7 +108,7 @@
               @click="handleOpenUrgeDialog()"
               style="font-weight: 600; background: rgba(239, 68, 68, 0.9); border-color: var(--c-danger); color: #fff;"
             >
-              {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '⏰ 加急催办' }}
+              {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '加急催办' }}
             </el-button>
 
             <el-button
@@ -129,7 +129,7 @@
         <div class="gateway-banner-left">
           <el-icon class="gw-icon"><Share /></el-icon>
           <span class="gw-text">
-            智能排他网关判定：预执行累计影响行数为 <b>{{ ticketDetail.gatewayDecision.affectRows ?? ticketDetail?.detail?.affectRowsEstimate ?? 0 }}</b> 行（判定阈值：{{ ticketDetail.gatewayDecision.threshold || 1000 }} 行，SpEL: <code>{{ ticketDetail.gatewayDecision.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>） ➔ 路由至【<b :style="{ color: ticketDetail.gatewayDecision.isHighRisk ? '#dc2626' : '#16a34a' }">{{ ticketDetail.gatewayDecision.targetNodeName }}</b>】
+            智能排他网关判定：预执行累计影响行数为 <b>{{ ticketDetail.gatewayDecision.affectRows ?? ticketDetail?.detail?.affectRowsEstimate ?? 0 }}</b> 行（判定阈值：{{ ticketDetail.gatewayDecision.threshold || 1000 }} 行，SpEL: <code>{{ ticketDetail.gatewayDecision.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>） → 路由至【<b :style="{ color: ticketDetail.gatewayDecision.isHighRisk ? '#dc2626' : '#16a34a' }">{{ ticketDetail.gatewayDecision.targetNodeName }}</b>】
           </span>
         </div>
         <div class="gateway-banner-right" v-if="ticketDetail.gatewayDecision.eligibleApprovers && ticketDetail.gatewayDecision.eligibleApprovers.length > 0">
@@ -143,7 +143,7 @@
               effect="dark"
               class="curr-approver-tag"
             >
-              👤 {{ app }}
+              {{ app }}
             </el-tag>
           </div>
         </div>
@@ -154,14 +154,14 @@
         <div style="display: flex; align-items: center; gap: 8px;">
           <span style="font-size: 13px; font-weight: 600; color: var(--c-text-2);">流转呈现模式：</span>
           <el-radio-group v-model="flowDisplayMode" size="small">
-            <el-radio-button value="bpmn">🔀 BPMN 2.0 拓扑全景图 (推荐)</el-radio-button>
-            <el-radio-button value="timeline">⏱️ Flowable 时间线视图</el-radio-button>
-            <el-radio-button value="pipeline">📊 管道节点视图</el-radio-button>
+            <el-radio-button value="bpmn">BPMN 2.0 拓扑全景图 (推荐)</el-radio-button>
+            <el-radio-button value="timeline">Flowable 时间线视图</el-radio-button>
+            <el-radio-button value="pipeline">管道节点视图</el-radio-button>
           </el-radio-group>
         </div>
         <div v-if="activeNodeInfo" style="display: flex; align-items: center; gap: 6px;">
           <el-tag type="danger" effect="dark" size="small" style="font-weight: 700;">
-            📍 当前停留节点：{{ activeNodeInfo.nodeName }}
+            当前停留节点：{{ activeNodeInfo.nodeName }}
           </el-tag>
           <el-tag type="warning" effect="plain" size="small" v-if="activeNodeInfo.eligibleApprovers && activeNodeInfo.eligibleApprovers.length > 0">
             责任审批人：{{ activeNodeInfo.eligibleApprovers.join('、') }}
@@ -192,7 +192,7 @@
               <div class="bpmn-circle start-circle"></div>
               <span class="bpmn-label">提交变更申请</span>
             </div>
-            <span class="pill-sub-text">✅ 已发起 ({{ cleanApplicantName(ticketDetail?.ticket?.applicantName || ticketDetail?.ticket?.applicantIdCard) }})</span>
+            <span class="pill-sub-text">已发起 ({{ cleanApplicantName(ticketDetail?.ticket?.applicantName || ticketDetail?.ticket?.applicantIdCard) }})</span>
           </div>
 
           <!-- 连线 1：起点 -> 排他网关 -->
@@ -258,10 +258,10 @@
             >
               <div class="branch-card-topbar">
                 <span class="branch-tag-label high-label">
-                  🔥 左分支 (高危): <code>{{ ticketDetail?.gatewayDecision?.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
+                  左分支 (高危): <code>{{ ticketDetail?.gatewayDecision?.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
                 </span>
                 <span class="branch-hit-badge" :class="isDetailHighRiskRoute ? 'badge-hit-high' : 'badge-standby'">
-                  {{ isDetailHighRiskRoute ? (ticketDetail?.ticket?.status === 'EXECUTED' ? '✅ 已审批通过' : '🔥 命中当前分支') : '未触发分支' }}
+                  {{ isDetailHighRiskRoute ? (ticketDetail?.ticket?.status === 'EXECUTED' ? '已审批通过' : '命中当前分支') : '未触发分支' }}
                 </span>
               </div>
               <div class="branch-card-body">
@@ -285,10 +285,10 @@
             >
               <div class="branch-card-topbar">
                 <span class="branch-tag-label normal-label">
-                  ⚡ 右分支 (常规): 默认安全放行流 (行数 ≤ {{ ticketDetail?.gatewayDecision?.threshold || 1000 }})
+                  右分支 (常规): 默认安全放行流 (行数 ≤ {{ ticketDetail?.gatewayDecision?.threshold || 1000 }})
                 </span>
                 <span class="branch-hit-badge" :class="!isDetailHighRiskRoute ? 'badge-hit-normal' : 'badge-standby'">
-                  {{ !isDetailHighRiskRoute ? (ticketDetail?.ticket?.status === 'EXECUTED' ? '✅ 已审批通过' : '✓ 命中当前分支') : '未触发分支' }}
+                  {{ !isDetailHighRiskRoute ? (ticketDetail?.ticket?.status === 'EXECUTED' ? '已审批通过' : '✓ 命中当前分支') : '未触发分支' }}
                 </span>
               </div>
               <div class="branch-card-body">
@@ -339,7 +339,7 @@
                 <span class="t-name">JDBC安全流式执行</span>
               </div>
               <div class="t-role">
-                {{ ticketDetail?.ticket?.status === 'EXECUTED' ? '✅ 事务已安全提交' : '底层事务控制与自动备份保护' }}
+                {{ ticketDetail?.ticket?.status === 'EXECUTED' ? '事务已安全提交' : '底层事务控制与自动备份保护' }}
               </div>
             </div>
           </div>
@@ -371,7 +371,7 @@
             :key="node.nodeKey"
             :type="node.status === 'COMPLETED' ? 'success' : (node.status === 'ACTIVE' ? 'primary' : (node.status === 'REJECTED' ? 'danger' : 'info'))"
             :size="node.status === 'ACTIVE' ? 'large' : 'normal'"
-            :timestamp="node.finishTime || (node.status === 'ACTIVE' ? '🔥 正在审批中 (当前责任节点)' : '等待前序节点流转')"
+            :timestamp="node.finishTime || (node.status === 'ACTIVE' ? '正在审批中 (当前责任节点)' : '等待前序节点流转')"
             placement="top"
           >
             <el-card shadow="never" class="timeline-node-card" :style="node.status === 'ACTIVE' ? 'border: 2px solid #3b82f6; background: #eff6ff;' : (node.status === 'COMPLETED' ? 'border-left: 4px solid #10b981;' : 'border-left: 4px solid #94a3b8;')">
@@ -382,7 +382,7 @@
                     {{ getNodeStatusLabel(node.status) }}
                   </el-tag>
                   <el-tag v-if="node.status === 'ACTIVE'" size="small" type="danger" effect="dark" style="font-weight: 700;">
-                    📍 当前审批节点
+                    当前审批节点
                   </el-tag>
                 </div>
                 <span style="font-size: 12px; color: var(--c-text-3); font-family: monospace;">
@@ -406,14 +406,14 @@
                       effect="light"
                       style="margin-right: 4px; font-weight: 600;"
                     >
-                      👤 {{ approver }}
+                      {{ approver }}
                     </el-tag>
                   </template>
                   <span v-else style="color: var(--c-text-4);">系统指定责任人</span>
                 </div>
                 <div v-if="node.actualApprover">
                   <span style="color: var(--c-text-3);">实际操作人：</span>
-                  <span style="font-weight: 600; color: var(--c-success);">✅ {{ node.actualApprover }}</span>
+                  <span style="font-weight: 600; color: var(--c-success);">{{ node.actualApprover }}</span>
                 </div>
                 <div v-if="node.finishTime">
                   <span style="color: var(--c-text-3);">完成时间：</span>
@@ -422,7 +422,7 @@
               </div>
 
               <div v-if="node.comment" style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.03); border-radius: 4px; font-size: 12px; color: var(--c-text-2);">
-                💬 <b>审批意见：</b>{{ node.comment }}
+                <b>审批意见：</b>{{ node.comment }}
               </div>
 
               <div v-if="node.status === 'ACTIVE' && isTicketAuditing" style="margin-top: 10px;">
@@ -435,7 +435,7 @@
                   @click.stop="handleOpenUrgeDialog(node)"
                 >
                   <el-icon style="margin-right: 4px;"><Bell /></el-icon>
-                  {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '⚡ 一键催办此节点 (企微/钉钉)' }}
+                  {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '一键催办此节点 (企微/钉钉)' }}
                 </el-button>
               </div>
             </el-card>
@@ -509,7 +509,7 @@
                 @click.stop="handleOpenUrgeDialog(node)"
               >
                 <el-icon style="margin-right: 4px;"><Bell /></el-icon>
-                {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '⚡ 一键催办 (企微/钉钉)' }}
+                {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '一键催办 (企微/钉钉)' }}
               </el-button>
             </div>
 
@@ -533,7 +533,7 @@
           <!-- 节点间平滑连接箭头 -->
           <div v-if="Number(idx) < flowNodes.length - 1" class="pipeline-connector-line-wrapper">
             <div class="pipeline-line"></div>
-            <div class="pipeline-arrow">➔</div>
+            <div class="pipeline-arrow">→</div>
           </div>
         </div>
 
@@ -541,7 +541,7 @@
         <div class="pipeline-node-wrapper is-end-wrapper">
           <div class="pipeline-connector-line-wrapper">
             <div class="pipeline-line"></div>
-            <div class="pipeline-arrow">➔</div>
+            <div class="pipeline-arrow">→</div>
           </div>
           <div
             class="pipeline-node-card end-node-card"
@@ -809,7 +809,7 @@
             <el-table-column prop="dbName" label="目标数据库" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">
                 <el-tag v-if="row.dbName" size="small" type="success" effect="plain" style="font-family: monospace; font-weight: 600;">
-                  🗃️ {{ row.dbName }}
+                  {{ row.dbName }}
                 </el-tag>
                 <span v-else style="color: var(--c-text-4); font-size: 12px;">全局 / 默认库</span>
               </template>
@@ -817,7 +817,7 @@
             <el-table-column label="所属业务资源组" min-width="160" show-overflow-tooltip>
               <template #default="{ row }">
                 <el-tag size="small" type="warning" effect="plain" style="font-weight: 600;">
-                  🗂️ {{ getInstanceResourceGroup(row) }}
+                  {{ getInstanceResourceGroup(row) }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -866,26 +866,26 @@
 
         <div class="custom-fields-grid">
           <div v-if="parsedCustomFields.releaseVersion" class="cf-item">
-            <span class="cf-label">🚀 上线发布版本号：</span>
+            <span class="cf-label">上线发布版本号：</span>
             <el-tag size="default" type="primary" effect="dark" style="font-family: monospace; font-weight: 700;">
               {{ parsedCustomFields.releaseVersion }}
             </el-tag>
           </div>
 
           <div v-if="parsedCustomFields.releaseDate" class="cf-item">
-            <span class="cf-label">📅 计划上线日期 (年月日)：</span>
+            <span class="cf-label">计划上线日期 (年月日)：</span>
             <span class="cf-val font-mono">{{ parsedCustomFields.releaseDate }}</span>
           </div>
 
           <div v-if="parsedCustomFields.executionTimeRange && parsedCustomFields.executionTimeRange.length > 0" class="cf-item">
-            <span class="cf-label">⏰ 允许执行时间窗口：</span>
+            <span class="cf-label">允许执行时间窗口：</span>
             <el-tag size="default" type="warning" effect="light" style="font-family: monospace;">
               {{ Array.isArray(parsedCustomFields.executionTimeRange) ? parsedCustomFields.executionTimeRange.join(' ~ ') : parsedCustomFields.executionTimeRange }}
             </el-tag>
           </div>
 
           <div v-if="parsedCustomFields.demandNo" class="cf-item">
-            <span class="cf-label">📋 关联需求/任务单号：</span>
+            <span class="cf-label">关联需求/任务单号：</span>
             <span class="cf-val font-mono">{{ parsedCustomFields.demandNo }}</span>
           </div>
         </div>
@@ -972,27 +972,27 @@
                     size="small"
                     type="success"
                   >
-                    ✅ 精确匹配 ({{ row.expectedRows }} = {{ row.dryRunRows }})
+                    精确匹配 ({{ row.expectedRows }} = {{ row.dryRunRows }})
                   </el-tag>
                   <el-tag
                     v-else-if="row.expectedRows !== null && row.expectedRows !== row.dryRunRows"
                     size="small"
                     type="danger"
                   >
-                    ⚠️ 存在偏差 ({{ row.expectedRows }} ≠ {{ row.dryRunRows }})
+                    存在偏差 ({{ row.expectedRows }} ≠ {{ row.dryRunRows }})
                   </el-tag>
                   <el-tag v-else size="small" type="success">
-                    ⚡ 预检完成
+                    预检完成
                   </el-tag>
                 </template>
                 <template v-else-if="row.isDdl">
                   <el-tag size="small" type="info">
-                    🛡️ 语法结构合规
+                    语法结构合规
                   </el-tag>
                 </template>
                 <template v-else>
                   <el-tag size="small" type="info">
-                    ⚡ 校验通过
+                    校验通过
                   </el-tag>
                 </template>
               </template>
@@ -1035,7 +1035,7 @@
             </el-tag>
           </div>
           <span class="perm-subtip">
-            {{ isFinalApprovalStep ? '💡 终审提示：审批通过时可灵活指定【立即执行】、【定时执行】或【转DBA工具手工执行】' : '💡 多级流转提示：中间阶段初审通过后将自动流转至下一级审批人，执行方式将在最后一步终审时统一指定' }}
+            {{ isFinalApprovalStep ? '终审提示：审批通过时可灵活指定【立即执行】、【定时执行】或【转DBA工具手工执行】' : '多级流转提示：中间阶段初审通过后将自动流转至下一级审批人，执行方式将在最后一步终审时统一指定' }}
           </span>
         </div>
       </template>
@@ -1055,7 +1055,7 @@
                 </el-tag>
               </div>
               <div class="stage-sub-desc">
-                📌 <b>多级审批流转说明</b>：当前处于多级审批流的中间初审/复核阶段。审批通过后将自动流转推进至下一节点【<b>{{ ticketDetail?.gatewayDecision?.nextStageName || '下一级审批人' }}</b>】进行复核；<b>最终执行方式（立即/定时/分批/转DBA）将在最后一步终审时由终审人员统一指定并下发</b>。
+                <b>多级审批流转说明</b>：当前处于多级审批流的中间初审/复核阶段。审批通过后将自动流转推进至下一节点【<b>{{ ticketDetail?.gatewayDecision?.nextStageName || '下一级审批人' }}</b>】进行复核；<b>最终执行方式（立即/定时/分批/转DBA）将在最后一步终审时由终审人员统一指定并下发</b>。
               </div>
             </div>
           </div>
@@ -1156,7 +1156,7 @@
                   style="width: 380px;"
                   size="default"
                 />
-                <span class="sub-hint">⏰ 到达预定时间后将由调度引擎自动执行并完成状态闭环</span>
+                <span class="sub-hint">到达预定时间后将由调度引擎自动执行并完成状态闭环</span>
               </div>
             </div>
 
@@ -1174,7 +1174,7 @@
                   <span class="ctrl-label">批次间隔休眠时间 (ms)：</span>
                   <el-input-number v-model="approvalIntervalMs" :min="0" :max="3000" :step="50" size="default" style="width: 140px;" />
                 </div>
-                <span class="sub-hint">🌊 分批平滑执行，有效防止长事务阻塞主库与从库延迟</span>
+                <span class="sub-hint">分批平滑执行，有效防止长事务阻塞主库与从库延迟</span>
               </div>
             </div>
           </template>
@@ -1292,7 +1292,7 @@
                 plain
                 @click="isLogDetailsExpanded = !isLogDetailsExpanded"
               >
-                {{ isLogDetailsExpanded ? '收起审计明细 ▲' : '📖 展开完整操作审计明细 ▼' }}
+                {{ isLogDetailsExpanded ? '收起审计明细 ▲' : '展开完整操作审计明细 ▼' }}
               </el-button>
             </div>
           </div>
@@ -1306,19 +1306,12 @@
             class="summary-log-node"
           >
             <div class="node-icon-badge" :class="`badge-${getLogItemType(log.operationType)}`">
-              <span v-if="log.operationType === 'SUBMIT'">📝</span>
-              <span v-else-if="log.operationType === 'APPROVE'">🛡️</span>
-              <span v-else-if="log.operationType === 'SCHEDULED' || log.operationType === 'RESCHEDULE'">🕒</span>
-              <span v-else-if="log.operationType === 'EXECUTE' || log.operationType === 'ENGINE_EXECUTE'">⚡</span>
-              <span v-else-if="log.operationType === 'ARCHIVE'">📦</span>
-              <span v-else-if="log.operationType === 'REJECT'">❌</span>
-              <span v-else>📋</span>
             </div>
             <div class="node-summary-text">
               <div class="node-action-title">{{ getOperationTypeLabel(log.operationType) }}</div>
               <div class="node-operator-sub">{{ log.operatorName || log.operatorIdCard }} · {{ formatTimeShort(log.createdTime) }}</div>
             </div>
-            <div v-if="idx < operationLogs.length - 1" class="node-connector-arrow">➔</div>
+            <div v-if="idx < operationLogs.length - 1" class="node-connector-arrow">→</div>
           </div>
         </div>
 
@@ -1373,7 +1366,7 @@
     <!-- 11. 重新调整定时计划执行时间 Dialog (Reschedule) -->
     <el-dialog
       v-model="rescheduleDialogVisible"
-      title="🕒 调整定时计划执行时间"
+      title="调整定时计划执行时间"
       width="580px"
       destroy-on-close
       class="reschedule-modal-dialog"
@@ -1391,7 +1384,7 @@
 
         <!-- 快捷时段预设芯片网格 -->
         <div class="quick-preset-section">
-          <div class="quick-preset-title">💡 快捷预设业务低峰时段：</div>
+          <div class="quick-preset-title">快捷预设业务低峰时段：</div>
           <div class="quick-chips-grid">
             <el-button
               v-for="chip in quickTimePresets"
@@ -1419,7 +1412,7 @@
               size="large"
             />
             <div v-if="timeRemainingHint" class="time-remaining-badge">
-              <span>⏰ {{ timeRemainingHint }}</span>
+              <span>{{ timeRemainingHint }}</span>
             </div>
           </el-form-item>
 
@@ -1462,13 +1455,13 @@
         <div class="sql-viewer-header-wrap">
           <div class="sql-viewer-header-left">
             <span class="dialog-title-text">
-              📄 工单 #{{ ticketDetail?.ticket?.id || '' }} 提交的完整 SQL 脚本详情
+              工单 #{{ ticketDetail?.ticket?.id || '' }} 提交的完整 SQL 脚本详情
             </span>
             <el-tag size="small" type="primary" effect="plain" style="font-family: monospace; font-weight: 600;">
               {{ sqlList.length }} 条语句 · {{ submittedSqlLines.length }} 行
             </el-tag>
             <el-tag v-if="ticketDetail?.ticket?.dbName" size="small" type="success" effect="plain" style="font-weight: 600;">
-              🗃️ 目标数据库: {{ ticketDetail.ticket.dbName }}
+              目标数据库: {{ ticketDetail.ticket.dbName }}
             </el-tag>
           </div>
           <div class="sql-viewer-header-right">
@@ -1488,11 +1481,11 @@
 
       <div class="fullscreen-sql-content-body">
         <div class="sql-viewer-stats-bar">
-          <span>💾 脚本大小: {{ (ticketDetail?.detail?.sqlText || '').length }} 字符</span>
-          <span>⏱️ 提交时间: {{ ticketDetail?.ticket?.createTime || '-' }}</span>
-          <span>👤 申请人: {{ cleanApplicantName(ticketDetail?.ticket?.applicantName || ticketDetail?.ticket?.applicantIdCard) }}</span>
-          <span>🏷️ 变更类型: {{ getTicketTypeLabel(ticketDetail?.ticket?.type) }}</span>
-          <span>🗂️ 业务资源组: {{ getInstanceResourceGroup(ticketDetail?.ticket || {}) }}</span>
+          <span>脚本大小: {{ (ticketDetail?.detail?.sqlText || '').length }} 字符</span>
+          <span>提交时间: {{ ticketDetail?.ticket?.createTime || '-' }}</span>
+          <span>申请人: {{ cleanApplicantName(ticketDetail?.ticket?.applicantName || ticketDetail?.ticket?.applicantIdCard) }}</span>
+          <span>变更类型: {{ getTicketTypeLabel(ticketDetail?.ticket?.type) }}</span>
+          <span>业务资源组: {{ getInstanceResourceGroup(ticketDetail?.ticket || {}) }}</span>
         </div>
 
         <div class="sql-code-editor-container">
@@ -1516,7 +1509,7 @@
     <!-- 审批加急催办弹窗 (企业微信 / 钉钉多渠道触达) -->
     <el-dialog
       v-model="urgeDialogVisible"
-      title="⚡ 审批加急催办 (企业微信 / 钉钉多渠道触达)"
+      title="审批加急催办 (企业微信 / 钉钉多渠道触达)"
       width="520px"
       append-to-body
       destroy-on-close
@@ -1550,10 +1543,10 @@
 
           <el-form-item label="即时触达渠道">
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-              <el-tag type="success">🟢 企业微信应用工作消息</el-tag>
-              <el-tag type="primary">🔵 阿里钉钉群/工作通知</el-tag>
-              <el-tag type="success" style="background: rgba(16,185,129,0.1); border-color: var(--c-success); color: var(--c-success);">🟣 字节飞书 / Lark 交互卡片</el-tag>
-              <el-tag type="warning">🟡 站内待办审批提醒</el-tag>
+              <el-tag type="success">企业微信应用工作消息</el-tag>
+              <el-tag type="primary">阿里钉钉群/工作通知</el-tag>
+              <el-tag type="success" style="background: rgba(16,185,129,0.1); border-color: var(--c-success); color: var(--c-success);">字节飞书 / Lark 交互卡片</el-tag>
+              <el-tag type="warning">站内待办审批提醒</el-tag>
             </div>
           </el-form-item>
 
@@ -1588,7 +1581,7 @@
     <!-- 1. 主动终止工单弹窗 -->
     <el-dialog
       v-model="terminateDialogVisible"
-      title="🛑 主动终止工单流程"
+      title="主动终止工单流程"
       width="500px"
       append-to-body
       destroy-on-close
@@ -4680,37 +4673,17 @@ onUnmounted(() => {
 }
 
 .node-icon-badge {
-  width: 32px;
-  height: 32px;
+  width: 10px;
+  height: 10px;
+  margin: 11px;
+  flex-shrink: 0;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  background: var(--c-surface);
-  border: 1px solid var(--c-border-strong);
-  box-shadow: var(--shadow-sm);
+  background: var(--c-text-4);
 }
-
-.node-icon-badge.badge-primary {
-  border-color: var(--c-accent-border);
-  background: var(--c-accent-soft);
-}
-
-.node-icon-badge.badge-success {
-  border-color: var(--c-success-border);
-  background: var(--c-success-soft);
-}
-
-.node-icon-badge.badge-warning {
-  border-color: #fde047;
-  background: var(--c-warning-soft);
-}
-
-.node-icon-badge.badge-danger {
-  border-color: var(--c-danger-border);
-  background: var(--c-danger-soft);
-}
+.node-icon-badge.badge-primary { background: var(--c-accent); }
+.node-icon-badge.badge-success { background: var(--c-success); }
+.node-icon-badge.badge-warning { background: var(--c-warning); }
+.node-icon-badge.badge-danger { background: var(--c-danger); }
 
 .node-summary-text {
   display: flex;

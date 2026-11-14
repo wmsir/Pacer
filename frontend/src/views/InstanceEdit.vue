@@ -20,7 +20,7 @@
       </div>
     </div>
 
-    <!-- 主表单区域 (全景单列纵向流式架构 1 ➔ 2 ➔ 3 ➔ 4 ➔ 5) -->
+    <!-- 主表单区域 (全景单列纵向流式架构 1 → 2 → 3 → 4 → 5) -->
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="edit-form instance-edit-stream" v-loading="pageLoading">
       
       <!-- 1️⃣ 基础连接与网络认证配置 -->
@@ -373,11 +373,11 @@
           <el-form-item label="审批流决策机制">
             <el-radio-group v-model="workflowRoutingMode" @change="handleWorkflowModeChange" class="custom-radio-group">
               <el-radio value="DYNAMIC">
-                <div class="radio-title">⚡ 动态综合智能决策 (默认)</div>
+                <div class="radio-title">动态综合智能决策 (默认)</div>
                 <div class="radio-desc">根据工单类型、影响行数、实例标签与资源组自动计算最优审批流</div>
               </el-radio>
               <el-radio value="PINNED" style="margin-top: 10px;">
-                <div class="radio-title pinned-title">🔥 指定专属固定审批流 (专库专流)</div>
+                <div class="radio-title pinned-title">指定专属固定审批流 (专库专流)</div>
                 <div class="radio-desc">此实例所有工单均强制走所选的固定流转链路，跳过任何动态判定</div>
               </el-radio>
             </el-radio-group>
@@ -408,10 +408,10 @@
               <!-- 快捷直达流程设计中心引导栏 -->
               <div class="workflow-jump-banner" style="margin-top: 10px; background: var(--c-success-soft); border: 1px dashed var(--c-success-border); padding: 10px 14px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
                 <span class="jump-tip" style="font-size: 12px; color: var(--c-success-strong); font-weight: 500;">
-                  💡 没有符合当前业务需要的审批流程？
+                  没有符合当前业务需要的审批流程？
                 </span>
                 <el-button type="success" link :icon="Share" @click="goToWorkflowDesigner" style="font-weight: 600;">
-                  前往【审批流设计中心】新建/编辑流程 ➔
+                  前往【审批流设计中心】新建/编辑流程 →
                 </el-button>
               </div>
             </el-form-item>
@@ -419,13 +419,13 @@
             <!-- 选中的固定模板详情预览 -->
             <div v-if="selectedPinnedTemplate" class="pinned-template-preview">
               <div class="preview-row">
-                <b>🎯 触发与生效说明：</b>{{ selectedPinnedTemplate.triggerCondition || '所有工单强制生效' }}
+                <b>触发与生效说明：</b>{{ selectedPinnedTemplate.triggerCondition || '所有工单强制生效' }}
               </div>
               <div class="preview-row">
-                <b>📋 适用类型：</b><el-tag size="small" type="info">{{ selectedPinnedTemplate.flowType }}</el-tag>
+                <b>适用类型：</b><el-tag size="small" type="info">{{ selectedPinnedTemplate.flowType }}</el-tag>
               </div>
               <div class="preview-row" style="margin-top: 6px;">
-                <b>🔗 预定审批流转链路：</b>
+                <b>预定审批流转链路：</b>
                 <div class="pipeline-tags">
                   <el-tag
                     v-for="(n, idx) in parseNodes(selectedPinnedTemplate.nodeConfig)"

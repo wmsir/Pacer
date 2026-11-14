@@ -7,7 +7,7 @@
       </div>
       <div class="header-actions">
         <el-tag size="default" type="success" effect="plain" class="model-badge">
-          🤖 当前生效引擎: <b>{{ activeModelName }}</b>
+          当前生效引擎: <b>{{ activeModelName }}</b>
         </el-tag>
         <el-button
           v-if="userStore.isAdmin || userStore.hasPermission('/ai-config')"
@@ -16,7 +16,7 @@
           plain
           @click="router.push('/ai-config')"
         >
-          ⚙️ AI 模型配置与连通测试
+          AI 模型配置与连通测试
         </el-button>
       </div>
     </div>
@@ -56,7 +56,7 @@
           <div class="result-area" v-loading="loading">
              <div v-if="aiResult" class="markdown-body">
                <div v-if="isUnconfiguredHint" class="unconfigured-banner">
-                 <div class="banner-title">⚠️ 尚未配置真实的 AI API Key</div>
+                 <div class="banner-title">尚未配置真实的 AI API Key</div>
                  <div class="banner-desc">{{ aiResult }}</div>
                  <el-button
                    v-if="userStore.isAdmin || userStore.hasPermission('/ai-config')"
@@ -65,7 +65,7 @@
                    style="margin-top: 10px;"
                    @click="router.push('/ai-config')"
                  >
-                   👉 立即前往【AI 模型配置】页面配置 API Key
+                   立即前往【AI 模型配置】页面配置 API Key
                  </el-button>
                </div>
                <div v-else>{{ aiResult }}</div>

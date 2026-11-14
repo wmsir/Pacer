@@ -7,12 +7,12 @@
       class="user-workbench-tabs"
       @tab-remove="handleCloseTab"
     >
-      <!-- 主页签: 👥 系统用户列表 -->
+      <!-- 主页签: 系统用户列表 -->
       <el-tab-pane name="list" :closable="false">
         <template #label>
           <div class="tab-label-item">
             <el-icon><UserFilled /></el-icon>
-            <span>👥 系统用户列表 (User Management)</span>
+            <span>系统用户列表 (User Management)</span>
           </div>
         </template>
 
@@ -98,7 +98,7 @@
                 <template #default="scope">
                   <div class="user-perm-cell">
                     <template v-if="isUserAdmin(scope.row)">
-                      <el-tag type="danger" size="small" effect="plain">👑 全量 17 个页签</el-tag>
+                      <el-tag type="danger" size="small" effect="plain">全量 17 个页签</el-tag>
                     </template>
                     <template v-else>
                       <el-tag type="primary" size="small" effect="plain">
@@ -383,7 +383,7 @@
                   </el-option>
                 </el-select>
                 <div class="form-hint-text">
-                  💡 提示：用户可同时兼任多个角色（如：同时具备「开发组长」初审与「DBA」安全复核特权），系统将自动合并所选角色的页签与功能权限。
+                  提示：用户可同时兼任多个角色（如：同时具备「开发组长」初审与「DBA」安全复核特权），系统将自动合并所选角色的页签与功能权限。
                 </div>
               </el-form-item>
             </el-card>
@@ -413,7 +413,7 @@
                       <el-option
                         v-for="rg in resourceGroupOptions"
                         :key="rg"
-                        :label="`🗂️ ${rg}`"
+                        :label="`${rg}`"
                         :value="rg"
                       />
                     </el-select>
@@ -427,10 +427,10 @@
                       style="width: 100%;"
                       clearable
                     >
-                      <el-option label="⚡ 角色智能默认 (根据系统角色自动判定)" value="" />
-                      <el-option label="🌐 全平台所有工单 (ALL - 超管/DBA/审计员)" value="ALL" />
-                      <el-option label="🏢 归属业务资源组工单 (RESOURCE_GROUP - 组长/主管)" value="RESOURCE_GROUP" />
-                      <el-option label="👤 仅本人发起与待办 (SELF - 普通开发/测试)" value="SELF" />
+                      <el-option label="角色智能默认 (根据系统角色自动判定)" value="" />
+                      <el-option label="全平台所有工单 (ALL - 超管/DBA/审计员)" value="ALL" />
+                      <el-option label="归属业务资源组工单 (RESOURCE_GROUP - 组长/主管)" value="RESOURCE_GROUP" />
+                      <el-option label="仅本人发起与待办 (SELF - 普通开发/测试)" value="SELF" />
                     </el-select>
                   </el-form-item>
                 </el-col>

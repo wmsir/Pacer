@@ -144,7 +144,7 @@
                   @click="handleAccountLogin"
                   :loading="loading"
                 >
-                  <span v-if="!loading">登 录 控 制 台</span>
+                  <span v-if="!loading">登录</span>
                   <span v-else>正在验证安全凭据...</span>
                 </el-button>
               </el-form-item>
@@ -320,7 +320,7 @@
                     @click="handleMockScanConfirm"
                     class="mock-btn"
                   >
-                    ⚡ 一键模拟手机扫码确认
+                    一键模拟手机扫码确认
                   </el-button>
                 </div>
               </div>

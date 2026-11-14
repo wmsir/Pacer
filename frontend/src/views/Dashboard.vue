@@ -73,7 +73,7 @@
           </div>
         </div>
         <div class="policy-banner-right">
-          <span class="policy-btn-hint">调整策略模板 / 自定义路由 ⚙</span>
+          <span class="policy-btn-hint">调整策略模板 / 自定义路由 </span>
         </div>
       </div>
 
@@ -415,8 +415,8 @@
             </div>
             <div class="preset-desc">{{ tpl.description }}</div>
             <div class="preset-routes">
-              <span class="pr-item">🔍 查询: <b>{{ tpl.queryRouteLabel }}</b></span>
-              <span class="pr-item">⚡ 变更: <b>{{ tpl.executeRouteLabel }}</b></span>
+              <span class="pr-item">查询: <b>{{ tpl.queryRouteLabel }}</b></span>
+              <span class="pr-item">变更: <b>{{ tpl.executeRouteLabel }}</b></span>
             </div>
           </div>
         </div>
@@ -1032,7 +1032,8 @@ onBeforeUnmount(() => {
 .metric-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  background: var(--c-surface);
+  gap: 1px;
+  background: var(--c-border);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   margin-bottom: 16px;
@@ -1044,14 +1045,12 @@ onBeforeUnmount(() => {
   align-items: flex-start;
   gap: 4px;
   padding: 16px 18px;
-  background: none;
+  background: var(--c-surface);
   border: none;
-  border-left: 1px solid var(--c-border);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
-.metric-cell:first-child { border-left: none; }
 .metric-cell:hover { background: var(--c-muted-bg); }
 .metric-cell:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
 .metric-title { font-size: 12.5px; color: var(--c-text-3); }
@@ -1069,14 +1068,9 @@ onBeforeUnmount(() => {
 
 @media (max-width: 1200px) {
   .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .metric-cell:nth-child(3n + 1) { border-left: none; }
-  .metric-cell:nth-child(n + 4) { border-top: 1px solid var(--c-border); }
 }
 @media (max-width: 640px) {
   .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .metric-cell:nth-child(3n + 1) { border-left: 1px solid var(--c-border); }
-  .metric-cell:nth-child(2n + 1) { border-left: none; }
-  .metric-cell:nth-child(n + 3) { border-top: 1px solid var(--c-border); }
 }
 
 /* ===================================================

@@ -84,13 +84,13 @@
                       <span class="branch-tag red">
                         {{ scope.row.conditionDimension === 'CHANGE_TYPE' ? '含 DDL 结构变更' : (scope.row.conditionDimension === 'COMPOSITE' ? `&gt; ${scope.row.affectRowsThreshold || 1000}行 或 DDL` : `&gt; ${scope.row.affectRowsThreshold || 1000} 行`) }}
                       </span>
-                      ➔ {{ scope.row.highRiskRole === 'ADMIN' ? '超级管理员终审 (ADMIN)' : (scope.row.highRiskRole === 'AUDITOR' ? '安全审计核查 (AUDITOR)' : '核心DBA安全复核 (DBA)') }}
+                      → {{ scope.row.highRiskRole === 'ADMIN' ? '超级管理员终审 (ADMIN)' : (scope.row.highRiskRole === 'AUDITOR' ? '安全审计核查 (AUDITOR)' : '核心DBA安全复核 (DBA)') }}
                     </div>
                     <div class="branch-row">
                       <span class="branch-tag green">
                         {{ scope.row.conditionDimension === 'CHANGE_TYPE' ? '常规 DML 纯数据' : `≤ ${scope.row.affectRowsThreshold || 1000} 行` }}
                       </span>
-                      ➔ {{ scope.row.lowRiskRole === 'OPS' ? '业务运维初审 (OPS)' : '开发组长初审 (DEV_LEAD)' }}
+                      → {{ scope.row.lowRiskRole === 'OPS' ? '业务运维初审 (OPS)' : '开发组长初审 (DEV_LEAD)' }}
                     </div>
                   </div>
                 </div>
@@ -180,7 +180,7 @@
                 <span class="step-sub">左侧选择资源组与目标数据库</span>
               </div>
             </div>
-            <div class="wizard-arrow">➔</div>
+            <div class="wizard-arrow">→</div>
             <div class="wizard-step" :class="{ 'is-active': currentStepIndex === 2, 'is-finish': currentStepIndex > 2 }">
               <span class="step-badge">2</span>
               <div class="step-texts">
@@ -188,7 +188,7 @@
                 <span class="step-sub">拖拽/添加角色组或智能排他网关</span>
               </div>
             </div>
-            <div class="wizard-arrow">➔</div>
+            <div class="wizard-arrow">→</div>
             <div class="wizard-step" :class="{ 'is-active': currentStepIndex === 3, 'is-finish': currentDeployStatus.isDeployed }">
               <span class="step-badge">3</span>
               <div class="step-texts">
@@ -207,7 +207,7 @@
                 style="width: 360px;"
                 @change="handleBpmnPresetChange"
               >
-                <el-option-group label="📌 数据库已发布的审批流模板 (与配置实时同步)">
+                <el-option-group label="数据库已发布的审批流模板 (与配置实时同步)">
                   <el-option
                     v-for="t in templateList"
                     :key="'tpl_' + t.id"
@@ -215,12 +215,12 @@
                     :value="'tpl_' + t.id"
                   />
                 </el-option-group>
-                <el-option-group label="📐 BPMN 经典标准拓扑范式">
-                  <el-option label="🌟 DML 影响行数与SpEL智能条件分支 (排他网关)" value="dml_condition" />
-                  <el-option label="标准生产 SQL 变更审批拓扑 (开发组长 ➔ 核心DBA)" value="dml_standard" />
-                  <el-option label="高危 DDL 变更三级审批拓扑 (AI ➔ 资深DBA ➔ 安全)" value="ddl" />
-                  <el-option label="生产紧急抢修极速放行拓扑 (值班DBA ➔ 补录审计)" value="emergency" />
-                  <el-option label="敏感数据导出与脱敏审批拓扑 (业务主管 ➔ 数据安全官)" value="export" />
+                <el-option-group label="BPMN 经典标准拓扑范式">
+                  <el-option label="DML 影响行数与SpEL智能条件分支 (排他网关)" value="dml_condition" />
+                  <el-option label="标准生产 SQL 变更审批拓扑 (开发组长 → 核心DBA)" value="dml_standard" />
+                  <el-option label="高危 DDL 变更三级审批拓扑 (AI → 资深DBA → 安全)" value="ddl" />
+                  <el-option label="生产紧急抢修极速放行拓扑 (值班DBA → 补录审计)" value="emergency" />
+                  <el-option label="敏感数据导出与脱敏审批拓扑 (业务主管 → 数据安全官)" value="export" />
                 </el-option-group>
               </el-select>
 
@@ -286,7 +286,7 @@
               </el-button>
 
               <el-button :icon="Connection" type="success" plain @click="handleOpenQuickBindDialog">
-                🎯 绑定生效范围
+                绑定生效范围
               </el-button>
               <el-button :icon="CopyDocument" @click="handleCopyXml">复制 XML</el-button>
               <el-button :icon="Download" @click="handleExportXml">导出 BPMN</el-button>
@@ -317,14 +317,14 @@
           </div>
 
           <div class="bpmn-designer-body-layout">
-            <!-- 左侧：权限组与审批角色资产面板 (拖拽 ➕ 插入 BPMN 节点) -->
+            <!-- 左侧：权限组与审批角色资产面板 (拖拽 插入 BPMN 节点) -->
             <div class="bpmn-palette-panel">
               <div class="palette-panel-header">
                 <div class="p-title-row">
                   <el-icon><UserFilled /></el-icon>
                   <span class="p-title">审批角色与引擎资产库</span>
                 </div>
-                <div class="p-sub-tip">拖拽 ➕ 插入 BPMN 流程节点</div>
+                <div class="p-sub-tip">拖拽 插入 BPMN 流程节点</div>
               </div>
 
               <!-- 搜索过滤 -->
@@ -361,7 +361,7 @@
                         </div>
                         <div class="card-members-summary" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
                           <el-tag size="small" type="info" effect="plain" style="font-size: 10px; height: 18px; padding: 0 4px;">
-                            👥 {{ getRoleMembers(r.key).length }} 人
+                            {{ getRoleMembers(r.key).length }} 人
                           </el-tag>
                           <span class="member-names-preview" :title="getRoleMemberNames(r.key)" style="font-size: 11px; color: var(--c-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">
                             {{ getRoleMemberNames(r.key) || '暂无成员' }}
@@ -423,7 +423,7 @@
                       @dragstart="handleDragStart($event, { type: 'SERVICE', name: 'JDBC 安全流式执行', role: 'SERVICE' })"
                     >
                       <div class="card-info">
-                        <span class="card-name">⚙️ JDBC 安全流式执行</span>
+                        <span class="card-name">JDBC 安全流式执行</span>
                         <span class="card-sub">自动化流式引擎事务执行</span>
                       </div>
                       <el-button
@@ -523,8 +523,8 @@
         <el-form-item label="生效数据库范围">
           <div class="db-scope-wrapper" style="width: 100%;">
             <el-radio-group v-model="form.dbScopeMode" size="small" @change="handleDbScopeModeChange">
-              <el-radio-button value="ALL">🌐 整个资源组全部数据库通用 (默认)</el-radio-button>
-              <el-radio-button value="CUSTOM">🎯 细化指定具体目标数据库</el-radio-button>
+              <el-radio-button value="ALL">整个资源组全部数据库通用 (默认)</el-radio-button>
+              <el-radio-button value="CUSTOM">细化指定具体目标数据库</el-radio-button>
             </el-radio-group>
 
             <div v-if="form.dbScopeMode === 'CUSTOM'" class="custom-db-select-box" style="margin-top: 10px;">
@@ -552,7 +552,7 @@
                 </el-option-group>
               </el-select>
               <div class="field-hint" style="margin-top: 4px; font-size: 12px; color: var(--c-text-3);">
-                💡 仅当申请工单选择上述指定数据库时才触发匹配此审批流程
+                仅当申请工单选择上述指定数据库时才触发匹配此审批流程
               </div>
             </div>
           </div>
@@ -605,7 +605,7 @@
             <div class="gateway-spel-section" style="margin-top: 10px; padding: 10px 12px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 6px;">
               <div class="spel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <div style="display: flex; align-items: center; gap: 6px;">
-                  <span class="cfg-sub-label" style="font-weight: 600; color: var(--c-text-2); font-size: 13px;">📌 SpEL 条件表达式：</span>
+                  <span class="cfg-sub-label" style="font-weight: 600; color: var(--c-text-2); font-size: 13px;">SpEL 条件表达式：</span>
                   <el-tag size="small" type="warning" effect="dark">BPMN 2.0 / Spring Expression Language</el-tag>
                 </div>
                 <span style="font-size: 12px; color: var(--c-text-3);">支持动态同步至可视化流程图网关与分支链路</span>
@@ -637,17 +637,17 @@
                   <template #prepend>当前生效 SpEL</template>
                 </el-input>
                 <el-button type="warning" size="small" :icon="Aim" @click="handleOpenSpelSandbox">
-                  🧪 沙箱在线求值
+                  沙箱在线求值
                 </el-button>
               </div>
             </div>
 
             <!-- 4. 左右分支规则与审批流向明确配置 -->
             <div class="branch-split-box" style="margin-top: 10px;">
-              <!-- 🔥 左分支：高危管控 (满足 SpEL = true) -->
+              <!-- 左分支：高危管控 (满足 SpEL = true) -->
               <div class="branch-config-item red-branch">
                 <div class="branch-header">
-                  <el-tag type="danger" effect="dark" size="small">🔥 左分支 · 高危大事务/DDL管控 (满足 SpEL = true)</el-tag>
+                  <el-tag type="danger" effect="dark" size="small">左分支 · 高危大事务/DDL管控 (满足 SpEL = true)</el-tag>
                   <span class="branch-cond-desc">
                     判定规则：<b>当工单评估匹配 SpEL <code>{{ form.spelExpression || '#{affectRows > 1000}' }}</code> 时自动进入此分支</b>
                   </span>
@@ -665,10 +665,10 @@
                 </div>
               </div>
 
-              <!-- ⚡ 右分支：常规放行 (不满足 SpEL / Default 默认流) -->
+              <!-- 右分支：常规放行 (不满足 SpEL / Default 默认流) -->
               <div class="branch-config-item green-branch" style="margin-top: 8px;">
                 <div class="branch-header">
-                  <el-tag type="success" effect="dark" size="small">⚡ 右分支 · 常规低危快速放行 (默认流 / SpEL = false)</el-tag>
+                  <el-tag type="success" effect="dark" size="small">右分支 · 常规低危快速放行 (默认流 / SpEL = false)</el-tag>
                   <span class="branch-cond-desc">
                     判定规则：<b>当不满足高危 SpEL（常规安全放行）时由默认流快速审批</b>
                   </span>
@@ -794,7 +794,7 @@
 
     <!-- 绑定当前 BPMN 审批流程生效范围（工单类型 + 业务资源组 + 全部/细化具体数据库） -->
     <el-dialog
-      title="🎯 绑定当前 BPMN 审批流程生效范围"
+      title="绑定当前 BPMN 审批流程生效范围"
       v-model="quickBindDialogVisible"
       width="680px"
       destroy-on-close
@@ -805,7 +805,7 @@
           当前流程：{{ getPresetTitle(selectedBpmnPreset) }}
         </div>
         <div style="font-size: 12px; color: var(--c-success); line-height: 1.5;">
-          💡 <b>生效范围说明</b>：系统将根据此流程绑定的【工单类型】、【业务资源组】与【目标数据库】进行精确匹配，在创建工单时将直接展示对应的审批链路！
+          <b>生效范围说明</b>：系统将根据此流程绑定的【工单类型】、【业务资源组】与【目标数据库】进行精确匹配，在创建工单时将直接展示对应的审批链路！
         </div>
       </div>
 
@@ -814,7 +814,7 @@
         <el-form-item label="生效工单类型">
           <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; width: 100%;">
             <el-button size="small" type="primary" plain :icon="Select" @click="handleSelectAllQuickBindTicketTypes">
-              🌐 一键全选所有类型 (全部通用)
+              一键全选所有类型 (全部通用)
             </el-button>
             <el-button size="small" type="info" plain @click="quickBindTicketTypes = ['SQL_AUDIT', 'DML_CHANGE', 'DDL_CHANGE']">
               仅全量 SQL 变更
@@ -843,7 +843,7 @@
             <!-- 大类 1：SQL 变更审核 (含全量与细化分支) -->
             <div style="margin-bottom: 12px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🛠️ 1. SQL 变更审核 (支持全量通用与 DML/DDL 细化定制)：</span>
+                <span>1. SQL 变更审核 (支持全量通用与 DML/DDL 细化定制)：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="SQL_AUDIT">
@@ -861,7 +861,7 @@
             <!-- 大类 2：敏感数据导出 -->
             <div style="margin-bottom: 12px; border-top: 1px dashed var(--c-border); padding-top: 8px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>📤 2. 敏感数据导出申请：</span>
+                <span>2. 敏感数据导出申请：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="DATA_EXPORT">
@@ -873,7 +873,7 @@
             <!-- 大类 3：权限与账号申请 -->
             <div style="margin-bottom: 12px; border-top: 1px dashed var(--c-border); padding-top: 8px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🔑 3. 权限与账号申请：</span>
+                <span>3. 权限与账号申请：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="PERMISSION">
@@ -885,7 +885,7 @@
             <!-- 大类 4：应急数据修复与恢复 -->
             <div style="border-top: 1px dashed var(--c-border); padding-top: 8px;">
               <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🚨 4. 应急数据修复与恢复：</span>
+                <span>4. 应急数据修复与恢复：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="DATA_RECOVERY">
@@ -927,8 +927,8 @@
 
         <el-form-item label="生效数据库范围">
           <el-radio-group v-model="quickBindDbScopeMode" @change="handleQuickBindDbScopeChange">
-            <el-radio value="ALL">🌐 整个资源组全部数据库通用 (默认)</el-radio>
-            <el-radio value="CUSTOM">🎯 细化定制指定具体数据库 (个性化生效)</el-radio>
+            <el-radio value="ALL">整个资源组全部数据库通用 (默认)</el-radio>
+            <el-radio value="CUSTOM">细化定制指定具体数据库 (个性化生效)</el-radio>
           </el-radio-group>
 
           <!-- 模式一：整个资源组通用时，自动联动展示这些资源组所包含的全部数据库预览 -->
@@ -937,7 +937,7 @@
             style="margin-top: 10px; width: 100%; padding: 10px 12px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 6px;"
           >
             <div style="font-size: 12px; font-weight: 600; color: var(--c-text-2); margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
-              <span>📦 所选资源组当前包含的全部数据库 (共 {{ quickBindCurrentGroupDatabases.length }} 个库)：</span>
+              <span>所选资源组当前包含的全部数据库 (共 {{ quickBindCurrentGroupDatabases.length }} 个库)：</span>
               <el-tag size="small" type="success" effect="plain">全部通用生效</el-tag>
             </div>
             <div v-if="quickBindCurrentGroupDatabases.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto;">
@@ -1004,7 +1004,7 @@
 
     <!-- SpEL 沙箱在线测试弹窗 -->
     <el-dialog
-      title="🧪 SpEL 智能条件表达式沙箱测试"
+      title="SpEL 智能条件表达式沙箱测试"
       v-model="sandboxVisible"
       width="580px"
       append-to-body
@@ -1033,7 +1033,7 @@
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
             <span style="font-weight: 600;">求值结果：</span>
             <el-tag :type="sandboxResult.matched ? 'danger' : 'success'" effect="dark">
-              {{ sandboxResult.matched ? '🔥 命中高危分支 (true)' : '⚡ 命中常规低危分支 (false)' }}
+              {{ sandboxResult.matched ? '命中高危分支 (true)' : '命中常规低危分支 (false)' }}
             </el-tag>
             <el-tag v-if="sandboxResult.syntaxValid" type="success" size="small">语法合法</el-tag>
             <el-tag v-else type="danger" size="small">语法错误</el-tag>
@@ -1052,7 +1052,7 @@
 
     <!-- 角色权限组成员维护与编辑弹窗 -->
     <el-dialog
-      :title="`👥 维护【${currentEditingRole?.label}】角色权限组成员`"
+      :title="`维护【${currentEditingRole?.label}】角色权限组成员`"
       v-model="roleMemberModalVisible"
       width="640px"
       destroy-on-close
@@ -1092,7 +1092,7 @@
       <template #footer>
         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
           <el-button size="small" type="warning" plain @click="router.push('/roles')">
-            ⚙️ 前往「系统角色与权限管理」大盘
+            前往「系统角色与权限管理」大盘
           </el-button>
           <div>
             <el-button @click="roleMemberModalVisible = false">取消</el-button>

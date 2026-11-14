@@ -61,7 +61,7 @@
                   <div class="perm-summary-container">
                     <template v-if="parseSummary(scope.row.permissions).isAll">
                       <el-tag type="danger" effect="dark" class="all-perm-badge">
-                        👑 拥有全量 17 个系统功能页签 (超级特权)
+                        拥有全量 17 个系统功能页签 (超级特权)
                       </el-tag>
                     </template>
                     <template v-else>
@@ -255,22 +255,22 @@
               <!-- 快捷权限包工具条 -->
               <div class="preset-box-row" style="margin-bottom: 16px;">
                 <span class="preset-label" style="font-size: 13px; font-weight: 700; color: var(--c-text-2); margin-right: 12px;">
-                  ⚡ 一键载入快捷权限模板：
+                  一键载入快捷权限模板：
                 </span>
                 <el-button size="small" type="success" plain @click="applyPresetToTab(tab, 'ADMIN')">
-                  👑 超级管理员 (全选 17个)
+                  超级管理员 (全选 17个)
                 </el-button>
                 <el-button size="small" type="warning" plain @click="applyPresetToTab(tab, 'DBA')">
-                  💾 核心 DBA (13个页签)
+                  核心 DBA (13个页签)
                 </el-button>
                 <el-button size="small" type="primary" plain @click="applyPresetToTab(tab, 'DEV_LEAD')">
-                  🛡️ 开发组长 (8个页签)
+                  开发组长 (8个页签)
                 </el-button>
                 <el-button size="small" type="info" plain @click="applyPresetToTab(tab, 'DEV')">
-                  💻 研发人员 (5个页签)
+                  研发人员 (5个页签)
                 </el-button>
                 <el-button size="small" type="danger" plain @click="applyPresetToTab(tab, 'AUDITOR')">
-                  🔍 安全审计员 (6个页签)
+                  安全审计员 (6个页签)
                 </el-button>
                 <el-button size="small" link type="danger" @click="handleClearTabPermissions(tab)">
                   清空所选
@@ -357,7 +357,7 @@
     <!-- 1. 角色所属成员管理弹窗 (Role Members Dialog) -->
     <el-dialog
       v-model="memberDialogVisible"
-      :title="`👥 角色成员管理 - 【${currentManageRole?.roleName || currentManageRole?.roleCode}】`"
+      :title="`角色成员管理 - 【${currentManageRole?.roleName || currentManageRole?.roleCode}】`"
       width="900px"
       top="7vh"
       destroy-on-close
@@ -394,7 +394,7 @@
           </el-button>
           <el-button :icon="Refresh" @click="fetchRoleMembers" circle />
           <el-button type="info" plain size="small" @click="handleNavigateToUsers(currentManageRole?.roleCode)">
-            打开用户列表 ➔
+            打开用户列表 →
           </el-button>
         </div>
       </div>
@@ -485,7 +485,7 @@
     <!-- 2. 选择待添加候选用户弹窗 (Add Candidate Users Modal) -->
     <el-dialog
       v-model="addUserModalVisible"
-      :title="`➕ 选择用户添加到【${currentManageRole?.roleName}】`"
+      :title="`选择用户添加到【${currentManageRole?.roleName}】`"
       width="750px"
       append-to-body
       destroy-on-close

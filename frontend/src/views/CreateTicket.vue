@@ -16,7 +16,7 @@
       </div>
       <div class="header-right">
         <span class="hdr-pill" :class="safetyPolicies.enforceDryRun ? 'hdr-pill-danger' : 'hdr-pill-muted'">
-          🛡️ {{ safetyPolicies.enforceDryRun ? '强制预执行校验' : '推荐预执行校验' }}
+          {{ safetyPolicies.enforceDryRun ? '强制预执行校验' : '推荐预执行校验' }}
         </span>
         <span class="hdr-pill hdr-pill-success">
           <span class="hdr-dot"></span>当前环境：{{ currentEnvTag }}
@@ -60,7 +60,7 @@
     >
       <template #title>
         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-          <span>🔄 <b>【重新发起 / 复制申请模式】</b> 已为您自动加载历史工单 <b>#{{ cloneSourceTicket.id }}</b> (状态: {{ getTicketStatusText(cloneSourceTicket.status) }}) 的全部配置、待执行 SQL 与回滚方案！</span>
+          <span><b>【重新发起 / 复制申请模式】</b> 已为您自动加载历史工单 <b>#{{ cloneSourceTicket.id }}</b> (状态: {{ getTicketStatusText(cloneSourceTicket.status) }}) 的全部配置、待执行 SQL 与回滚方案！</span>
           <el-button size="small" type="primary" link @click="cloneSourceTicket = null">清除提示</el-button>
         </div>
       </template>
@@ -268,9 +268,9 @@
                         placeholder="细分类型"
                         style="flex: 1; min-width: 0;"
                       >
-                        <el-option label="🤖 自动检测" value="AUTO" />
-                        <el-option label="📝 纯 DML" value="DML_CHANGE" />
-                        <el-option label="⚠️ 含 DDL" value="DDL_CHANGE" />
+                        <el-option label="自动检测" value="AUTO" />
+                        <el-option label="纯 DML" value="DML_CHANGE" />
+                        <el-option label="含 DDL" value="DDL_CHANGE" />
                       </el-select>
                     </div>
                     <div v-if="form.type === 'SQL_AUDIT' && form.sqlSubtype === 'AUTO' && detectedSqlSubtype" class="field-hint" style="color: var(--c-accent); font-weight: 600;">
@@ -300,7 +300,7 @@
                 <el-col :xs="24" :sm="12">
                   <div v-if="currentSelectedInstance" class="instance-security-meta-card">
                     <div class="meta-row">
-                      <span class="meta-label">🏷️ 实例业务标签：</span>
+                      <span class="meta-label">实例业务标签：</span>
                       <div class="meta-tag-list">
                         <el-tag
                           v-for="t in parseInstanceTags(currentSelectedInstance.tags)"
@@ -315,7 +315,7 @@
                       </div>
                     </div>
                     <div class="meta-row">
-                      <span class="meta-label">🛡️ 授权管控操作：</span>
+                      <span class="meta-label">授权管控操作：</span>
                       <div class="meta-tag-list">
                         <el-tag
                           v-for="op in currentInstanceSupportedOps"
@@ -340,7 +340,7 @@
                   </div>
                   <div v-else style="margin-top: 4px;">
                     <div class="field-hint" style="padding: 10px; background: var(--c-muted-bg); border-radius: 6px; border: 1px dashed var(--c-border);">
-                      👈 请选择目标数据库实例以查看实例标签与操作管控策略
+                      请选择目标数据库实例以查看实例标签与操作管控策略
                     </div>
                   </div>
 
@@ -360,7 +360,7 @@
               <template v-if="currentResourceGroupFields.length > 0">
                 <el-divider content-position="left" style="margin: 14px 0 12px 0;">
                   <span style="font-size: 12.5px; font-weight: 600; color: var(--c-accent);">
-                    📌 资源组【{{ form.resourceGroup }}】工单定制属性与执行约束
+                    资源组【{{ form.resourceGroup }}】工单定制属性与执行约束
                   </span>
                 </el-divider>
 
@@ -440,13 +440,13 @@
                 </div>
                 <div class="preview-header-right-tags">
                   <span class="bpmn-top-pill" :class="isDryRunEnforced ? 'pill-danger' : 'pill-success'">
-                    🛡️ 预检策略：{{ isDryRunEnforced ? '强制预执行校验 (必须通过)' : '推荐预执行校验 (允许跳过)' }}
+                    预检策略：{{ isDryRunEnforced ? '强制预执行校验 (必须通过)' : '推荐预执行校验 (允许跳过)' }}
                   </span>
                   <span v-if="routingPreview.spelExpression" class="bpmn-top-pill pill-spel">
                     SpEL: {{ routingPreview.spelExpression }}
                   </span>
                   <span class="bpmn-top-pill" :class="routingPreview.isPinned ? 'pill-pinned' : 'pill-smart'">
-                    {{ routingPreview.isPinned ? '🔥 专属固定审批流 (专库专流)' : '⚡ 动态综合智能决策' }}
+                    {{ routingPreview.isPinned ? '专属固定审批流 (专库专流)' : '动态综合智能决策' }}
                   </span>
                   <el-button
                     size="small"
@@ -462,7 +462,7 @@
               <!-- 结构化判定依据栏与实时命中路径指示器 -->
               <div class="decision-basis-bar">
                 <div class="basis-left-items">
-                  <span class="basis-main-label">🎯 判定依据：</span>
+                  <span class="basis-main-label">判定依据：</span>
                   <template v-if="parsedRoutingBasis.structured">
                     <span class="basis-chip">
                       资源组 <b>{{ parsedRoutingBasis.resourceGroup }}</b>
@@ -479,14 +479,14 @@
                       </span>
                     </template>
                     <span v-if="parsedRoutingBasis.thresholdNote" class="basis-chip basis-chip-rule">
-                      📏 {{ parsedRoutingBasis.thresholdNote }}
+                      {{ parsedRoutingBasis.thresholdNote }}
                     </span>
                   </template>
                   <template v-else>
                     <span class="basis-raw-text">{{ routingPreview.routingReason }}</span>
                   </template>
                   <span v-if="routingPreview.triggerCondition" class="basis-chip basis-chip-trigger">
-                    💡 触发规则：{{ routingPreview.triggerCondition }}
+                    触发规则：{{ routingPreview.triggerCondition }}
                   </span>
                 </div>
 
@@ -510,13 +510,13 @@
                       class="sw-btn sw-normal"
                       :class="{ active: gatewayPreviewMode === 'normal' }"
                       @click="gatewayPreviewMode = 'normal'"
-                    >⚡ 常规流</button>
+                    >常规流</button>
                     <button
                       type="button"
                       class="sw-btn sw-high"
                       :class="{ active: gatewayPreviewMode === 'high' }"
                       @click="gatewayPreviewMode = 'high'"
-                    >🔥 高危流</button>
+                    >高危流</button>
                   </div>
                 </div>
               </div>
@@ -610,10 +610,10 @@
                     >
                       <div class="branch-card-topbar">
                         <span class="branch-tag-label high-label">
-                          🔥 左分支 (高危): <code>{{ routingPreview.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
+                          左分支 (高危): <code>{{ routingPreview.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
                         </span>
                         <span class="branch-hit-badge" :class="isGatewayHighRiskActive ? 'badge-hit-high' : 'badge-standby'">
-                          {{ isGatewayHighRiskActive ? '🔥 当前命中路径' : '候选分支' }}
+                          {{ isGatewayHighRiskActive ? '当前命中路径' : '候选分支' }}
                         </span>
                       </div>
                       <div class="branch-card-body">
@@ -637,7 +637,7 @@
                     >
                       <div class="branch-card-topbar">
                         <span class="branch-tag-label normal-label">
-                          ⚡ 右分支 (常规): 默认安全放行流 (行数 ≤ {{ routingPreview.affectRowsThreshold || 1000 }})
+                          右分支 (常规): 默认安全放行流 (行数 ≤ {{ routingPreview.affectRowsThreshold || 1000 }})
                         </span>
                         <span class="branch-hit-badge" :class="!isGatewayHighRiskActive ? 'badge-hit-normal' : 'badge-standby'">
                           {{ !isGatewayHighRiskActive ? '✓ 当前命中路径' : '候选分支' }}
@@ -787,7 +787,7 @@
             <!-- 基础信息底部快捷收起引导条 -->
             <div class="basic-bottom-fold-bar">
               <span class="fold-bar-hint">
-                💡 基础信息填写完毕后，可收起本区块以释放更大 SQL 编写视口
+                基础信息填写完毕后，可收起本区块以释放更大 SQL 编写视口
               </span>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <el-button size="small" plain :icon="ArrowUp" @click="collapseBasicAndGoSql">
@@ -813,7 +813,7 @@
                   :icon="isSqlFullscreen ? ScaleToOriginal : FullScreen"
                   @click="toggleSqlFullscreen"
                 >
-                  {{ isSqlFullscreen ? '🔲 还原窗口 (Esc)' : '⛶ 全屏编辑工作台' }}
+                  {{ isSqlFullscreen ? '还原窗口 (Esc)' : '全屏编辑工作台' }}
                 </el-button>
               </div>
             </div>
@@ -865,7 +865,7 @@
                 <span class="badge-title">数据备份与回滚方案 (Rollback / Backup Scheme)</span>
               </div>
               <el-tag size="small" :type="safetyPolicies.requireBackup ? 'danger' : 'info'" effect="light">
-                {{ safetyPolicies.requireBackup ? '🛡️ 安全规范：DML/DDL 必填' : '推荐填写' }}
+                {{ safetyPolicies.requireBackup ? '安全规范：DML/DDL 必填' : '推荐填写' }}
               </el-tag>
             </div>
 
@@ -923,7 +923,7 @@
                     type="success"
                     effect="light"
                   >
-                    ✅ 回滚 SQL 语法合规
+                    回滚 SQL 语法合规
                   </el-tag>
                   <el-tag
                     v-else-if="rollbackStats.invalidStatements.length > 0"
@@ -931,7 +931,7 @@
                     type="danger"
                     effect="dark"
                   >
-                    ❌ 存在 {{ rollbackStats.invalidStatements.length }} 处非 SQL 文本
+                    存在 {{ rollbackStats.invalidStatements.length }} 处非 SQL 文本
                   </el-tag>
                 </div>
               </div>
@@ -954,12 +954,12 @@
                     <div>{{ rollbackCorrelation.desc }}</div>
                     <div style="display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; align-items: center;">
                       <span style="color: var(--c-text-2);">
-                        🎯 执行脚本涉及表：
+                        执行脚本涉及表：
                         <el-tag v-for="t in rollbackCorrelation.execTables" :key="t" size="small" type="primary" effect="plain" style="margin-right: 4px;">{{ t }}</el-tag>
                         <span v-if="rollbackCorrelation.execTables.length === 0" style="color: var(--c-text-4);">暂未解析到表名</span>
                       </span>
                       <span style="color: var(--c-text-2);">
-                        🔄 回滚方案目标表：
+                        回滚方案目标表：
                         <el-tag v-for="t in rollbackCorrelation.rollbackTables" :key="t" size="small" :type="rollbackCorrelation.matched ? 'success' : 'danger'" effect="plain" style="margin-right: 4px;">{{ t }}</el-tag>
                         <span v-if="rollbackCorrelation.rollbackTables.length === 0" style="color: var(--c-text-4);">暂未解析到表名</span>
                       </span>
@@ -998,7 +998,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>
@@ -1014,7 +1014,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>
@@ -1029,7 +1029,7 @@
                   事务级预执行校验 (Dry-Run) 与 提交工单
                 </span>
                 <el-tag :type="isDryRunEnforced ? 'danger' : 'info'" size="small" :effect="isDryRunEnforced ? 'dark' : 'light'" style="font-weight: 600;">
-                  {{ isDryRunEnforced ? '⚠️ 策略要求必须校验' : '💡 推荐执行校验' }}
+                  {{ isDryRunEnforced ? '策略要求必须校验' : '推荐执行校验' }}
                 </el-tag>
               </div>
             </div>
@@ -1062,12 +1062,12 @@
 
               <div v-if="isCurrentInstanceTestEnv" class="dry-run-gateway-hint" style="background: var(--c-success-soft); border-color: var(--c-success-border); color: var(--c-success-strong);">
                 <el-icon style="color: var(--c-success); margin-right: 6px; font-size: 16px;"><Check /></el-icon>
-                <span>🎯 <b>测试/开发环境免审直通</b>：目标为【{{ currentSelectedInstance?.env || 'TEST' }}】测试环境，提交并通过预校验后将<b>直接自动执行变更并归档</b>，无需等待人工多级审批流转！</span>
+                <span><b>测试/开发环境免审直通</b>：目标为【{{ currentSelectedInstance?.env || 'TEST' }}】测试环境，提交并通过预校验后将<b>直接自动执行变更并归档</b>，无需等待人工多级审批流转！</span>
               </div>
 
               <div v-else-if="dryRunResult.totalActualRows !== undefined" class="dry-run-gateway-hint">
                 <el-icon style="color: var(--c-accent); margin-right: 4px;"><Share /></el-icon>
-                <span>智能排他网关判定：预执行累计影响行数为 <b>{{ dryRunResult.totalActualRows }}</b> 行（判定阈值：{{ routingPreview?.affectRowsThreshold || 1000 }} 行，SpEL: <code>{{ routingPreview?.spelExpression || '#{affectRows > 1000}' }}</code>） ➔ 提交后将自动路由至【<b :style="{ color: dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? '#F56C6C' : '#67C23A' }">{{ dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? `${routingPreview?.highRiskRole || '核心 DBA'} 审核 (触发高危管控)` : `${routingPreview?.lowRiskRole || '运维/开发组长'} 审核 (常规放行)` }}</b>】</span>
+                <span>智能排他网关判定：预执行累计影响行数为 <b>{{ dryRunResult.totalActualRows }}</b> 行（判定阈值：{{ routingPreview?.affectRowsThreshold || 1000 }} 行，SpEL: <code>{{ routingPreview?.spelExpression || '#{affectRows > 1000}' }}</code>） → 提交后将自动路由至【<b :style="{ color: dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? '#F56C6C' : '#67C23A' }">{{ dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? `${routingPreview?.highRiskRole || '核心 DBA'} 审核 (触发高危管控)` : `${routingPreview?.lowRiskRole || '运维/开发组长'} 审核 (常规放行)` }}</b>】</span>
               </div>
 
               <el-table :data="dryRunResult.items" size="small" border stripe max-height="240px">
@@ -1124,7 +1124,7 @@
             <div v-if="form.sqlText && form.sqlText.trim()" class="submit-diff-audit-box" style="margin-top: 18px; border: 1px solid var(--c-border-strong); border-radius: 8px; overflow: hidden; background: var(--c-surface);">
               <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--c-muted-bg); border-bottom: 1px solid var(--c-border);">
                 <div style="font-weight: 700; font-size: 13.5px; color: var(--c-text); display: flex; align-items: center; gap: 8px;">
-                  <span>⚖️ 提交审核确认：原 SQL 与 改后目标执行 SQL 并排比对</span>
+                  <span>提交审核确认：原 SQL 与 改后目标执行 SQL 并排比对</span>
                   <el-tag size="small" type="success" effect="plain">变更就绪</el-tag>
                 </div>
                 <div style="font-size: 12px; color: var(--c-text-3);">
@@ -1134,13 +1134,13 @@
               <div class="submit-diff-grid">
                 <div style="border-right: 1px solid var(--c-border-strong); display: flex; flex-direction: column;">
                   <div style="padding: 6px 12px; background: var(--c-subtle); font-size: 12px; font-weight: 600; color: var(--c-text-2); border-bottom: 1px solid var(--c-border);">
-                    📄 原输入 SQL (Original)
+                    原输入 SQL (Original)
                   </div>
                   <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: var(--c-muted-bg); white-space: pre-wrap; color: var(--c-text-2);">{{ form.sqlText }}</div>
                 </div>
                 <div style="display: flex; flex-direction: column;">
                   <div style="padding: 6px 12px; background: var(--c-success-soft); font-size: 12px; font-weight: 600; color: var(--c-success-strong); border-bottom: 1px solid var(--c-border);">
-                    ✨ 改后执行 SQL (Modified & Safe)
+                    改后执行 SQL (Modified & Safe)
                   </div>
                   <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: var(--c-muted-bg); white-space: pre-wrap; color: var(--c-success); font-weight: 500;">{{ getStandardizedSql(form.sqlText) }}</div>
                 </div>
@@ -1162,7 +1162,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>

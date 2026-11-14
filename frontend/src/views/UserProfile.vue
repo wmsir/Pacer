@@ -61,7 +61,7 @@
           </template>
 
           <el-form ref="profileFormRef" :model="form" :rules="profileRules" label-width="115px" v-loading="loading">
-            <el-divider content-position="left"><span class="divider-title">🏢 部门与员工工号</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">部门与员工工号</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="所属部门/产线">
@@ -75,7 +75,7 @@
               </el-col>
             </el-row>
 
-            <el-divider content-position="left"><span class="divider-title">📱 手机与电子邮箱</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">手机与电子邮箱</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="真实姓名" prop="realName">
@@ -102,7 +102,7 @@
               </el-col>
             </el-row>
 
-            <el-divider content-position="left"><span class="divider-title">💬 微信 / 企业微信 / 钉钉 / 飞书</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">微信 / 企业微信 / 钉钉 / 飞书</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="微信账号">
@@ -151,7 +151,7 @@
           <div class="notification-pref-grid">
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">🟢 企业微信工作消息提醒</div>
+                <div class="pref-name">企业微信工作消息提醒</div>
                 <div class="pref-desc">当您提交的工单审批通过、被驳回或需要您审批时，通过企业微信应用推送</div>
               </div>
               <el-switch v-model="notifPrefs.wecom" active-text="开启" inactive-text="关闭" />
@@ -159,7 +159,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">🔵 钉钉工作通知提醒</div>
+                <div class="pref-name">钉钉工作通知提醒</div>
                 <div class="pref-desc">工单状态流转、高危 SQL 拦截与定时执行结果推送到钉钉</div>
               </div>
               <el-switch v-model="notifPrefs.dingtalk" active-text="开启" inactive-text="关闭" />
@@ -167,7 +167,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">📧 电子邮箱邮件通知</div>
+                <div class="pref-name">电子邮箱邮件通知</div>
                 <div class="pref-desc">每日待办工单汇总与工单归档审计凭证发送至绑定邮箱</div>
               </div>
               <el-switch v-model="notifPrefs.email" active-text="开启" inactive-text="关闭" />
@@ -175,7 +175,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">📱 手机短信紧急告警</div>
+                <div class="pref-name">手机短信紧急告警</div>
                 <div class="pref-desc">生产库高危操作拦截、定时流式执行失败等紧急事件短信通知</div>
               </div>
               <el-switch v-model="notifPrefs.sms" active-text="开启" inactive-text="关闭" />
@@ -205,7 +205,7 @@
 
           <div class="scope-info-box">
             <div class="scope-header">
-              <span class="scope-label">🛡️ 当前工单数据可见范围：</span>
+              <span class="scope-label">当前工单数据可见范围：</span>
               <el-tag :type="getDataScopeTagType(dataScopeInfo.scope)" effect="dark" size="small">
                 {{ dataScopeInfo.scopeName || '所属资源组工单' }}
               </el-tag>
@@ -214,7 +214,7 @@
           </div>
 
           <div class="perm-section">
-            <div class="perm-title">🏢 归属业务资源组 ({{ (userProfile.resourceGroups || []).length }}个)</div>
+            <div class="perm-title">归属业务资源组 ({{ (userProfile.resourceGroups || []).length }}个)</div>
             <div class="perm-tags">
               <template v-if="(userProfile.resourceGroups || []).length > 0">
                 <el-tag
@@ -233,7 +233,7 @@
           </div>
 
           <div class="perm-section" style="margin-top: 14px;">
-            <div class="perm-title">👑 系统角色与特权</div>
+            <div class="perm-title">系统角色与特权</div>
             <div class="perm-tags">
               <el-tag
                 v-for="r in (userProfile.roles || [userProfile.role || 'DEV'])"

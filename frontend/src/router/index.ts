@@ -259,6 +259,8 @@ router.beforeEach(async (to, _from, next) => {
 // 只在登录页显示 index.html 里的「主站门户 / 架构专页 / 移动审批端」悬浮条，
 // 进入控制台后它会遮住表格分页和操作按钮
 router.afterEach((to) => {
+  // 登录、退出或切换账号后，用当前身份重绘水印（此前只在首次打开页面时绘制一次）
+  window.dispatchEvent(new Event('wm-watermark-update'))
   document.body.classList.toggle('route-login', to.name === 'Login')
 })
 
