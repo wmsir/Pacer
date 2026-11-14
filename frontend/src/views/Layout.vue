@@ -326,6 +326,7 @@
       :show-close="false"
       class="quick-search-dialog"
       align-center
+      @opened="searchInputRef?.focus()"
     >
       <el-input
         v-model="searchKeyword"
@@ -333,8 +334,8 @@
         :prefix-icon="Search"
         clearable
         size="large"
+        ref="searchInputRef"
         class="search-dialog-input"
-        autofocus
         @keydown.enter.prevent="handleQuickNavigateFirst"
       />
       <div class="search-results-list">
@@ -401,6 +402,7 @@ const userStore = useUserStore()
 const isCollapse = ref(false)
 const searchDialogVisible = ref(false)
 const searchKeyword = ref('')
+const searchInputRef = ref<{ focus: () => void } | null>(null)
 
 const hasAnyPermission = (paths: string[]) => {
   if (userStore.isAdmin) return true
