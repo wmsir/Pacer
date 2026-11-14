@@ -37,14 +37,19 @@ export const getWatermarkConfig = () => {
  */
 const addWatermark = (el: HTMLElement, _binding?: DirectiveBinding) => {
   const config = getWatermarkConfig();
+  // 每次重绘前断开上一次的防篡改监听，避免切页重绘后监听器越积越多
+  (el as any).__wmdbObserver__?.disconnect();
+  (el as any).__updateWatermark__ = () => addWatermark(el, _binding);
 
-  if (!config.enabled || config.opacity <= 0) {
+  const token = localStorage.getItem('wmdb_token');
+
+  // 未登录时没有可追溯的身份，不铺水印（登录页保持干净）
+  if (!config.enabled || config.opacity <= 0 || !token) {
     el.style.backgroundImage = 'none';
     el.style.display = 'none';
     return;
   }
 
-  const token = localStorage.getItem('wmdb_token');
   let watermarkText = '稳骥 PacerSQL 安全审计';
 
   if (token) {
@@ -110,7 +115,6 @@ const addWatermark = (el: HTMLElement, _binding?: DirectiveBinding) => {
 
   observer.observe(el, { attributes: true, attributeFilter: ['style', 'class'] });
   (el as any).__wmdbObserver__ = observer;
-  (el as any).__updateWatermark__ = () => addWatermark(el, _binding);
 };
 
 // 全局监听水印配置变更事件

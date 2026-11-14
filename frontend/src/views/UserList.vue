@@ -7,12 +7,12 @@
       class="user-workbench-tabs"
       @tab-remove="handleCloseTab"
     >
-      <!-- 主页签: 👥 系统用户列表 -->
+      <!-- 主页签: 系统用户列表 -->
       <el-tab-pane name="list" :closable="false">
         <template #label>
           <div class="tab-label-item">
             <el-icon><UserFilled /></el-icon>
-            <span>👥 系统用户列表 (User Management)</span>
+            <span>系统用户列表 (User Management)</span>
           </div>
         </template>
 
@@ -98,7 +98,7 @@
                 <template #default="scope">
                   <div class="user-perm-cell">
                     <template v-if="isUserAdmin(scope.row)">
-                      <el-tag type="danger" size="small" effect="plain">👑 全量 17 个页签</el-tag>
+                      <el-tag type="danger" size="small" effect="plain">全量 17 个页签</el-tag>
                     </template>
                     <template v-else>
                       <el-tag type="primary" size="small" effect="plain">
@@ -115,10 +115,10 @@
               <el-table-column label="部门 / 工号" min-width="150">
                 <template #default="scope">
                   <div v-if="scope.row.department || scope.row.jobNo">
-                    <div style="font-weight: 500; color: #1e293b;">{{ scope.row.department || '-' }}</div>
-                    <div style="color: #64748b; font-size: 12px; font-family: monospace;">{{ scope.row.jobNo ? `#${scope.row.jobNo}` : '' }}</div>
+                    <div style="font-weight: 500; color: var(--c-text);">{{ scope.row.department || '-' }}</div>
+                    <div style="color: var(--c-text-3); font-size: 12px; font-family: monospace;">{{ scope.row.jobNo ? `#${scope.row.jobNo}` : '' }}</div>
                   </div>
-                  <span v-else style="color: #c0c4cc; font-size: 12px;">未设置</span>
+                  <span v-else style="color: var(--c-text-4); font-size: 12px;">未设置</span>
                 </template>
               </el-table-column>
 
@@ -144,7 +144,7 @@
                         {{ rg }}
                       </el-tag>
                     </template>
-                    <span v-else style="color: #c0c4cc; font-size: 12px;">未分配 (全局默认)</span>
+                    <span v-else style="color: var(--c-text-4); font-size: 12px;">未分配 (全局默认)</span>
                   </div>
                 </template>
               </el-table-column>
@@ -257,7 +257,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">1</span>
-                  <el-icon color="#409EFF"><User /></el-icon>
+                  <el-icon><User /></el-icon>
                   <span>用户身份认证与账号基础信息 (Account & Authentication)</span>
                 </div>
               </template>
@@ -354,7 +354,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">2</span>
-                  <el-icon color="#E6A23C"><Lock /></el-icon>
+                  <el-icon><Lock /></el-icon>
                   <span>系统角色授权与多角色聚合 (Role Assignment)</span>
                 </div>
               </template>
@@ -383,7 +383,7 @@
                   </el-option>
                 </el-select>
                 <div class="form-hint-text">
-                  💡 提示：用户可同时兼任多个角色（如：同时具备「开发组长」初审与「DBA」安全复核特权），系统将自动合并所选角色的页签与功能权限。
+                  提示：用户可同时兼任多个角色（如：同时具备「开发组长」初审与「DBA」安全复核特权），系统将自动合并所选角色的页签与功能权限。
                 </div>
               </el-form-item>
             </el-card>
@@ -393,7 +393,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">3</span>
-                  <el-icon color="#67C23A"><Suitcase /></el-icon>
+                  <el-icon><Suitcase /></el-icon>
                   <span>业务资源组归属与工单数据范围 (Resource Groups & Data Scope)</span>
                 </div>
               </template>
@@ -413,7 +413,7 @@
                       <el-option
                         v-for="rg in resourceGroupOptions"
                         :key="rg"
-                        :label="`🗂️ ${rg}`"
+                        :label="`${rg}`"
                         :value="rg"
                       />
                     </el-select>
@@ -427,10 +427,10 @@
                       style="width: 100%;"
                       clearable
                     >
-                      <el-option label="⚡ 角色智能默认 (根据系统角色自动判定)" value="" />
-                      <el-option label="🌐 全平台所有工单 (ALL - 超管/DBA/审计员)" value="ALL" />
-                      <el-option label="🏢 归属业务资源组工单 (RESOURCE_GROUP - 组长/主管)" value="RESOURCE_GROUP" />
-                      <el-option label="👤 仅本人发起与待办 (SELF - 普通开发/测试)" value="SELF" />
+                      <el-option label="角色智能默认 (根据系统角色自动判定)" value="" />
+                      <el-option label="全平台所有工单 (ALL - 超管/DBA/审计员)" value="ALL" />
+                      <el-option label="归属业务资源组工单 (RESOURCE_GROUP - 组长/主管)" value="RESOURCE_GROUP" />
+                      <el-option label="仅本人发起与待办 (SELF - 普通开发/测试)" value="SELF" />
                     </el-select>
                   </el-form-item>
                 </el-col>
@@ -443,7 +443,7 @@
                 <div class="card-header-title" style="justify-content: space-between; width: 100%;">
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <span class="step-num-badge">4</span>
-                    <el-icon color="#8B5CF6"><Tickets /></el-icon>
+                    <el-icon><Tickets /></el-icon>
                     <span>功能页签与权限独立定制面板 (Custom Tab Permissions)</span>
                   </div>
                   <div class="perm-action-buttons">
@@ -483,7 +483,7 @@
                         :indeterminate="isModuleIndeterminate(moduleNode, tab.selectedTabPermissions)"
                         @change="(val: boolean) => toggleModuleCheck(moduleNode, val, tab)"
                       >
-                        <span style="font-weight: 700; font-size: 13px; color: #1e293b;">{{ moduleNode.name }}</span>
+                        <span style="font-weight: 700; font-size: 13px; color: var(--c-text);">{{ moduleNode.name }}</span>
                       </el-checkbox>
                     </div>
                     <div class="module-children-grid">
@@ -541,7 +541,7 @@
 
     <!-- 重置密码小弹窗 -->
     <el-dialog title="重置用户密码" v-model="resetDialogVisible" width="440px" destroy-on-close>
-      <div style="margin-bottom: 16px; font-size: 13px; color: #606266;">
+      <div style="margin-bottom: 16px; font-size: 13px; color: var(--c-text-2);">
         重置目标用户：<b>{{ currentResetUser?.realName }}</b> ({{ currentResetUser?.username }})
       </div>
       <el-form label-width="80px">
@@ -1104,10 +1104,10 @@ watch(() => route.query, (q) => {
   top: 0px;
   z-index: 100;
   margin-bottom: 0px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px 8px 0 0;
   padding: 8px 14px 0 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
@@ -1115,15 +1115,15 @@ watch(() => route.query, (q) => {
   font-weight: 600;
   font-size: 13px;
   transition: all 0.2s ease;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   margin-right: 4px;
   border-radius: 6px 6px 0 0;
 }
 
 .user-workbench-tabs :deep(.el-tabs__item.is-active) {
-  background: #ffffff;
-  color: #409EFF;
-  border-bottom-color: #ffffff;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  border-bottom-color: var(--c-surface);
 }
 
 .tab-label-item {
@@ -1133,9 +1133,9 @@ watch(() => route.query, (q) => {
 }
 
 .tab-inner-content {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 20px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 0 0 8px 8px;
   min-height: calc(100vh - 160px);
 }
@@ -1149,8 +1149,8 @@ watch(() => route.query, (q) => {
   position: sticky;
   top: 48px;
   z-index: 95;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
   padding: 12px 0;
   margin-bottom: 20px;
   display: flex;
@@ -1175,12 +1175,12 @@ watch(() => route.query, (q) => {
 .nav-main-title {
   font-size: 16px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .nav-sub-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .nav-actions {
@@ -1191,7 +1191,7 @@ watch(() => route.query, (q) => {
 
 .config-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .card-header-title {
@@ -1200,7 +1200,7 @@ watch(() => route.query, (q) => {
   gap: 8px;
   font-size: 14px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-num-badge {
@@ -1210,7 +1210,7 @@ watch(() => route.query, (q) => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
   font-size: 12px;
   font-weight: 700;
@@ -1231,7 +1231,7 @@ watch(() => route.query, (q) => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -1247,16 +1247,16 @@ watch(() => route.query, (q) => {
 
 .form-hint-text {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 4px;
   line-height: 1.4;
 }
 
 .user-perm-box {
   width: 100%;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 12px 14px;
   box-sizing: border-box;
 }
@@ -1266,13 +1266,13 @@ watch(() => route.query, (q) => {
   justify-content: space-between;
   align-items: center;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--c-border);
   margin-bottom: 10px;
 }
 
 .perm-inherit-info {
   font-size: 12.5px;
-  color: #475569;
+  color: var(--c-text-2);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1293,8 +1293,8 @@ watch(() => route.query, (q) => {
 }
 
 .module-card-item {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 10px 12px;
 }
@@ -1302,7 +1302,7 @@ watch(() => route.query, (q) => {
 .module-card-title {
   margin-bottom: 8px;
   padding-bottom: 6px;
-  border-bottom: 1px dashed #f1f5f9;
+  border-bottom: 1px dashed var(--c-border);
 }
 
 .module-children-grid {
@@ -1312,10 +1312,10 @@ watch(() => route.query, (q) => {
 }
 
 .perm-pill {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 4px;
   padding: 6px 10px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1324,18 +1324,18 @@ watch(() => route.query, (q) => {
 }
 
 .perm-pill:hover {
-  background: #eff6ff;
-  border-color: #93c5fd;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-border);
 }
 
 .perm-pill.checked {
-  background: #eff6ff;
-  border-color: #3b82f6;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent);
 }
 
 .perm-pill-name {
   font-size: 12px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .tab-bottom-action-bar {
@@ -1344,6 +1344,6 @@ watch(() => route.query, (q) => {
   gap: 12px;
   margin-top: 24px;
   padding-top: 16px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--c-border);
 }
 </style>

@@ -11,7 +11,7 @@
       <el-tab-pane name="list" :closable="false">
         <template #label>
           <div class="tab-label-item">
-            <el-icon color="#409EFF"><Lock /></el-icon>
+            <el-icon><Lock /></el-icon>
             <span>系统角色列表 (Roles)</span>
           </div>
         </template>
@@ -61,7 +61,7 @@
                   <div class="perm-summary-container">
                     <template v-if="parseSummary(scope.row.permissions).isAll">
                       <el-tag type="danger" effect="dark" class="all-perm-badge">
-                        👑 拥有全量 17 个系统功能页签 (超级特权)
+                        拥有全量 17 个系统功能页签 (超级特权)
                       </el-tag>
                     </template>
                     <template v-else>
@@ -95,10 +95,10 @@
                       class="member-count-link-btn"
                       @click="handleOpenMemberManage(scope.row)"
                     >
-                      <el-icon style="margin-right: 4px; font-size: 15px; color: #3b82f6;"><UserFilled /></el-icon>
+                      <el-icon style="margin-right: 4px; font-size: 15px; color: var(--c-accent);"><UserFilled /></el-icon>
                       <span class="member-count-num">{{ scope.row.memberCount !== undefined ? scope.row.memberCount : (scope.row.memberNames ? scope.row.memberNames.length : 0) }}</span>
                       <span class="member-count-unit">位成员</span>
-                      <el-icon style="margin-left: 4px; font-size: 12px; color: #94a3b8;"><ArrowRight /></el-icon>
+                      <el-icon style="margin-left: 4px; font-size: 12px; color: var(--c-text-4);"><ArrowRight /></el-icon>
                     </el-button>
                   </div>
                 </template>
@@ -202,7 +202,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">1</span>
-                  <el-icon color="#409EFF"><UserFilled /></el-icon>
+                  <el-icon><UserFilled /></el-icon>
                   <span>角色基本信息定义 (Role Profile)</span>
                 </div>
               </template>
@@ -240,11 +240,11 @@
                 <div class="card-header-title" style="justify-content: space-between; width: 100%;">
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <span class="step-num-badge">2</span>
-                    <el-icon color="#67C23A"><Lock /></el-icon>
+                    <el-icon><Lock /></el-icon>
                     <span>可使用功能页签与权限矩阵 (Tab Permissions Matrix)</span>
                   </div>
                   <div class="footer-stats">
-                    <span style="font-size: 13px; color: #64748b; margin-right: 6px;">已授权：</span>
+                    <span style="font-size: 13px; color: var(--c-text-3); margin-right: 6px;">已授权：</span>
                     <el-tag type="primary" size="small" effect="dark">
                       {{ isTabAllChecked(tab) ? '全部 17 个页签' : `${tab.selectedPermissions.length} / 17 个页签` }}
                     </el-tag>
@@ -254,23 +254,23 @@
 
               <!-- 快捷权限包工具条 -->
               <div class="preset-box-row" style="margin-bottom: 16px;">
-                <span class="preset-label" style="font-size: 13px; font-weight: 700; color: #334155; margin-right: 12px;">
-                  ⚡ 一键载入快捷权限模板：
+                <span class="preset-label" style="font-size: 13px; font-weight: 700; color: var(--c-text-2); margin-right: 12px;">
+                  一键载入快捷权限模板：
                 </span>
                 <el-button size="small" type="success" plain @click="applyPresetToTab(tab, 'ADMIN')">
-                  👑 超级管理员 (全选 17个)
+                  超级管理员 (全选 17个)
                 </el-button>
                 <el-button size="small" type="warning" plain @click="applyPresetToTab(tab, 'DBA')">
-                  💾 核心 DBA (13个页签)
+                  核心 DBA (13个页签)
                 </el-button>
                 <el-button size="small" type="primary" plain @click="applyPresetToTab(tab, 'DEV_LEAD')">
-                  🛡️ 开发组长 (8个页签)
+                  开发组长 (8个页签)
                 </el-button>
                 <el-button size="small" type="info" plain @click="applyPresetToTab(tab, 'DEV')">
-                  💻 研发人员 (5个页签)
+                  研发人员 (5个页签)
                 </el-button>
                 <el-button size="small" type="danger" plain @click="applyPresetToTab(tab, 'AUDITOR')">
-                  🔍 安全审计员 (6个页签)
+                  安全审计员 (6个页签)
                 </el-button>
                 <el-button size="small" link type="danger" @click="handleClearTabPermissions(tab)">
                   清空所选
@@ -357,7 +357,7 @@
     <!-- 1. 角色所属成员管理弹窗 (Role Members Dialog) -->
     <el-dialog
       v-model="memberDialogVisible"
-      :title="`👥 角色成员管理 - 【${currentManageRole?.roleName || currentManageRole?.roleCode}】`"
+      :title="`角色成员管理 - 【${currentManageRole?.roleName || currentManageRole?.roleCode}】`"
       width="900px"
       top="7vh"
       destroy-on-close
@@ -394,7 +394,7 @@
           </el-button>
           <el-button :icon="Refresh" @click="fetchRoleMembers" circle />
           <el-button type="info" plain size="small" @click="handleNavigateToUsers(currentManageRole?.roleCode)">
-            打开用户列表 ➔
+            打开用户列表 →
           </el-button>
         </div>
       </div>
@@ -413,7 +413,7 @@
           <el-table-column label="真实姓名 (同名消歧)" min-width="150">
             <template #default="scope">
               <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
-                <span style="font-weight: 600; color: #1e293b;">{{ scope.row.realName || scope.row.username }}</span>
+                <span style="font-weight: 600; color: var(--c-text);">{{ scope.row.realName || scope.row.username }}</span>
                 <el-tag
                   v-if="scope.row.displayName && scope.row.displayName !== scope.row.realName"
                   size="small"
@@ -485,7 +485,7 @@
     <!-- 2. 选择待添加候选用户弹窗 (Add Candidate Users Modal) -->
     <el-dialog
       v-model="addUserModalVisible"
-      :title="`➕ 选择用户添加到【${currentManageRole?.roleName}】`"
+      :title="`选择用户添加到【${currentManageRole?.roleName}】`"
       width="750px"
       append-to-body
       destroy-on-close
@@ -1094,10 +1094,10 @@ onMounted(() => {
   top: 0px;
   z-index: 100;
   margin-bottom: 0px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px 8px 0 0;
   padding: 8px 14px 0 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
@@ -1105,17 +1105,17 @@ onMounted(() => {
   font-weight: 600;
   font-size: 13px;
   transition: all 0.2s ease;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   margin-right: 4px;
   border-radius: 6px 6px 0 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
 .role-workbench-tabs :deep(.el-tabs__item.is-active) {
-  background: #ffffff;
-  color: #3b82f6;
-  border-color: #cbd5e1;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  border-color: var(--c-border-strong);
 }
 
 .tab-label-item {
@@ -1134,22 +1134,22 @@ onMounted(() => {
   align-items: center;
   margin-top: 14px;
   margin-bottom: 16px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .page-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0 0 4px 0;
 }
 
 .page-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .action-btns {
@@ -1158,10 +1158,10 @@ onMounted(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .perm-summary-container {
@@ -1188,7 +1188,7 @@ onMounted(() => {
 
 .total-tab-count {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-left: 6px;
 }
 
@@ -1207,19 +1207,19 @@ onMounted(() => {
 }
 
 .member-count-link-btn:hover {
-  background: #eff6ff;
+  background: var(--c-accent-soft);
 }
 
 .member-count-num {
   font-size: 14px;
   font-weight: 700;
-  color: #2563eb;
+  color: var(--c-accent);
   margin-right: 2px;
 }
 
 .member-count-unit {
   font-size: 12.5px;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 /* ==================== 编辑页签特有样式 (一体化极简吸顶导航) ==================== */
@@ -1236,12 +1236,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px 16px;
   border-radius: 0 0 8px 8px;
-  border: 1px solid #e2e8f0;
-  border-top: 1px solid #f1f5f9;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--c-border);
+  border-top: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
   margin-bottom: 4px;
 }
 
@@ -1259,12 +1259,12 @@ onMounted(() => {
 .nav-main-title {
   font-size: 17px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .nav-sub-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 
@@ -1276,8 +1276,8 @@ onMounted(() => {
 
 .config-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
 }
 
 .mb-20 {
@@ -1290,7 +1290,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 15px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-num-badge {
@@ -1299,7 +1299,7 @@ onMounted(() => {
   justify-content: center;
   width: 22px;
   height: 22px;
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 50%;
   font-size: 12px;
@@ -1313,10 +1313,10 @@ onMounted(() => {
 }
 
 .module-group-card {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 14px 16px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
 }
 
 .module-group-header {
@@ -1325,19 +1325,19 @@ onMounted(() => {
   justify-content: space-between;
   margin-bottom: 12px;
   padding-bottom: 8px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .module-title-text {
   font-size: 14px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin-left: 6px;
 }
 
 .module-desc-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .child-tabs-grid {
@@ -1350,8 +1350,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #ffffff;
-  border: 1.5px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-border);
   border-radius: 6px;
   padding: 8px 12px;
   cursor: pointer;
@@ -1359,13 +1359,13 @@ onMounted(() => {
 }
 
 .tab-checkbox-pill:hover {
-  border-color: #93c5fd;
-  background: #f0f9ff;
+  border-color: var(--c-accent-border);
+  background: var(--c-accent-soft);
 }
 
 .tab-checkbox-pill.active {
-  border-color: #3b82f6;
-  background: #eff6ff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .tab-pill-text {
@@ -1376,12 +1376,12 @@ onMounted(() => {
 .tab-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .tab-path {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   font-family: monospace;
 }
 
@@ -1389,10 +1389,10 @@ onMounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 14px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   margin-top: 10px;
 }
 
@@ -1401,10 +1401,10 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 12px 16px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .role-badge-desc {
@@ -1415,7 +1415,7 @@ onMounted(() => {
 
 .role-desc-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .member-header-actions {

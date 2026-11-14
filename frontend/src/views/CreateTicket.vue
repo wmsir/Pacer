@@ -16,7 +16,7 @@
       </div>
       <div class="header-right">
         <span class="hdr-pill" :class="safetyPolicies.enforceDryRun ? 'hdr-pill-danger' : 'hdr-pill-muted'">
-          🛡️ {{ safetyPolicies.enforceDryRun ? '强制预执行校验' : '推荐预执行校验' }}
+          {{ safetyPolicies.enforceDryRun ? '强制预执行校验' : '推荐预执行校验' }}
         </span>
         <span class="hdr-pill hdr-pill-success">
           <span class="hdr-dot"></span>当前环境：{{ currentEnvTag }}
@@ -56,11 +56,11 @@
       type="success"
       show-icon
       :closable="false"
-      style="margin-bottom: 16px; border: 1px solid #67C23A;"
+      style="margin-bottom: 16px; border: 1px solid var(--c-success);"
     >
       <template #title>
         <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-          <span>🔄 <b>【重新发起 / 复制申请模式】</b> 已为您自动加载历史工单 <b>#{{ cloneSourceTicket.id }}</b> (状态: {{ getTicketStatusText(cloneSourceTicket.status) }}) 的全部配置、待执行 SQL 与回滚方案！</span>
+          <span><b>【重新发起 / 复制申请模式】</b> 已为您自动加载历史工单 <b>#{{ cloneSourceTicket.id }}</b> (状态: {{ getTicketStatusText(cloneSourceTicket.status) }}) 的全部配置、待执行 SQL 与回滚方案！</span>
           <el-button size="small" type="primary" link @click="cloneSourceTicket = null">清除提示</el-button>
         </div>
       </template>
@@ -197,10 +197,10 @@
                           :value="inst.id"
                         >
                           <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span style="font-weight: 600; color: #1e293b;">{{ inst.name }}</span>
+                            <span style="font-weight: 600; color: var(--c-text);">{{ inst.name }}</span>
                             <div style="display: flex; gap: 6px; align-items: center;">
                               <el-tag size="small" :type="inst.env === 'PROD' ? 'danger' : 'info'">{{ inst.env || 'PROD' }}</el-tag>
-                              <span style="color: #64748b; font-size: 12px;">{{ inst.dbType }}</span>
+                              <span style="color: var(--c-text-3); font-size: 12px;">{{ inst.dbType }}</span>
                             </div>
                           </div>
                         </el-option>
@@ -268,12 +268,12 @@
                         placeholder="细分类型"
                         style="flex: 1; min-width: 0;"
                       >
-                        <el-option label="🤖 自动检测" value="AUTO" />
-                        <el-option label="📝 纯 DML" value="DML_CHANGE" />
-                        <el-option label="⚠️ 含 DDL" value="DDL_CHANGE" />
+                        <el-option label="自动检测" value="AUTO" />
+                        <el-option label="纯 DML" value="DML_CHANGE" />
+                        <el-option label="含 DDL" value="DDL_CHANGE" />
                       </el-select>
                     </div>
-                    <div v-if="form.type === 'SQL_AUDIT' && form.sqlSubtype === 'AUTO' && detectedSqlSubtype" class="field-hint" style="color: #2563eb; font-weight: 600;">
+                    <div v-if="form.type === 'SQL_AUDIT' && form.sqlSubtype === 'AUTO' && detectedSqlSubtype" class="field-hint" style="color: var(--c-accent); font-weight: 600;">
                       {{ detectedSqlSubtype.icon }} 智能识别：{{ detectedSqlSubtype.label }}
                     </div>
                     <div v-else class="field-hint">
@@ -300,7 +300,7 @@
                 <el-col :xs="24" :sm="12">
                   <div v-if="currentSelectedInstance" class="instance-security-meta-card">
                     <div class="meta-row">
-                      <span class="meta-label">🏷️ 实例业务标签：</span>
+                      <span class="meta-label">实例业务标签：</span>
                       <div class="meta-tag-list">
                         <el-tag
                           v-for="t in parseInstanceTags(currentSelectedInstance.tags)"
@@ -311,11 +311,11 @@
                         >
                           {{ t }}
                         </el-tag>
-                        <span v-if="parseInstanceTags(currentSelectedInstance.tags).length === 0" style="color: #94a3b8; font-size: 12px;">核心业务生产库</span>
+                        <span v-if="parseInstanceTags(currentSelectedInstance.tags).length === 0" style="color: var(--c-text-4); font-size: 12px;">核心业务生产库</span>
                       </div>
                     </div>
                     <div class="meta-row">
-                      <span class="meta-label">🛡️ 授权管控操作：</span>
+                      <span class="meta-label">授权管控操作：</span>
                       <div class="meta-tag-list">
                         <el-tag
                           v-for="op in currentInstanceSupportedOps"
@@ -339,8 +339,8 @@
                     />
                   </div>
                   <div v-else style="margin-top: 4px;">
-                    <div class="field-hint" style="padding: 10px; background: #f8fafc; border-radius: 6px; border: 1px dashed #e2e8f0;">
-                      👈 请选择目标数据库实例以查看实例标签与操作管控策略
+                    <div class="field-hint" style="padding: 10px; background: var(--c-muted-bg); border-radius: 6px; border: 1px dashed var(--c-border);">
+                      请选择目标数据库实例以查看实例标签与操作管控策略
                     </div>
                   </div>
 
@@ -359,8 +359,8 @@
               <!-- 业务资源组个性化定制扩展字段 (按资源组配置动态呈现) -->
               <template v-if="currentResourceGroupFields.length > 0">
                 <el-divider content-position="left" style="margin: 14px 0 12px 0;">
-                  <span style="font-size: 12.5px; font-weight: 600; color: #2563eb;">
-                    📌 资源组【{{ form.resourceGroup }}】工单定制属性与执行约束
+                  <span style="font-size: 12.5px; font-weight: 600; color: var(--c-accent);">
+                    资源组【{{ form.resourceGroup }}】工单定制属性与执行约束
                   </span>
                 </el-divider>
 
@@ -395,7 +395,7 @@
                           resize="vertical"
                         />
                         <div class="textarea-tip">
-                          <el-icon style="color: #f59e0b; margin-right: 4px;"><Warning /></el-icon>
+                          <el-icon style="color: var(--c-warning); margin-right: 4px;"><Warning /></el-icon>
                           请简要描述异常应对措施、回滚步骤及责任人信息。
                         </div>
                       </div>
@@ -440,13 +440,13 @@
                 </div>
                 <div class="preview-header-right-tags">
                   <span class="bpmn-top-pill" :class="isDryRunEnforced ? 'pill-danger' : 'pill-success'">
-                    🛡️ 预检策略：{{ isDryRunEnforced ? '强制预执行校验 (必须通过)' : '推荐预执行校验 (允许跳过)' }}
+                    预检策略：{{ isDryRunEnforced ? '强制预执行校验 (必须通过)' : '推荐预执行校验 (允许跳过)' }}
                   </span>
                   <span v-if="routingPreview.spelExpression" class="bpmn-top-pill pill-spel">
                     SpEL: {{ routingPreview.spelExpression }}
                   </span>
                   <span class="bpmn-top-pill" :class="routingPreview.isPinned ? 'pill-pinned' : 'pill-smart'">
-                    {{ routingPreview.isPinned ? '🔥 专属固定审批流 (专库专流)' : '⚡ 动态综合智能决策' }}
+                    {{ routingPreview.isPinned ? '专属固定审批流 (专库专流)' : '动态综合智能决策' }}
                   </span>
                   <el-button
                     size="small"
@@ -462,7 +462,7 @@
               <!-- 结构化判定依据栏与实时命中路径指示器 -->
               <div class="decision-basis-bar">
                 <div class="basis-left-items">
-                  <span class="basis-main-label">🎯 判定依据：</span>
+                  <span class="basis-main-label">判定依据：</span>
                   <template v-if="parsedRoutingBasis.structured">
                     <span class="basis-chip">
                       资源组 <b>{{ parsedRoutingBasis.resourceGroup }}</b>
@@ -479,14 +479,14 @@
                       </span>
                     </template>
                     <span v-if="parsedRoutingBasis.thresholdNote" class="basis-chip basis-chip-rule">
-                      📏 {{ parsedRoutingBasis.thresholdNote }}
+                      {{ parsedRoutingBasis.thresholdNote }}
                     </span>
                   </template>
                   <template v-else>
                     <span class="basis-raw-text">{{ routingPreview.routingReason }}</span>
                   </template>
                   <span v-if="routingPreview.triggerCondition" class="basis-chip basis-chip-trigger">
-                    💡 触发规则：{{ routingPreview.triggerCondition }}
+                    触发规则：{{ routingPreview.triggerCondition }}
                   </span>
                 </div>
 
@@ -510,13 +510,13 @@
                       class="sw-btn sw-normal"
                       :class="{ active: gatewayPreviewMode === 'normal' }"
                       @click="gatewayPreviewMode = 'normal'"
-                    >⚡ 常规流</button>
+                    >常规流</button>
                     <button
                       type="button"
                       class="sw-btn sw-high"
                       :class="{ active: gatewayPreviewMode === 'high' }"
                       @click="gatewayPreviewMode = 'high'"
-                    >🔥 高危流</button>
+                    >高危流</button>
                   </div>
                 </div>
               </div>
@@ -610,15 +610,15 @@
                     >
                       <div class="branch-card-topbar">
                         <span class="branch-tag-label high-label">
-                          🔥 左分支 (高危): <code>{{ routingPreview.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
+                          左分支 (高危): <code>{{ routingPreview.spelExpression || '#{affectRows > 1000 || hasDdl == true}' }}</code>
                         </span>
                         <span class="branch-hit-badge" :class="isGatewayHighRiskActive ? 'badge-hit-high' : 'badge-standby'">
-                          {{ isGatewayHighRiskActive ? '🔥 当前命中路径' : '候选分支' }}
+                          {{ isGatewayHighRiskActive ? '当前命中路径' : '候选分支' }}
                         </span>
                       </div>
                       <div class="branch-card-body">
                         <div class="task-icon-col icon-box-dba">
-                          <el-icon :size="18" color="#dc2626"><UserFilled /></el-icon>
+                          <el-icon :size="18"><UserFilled /></el-icon>
                         </div>
                         <div class="task-title-col">
                           <div class="t-name-row">
@@ -637,7 +637,7 @@
                     >
                       <div class="branch-card-topbar">
                         <span class="branch-tag-label normal-label">
-                          ⚡ 右分支 (常规): 默认安全放行流 (行数 ≤ {{ routingPreview.affectRowsThreshold || 1000 }})
+                          右分支 (常规): 默认安全放行流 (行数 ≤ {{ routingPreview.affectRowsThreshold || 1000 }})
                         </span>
                         <span class="branch-hit-badge" :class="!isGatewayHighRiskActive ? 'badge-hit-normal' : 'badge-standby'">
                           {{ !isGatewayHighRiskActive ? '✓ 当前命中路径' : '候选分支' }}
@@ -645,7 +645,7 @@
                       </div>
                       <div class="branch-card-body">
                         <div class="task-icon-col icon-box-lead">
-                          <el-icon :size="18" color="#2563eb"><User /></el-icon>
+                          <el-icon :size="18"><User /></el-icon>
                         </div>
                         <div class="task-title-col">
                           <div class="t-name-row">
@@ -686,7 +686,7 @@
                   <!-- 阶段 04：JDBC 流式执行 -->
                   <div class="bpmn-task-card task-service">
                     <div class="task-icon-col icon-box-service">
-                      <el-icon :size="18" color="#16a34a"><Setting /></el-icon>
+                      <el-icon :size="18"><Setting /></el-icon>
                     </div>
                     <div class="task-title-col">
                       <div class="t-name-row">
@@ -787,7 +787,7 @@
             <!-- 基础信息底部快捷收起引导条 -->
             <div class="basic-bottom-fold-bar">
               <span class="fold-bar-hint">
-                💡 基础信息填写完毕后，可收起本区块以释放更大 SQL 编写视口
+                基础信息填写完毕后，可收起本区块以释放更大 SQL 编写视口
               </span>
               <div style="display: flex; gap: 8px; align-items: center;">
                 <el-button size="small" plain :icon="ArrowUp" @click="collapseBasicAndGoSql">
@@ -813,7 +813,7 @@
                   :icon="isSqlFullscreen ? ScaleToOriginal : FullScreen"
                   @click="toggleSqlFullscreen"
                 >
-                  {{ isSqlFullscreen ? '🔲 还原窗口 (Esc)' : '⛶ 全屏编辑工作台' }}
+                  {{ isSqlFullscreen ? '还原窗口 (Esc)' : '全屏编辑工作台' }}
                 </el-button>
               </div>
             </div>
@@ -865,7 +865,7 @@
                 <span class="badge-title">数据备份与回滚方案 (Rollback / Backup Scheme)</span>
               </div>
               <el-tag size="small" :type="safetyPolicies.requireBackup ? 'danger' : 'info'" effect="light">
-                {{ safetyPolicies.requireBackup ? '🛡️ 安全规范：DML/DDL 必填' : '推荐填写' }}
+                {{ safetyPolicies.requireBackup ? '安全规范：DML/DDL 必填' : '推荐填写' }}
               </el-tag>
             </div>
 
@@ -885,10 +885,10 @@
 
             <!-- 在线回滚 SQL 输入框 -->
             <div v-if="rollbackInputMode === 'TEXT'" class="editor-workbench-container rollback-workbench">
-              <div class="code-editor-box" style="height: 150px; background: #f0fdf4;">
+              <div class="code-editor-box" style="height: 150px; background: var(--c-success-soft);">
                 <!-- 动态行号列 -->
-                <div class="editor-gutter" style="background: #e2fbe8; border-color: #bbf7d0;">
-                  <div v-for="n in Math.max(rollbackStats.lineCount, 1)" :key="n" class="gutter-num" style="color: #16a34a;">{{ n }}</div>
+                <div class="editor-gutter" style="background: var(--c-success-soft); border-color: var(--c-success-border);">
+                  <div v-for="n in Math.max(rollbackStats.lineCount, 1)" :key="n" class="gutter-num" style="color: var(--c-success);">{{ n }}</div>
                 </div>
 
                 <!-- 原生文本编辑区 -->
@@ -901,7 +901,7 @@
               </div>
 
               <!-- 编辑器底部信息状态栏 -->
-              <div class="editor-status-bar" style="background: #f0fdf4; border-color: #bbf7d0;">
+              <div class="editor-status-bar" style="background: var(--c-success-soft); border-color: var(--c-success-border);">
                 <div class="status-left">
                   <span class="status-chip">
                     <el-icon style="vertical-align: middle; margin-right: 2px;"><Tickets /></el-icon>
@@ -923,7 +923,7 @@
                     type="success"
                     effect="light"
                   >
-                    ✅ 回滚 SQL 语法合规
+                    回滚 SQL 语法合规
                   </el-tag>
                   <el-tag
                     v-else-if="rollbackStats.invalidStatements.length > 0"
@@ -931,7 +931,7 @@
                     type="danger"
                     effect="dark"
                   >
-                    ❌ 存在 {{ rollbackStats.invalidStatements.length }} 处非 SQL 文本
+                    存在 {{ rollbackStats.invalidStatements.length }} 处非 SQL 文本
                   </el-tag>
                 </div>
               </div>
@@ -953,15 +953,15 @@
                   <div style="font-size: 12px; line-height: 1.6; margin-top: 4px;">
                     <div>{{ rollbackCorrelation.desc }}</div>
                     <div style="display: flex; gap: 14px; margin-top: 6px; flex-wrap: wrap; align-items: center;">
-                      <span style="color: #475569;">
-                        🎯 执行脚本涉及表：
+                      <span style="color: var(--c-text-2);">
+                        执行脚本涉及表：
                         <el-tag v-for="t in rollbackCorrelation.execTables" :key="t" size="small" type="primary" effect="plain" style="margin-right: 4px;">{{ t }}</el-tag>
-                        <span v-if="rollbackCorrelation.execTables.length === 0" style="color: #94a3b8;">暂未解析到表名</span>
+                        <span v-if="rollbackCorrelation.execTables.length === 0" style="color: var(--c-text-4);">暂未解析到表名</span>
                       </span>
-                      <span style="color: #475569;">
-                        🔄 回滚方案目标表：
+                      <span style="color: var(--c-text-2);">
+                        回滚方案目标表：
                         <el-tag v-for="t in rollbackCorrelation.rollbackTables" :key="t" size="small" :type="rollbackCorrelation.matched ? 'success' : 'danger'" effect="plain" style="margin-right: 4px;">{{ t }}</el-tag>
-                        <span v-if="rollbackCorrelation.rollbackTables.length === 0" style="color: #94a3b8;">暂未解析到表名</span>
+                        <span v-if="rollbackCorrelation.rollbackTables.length === 0" style="color: var(--c-text-4);">暂未解析到表名</span>
                       </span>
                     </div>
                   </div>
@@ -998,7 +998,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>
@@ -1014,7 +1014,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>
@@ -1025,11 +1025,11 @@
               <div style="display: flex; align-items: center; gap: 6px;">
                 <span class="badge-num">{{ step4Index }}</span>
                 <span class="badge-title">
-                  <span v-if="isDryRunEnforced" style="color: #f56c6c; font-weight: bold; font-size: 16px; margin-right: 2px;">*</span>
+                  <span v-if="isDryRunEnforced" style="color: var(--c-danger); font-weight: bold; font-size: 16px; margin-right: 2px;">*</span>
                   事务级预执行校验 (Dry-Run) 与 提交工单
                 </span>
                 <el-tag :type="isDryRunEnforced ? 'danger' : 'info'" size="small" :effect="isDryRunEnforced ? 'dark' : 'light'" style="font-weight: 600;">
-                  {{ isDryRunEnforced ? '⚠️ 策略要求必须校验' : '💡 推荐执行校验' }}
+                  {{ isDryRunEnforced ? '策略要求必须校验' : '推荐执行校验' }}
                 </el-tag>
               </div>
             </div>
@@ -1060,14 +1060,14 @@
                 style="margin-bottom: 8px;"
               />
 
-              <div v-if="isCurrentInstanceTestEnv" class="dry-run-gateway-hint" style="background: #f0fdf4; border-color: #86efac; color: #166534;">
-                <el-icon style="color: #16a34a; margin-right: 6px; font-size: 16px;"><Check /></el-icon>
-                <span>🎯 <b>测试/开发环境免审直通</b>：目标为【{{ currentSelectedInstance?.env || 'TEST' }}】测试环境，提交并通过预校验后将<b>直接自动执行变更并归档</b>，无需等待人工多级审批流转！</span>
+              <div v-if="isCurrentInstanceTestEnv" class="dry-run-gateway-hint" style="background: var(--c-success-soft); border-color: var(--c-success-border); color: var(--c-success-strong);">
+                <el-icon style="color: var(--c-success); margin-right: 6px; font-size: 16px;"><Check /></el-icon>
+                <span><b>测试/开发环境免审直通</b>：目标为【{{ currentSelectedInstance?.env || 'TEST' }}】测试环境，提交并通过预校验后将<b>直接自动执行变更并归档</b>，无需等待人工多级审批流转！</span>
               </div>
 
               <div v-else-if="dryRunResult.totalActualRows !== undefined" class="dry-run-gateway-hint">
-                <el-icon style="color: #409EFF; margin-right: 4px;"><Share /></el-icon>
-                <span>智能排他网关判定：预执行累计影响行数为 <b>{{ dryRunResult.totalActualRows }}</b> 行（判定阈值：{{ routingPreview?.affectRowsThreshold || 1000 }} 行，SpEL: <code>{{ routingPreview?.spelExpression || '#{affectRows > 1000}' }}</code>） ➔ 提交后将自动路由至【<b :style="{ color: dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? '#F56C6C' : '#67C23A' }">{{ dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? `${routingPreview?.highRiskRole || '核心 DBA'} 审核 (触发高危管控)` : `${routingPreview?.lowRiskRole || '运维/开发组长'} 审核 (常规放行)` }}</b>】</span>
+                <el-icon style="color: var(--c-accent); margin-right: 4px;"><Share /></el-icon>
+                <span>智能排他网关判定：预执行累计影响行数为 <b>{{ dryRunResult.totalActualRows }}</b> 行（判定阈值：{{ routingPreview?.affectRowsThreshold || 1000 }} 行，SpEL: <code>{{ routingPreview?.spelExpression || '#{affectRows > 1000}' }}</code>） → 提交后将自动路由至【<b :style="{ color: dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? '#F56C6C' : '#67C23A' }">{{ dryRunResult.totalActualRows > (routingPreview?.affectRowsThreshold || 1000) ? `${routingPreview?.highRiskRole || '核心 DBA'} 审核 (触发高危管控)` : `${routingPreview?.lowRiskRole || '运维/开发组长'} 审核 (常规放行)` }}</b>】</span>
               </div>
 
               <el-table :data="dryRunResult.items" size="small" border stripe max-height="240px">
@@ -1091,10 +1091,10 @@
                 </el-table-column>
                 <el-table-column prop="expectedRows" label="声明预期行数" width="105" align="center">
                   <template #default="{ row }">
-                    <span v-if="row.expectedRows !== null" style="font-weight: bold; color: #409EFF;">
+                    <span v-if="row.expectedRows !== null" style="font-weight: bold; color: var(--c-accent);">
                       {{ row.expectedRows }} 行
                     </span>
-                    <span v-else style="color: #909399;">未指定</span>
+                    <span v-else style="color: var(--c-text-3);">未指定</span>
                   </template>
                 </el-table-column>
                 <el-table-column prop="actualRows" label="预执行影响" width="105" align="center">
@@ -1121,28 +1121,28 @@
             </div>
 
             <!-- 提交页并排展示“原 SQL / 改后 SQL”终审核验区 -->
-            <div v-if="form.sqlText && form.sqlText.trim()" class="submit-diff-audit-box" style="margin-top: 18px; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; background: #ffffff;">
-              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-                <div style="font-weight: 700; font-size: 13.5px; color: #1e293b; display: flex; align-items: center; gap: 8px;">
-                  <span>⚖️ 提交审核确认：原 SQL 与 改后目标执行 SQL 并排比对</span>
+            <div v-if="form.sqlText && form.sqlText.trim()" class="submit-diff-audit-box" style="margin-top: 18px; border: 1px solid var(--c-border-strong); border-radius: 8px; overflow: hidden; background: var(--c-surface);">
+              <div style="display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: var(--c-muted-bg); border-bottom: 1px solid var(--c-border);">
+                <div style="font-weight: 700; font-size: 13.5px; color: var(--c-text); display: flex; align-items: center; gap: 8px;">
+                  <span>提交审核确认：原 SQL 与 改后目标执行 SQL 并排比对</span>
                   <el-tag size="small" type="success" effect="plain">变更就绪</el-tag>
                 </div>
-                <div style="font-size: 12px; color: #64748b;">
+                <div style="font-size: 12px; color: var(--c-text-3);">
                   提交前终审：核对原始脚本与安全规范化脚本的一致性
                 </div>
               </div>
               <div class="submit-diff-grid">
-                <div style="border-right: 1px solid #cbd5e1; display: flex; flex-direction: column;">
-                  <div style="padding: 6px 12px; background: #f1f5f9; font-size: 12px; font-weight: 600; color: #475569; border-bottom: 1px solid #e2e8f0;">
-                    📄 原输入 SQL (Original)
+                <div style="border-right: 1px solid var(--c-border-strong); display: flex; flex-direction: column;">
+                  <div style="padding: 6px 12px; background: var(--c-subtle); font-size: 12px; font-weight: 600; color: var(--c-text-2); border-bottom: 1px solid var(--c-border);">
+                    原输入 SQL (Original)
                   </div>
-                  <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: #fdfdfd; white-space: pre-wrap; color: #334155;">{{ form.sqlText }}</div>
+                  <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: var(--c-muted-bg); white-space: pre-wrap; color: var(--c-text-2);">{{ form.sqlText }}</div>
                 </div>
                 <div style="display: flex; flex-direction: column;">
-                  <div style="padding: 6px 12px; background: #f0fdf4; font-size: 12px; font-weight: 600; color: #166534; border-bottom: 1px solid #e2e8f0;">
-                    ✨ 改后执行 SQL (Modified & Safe)
+                  <div style="padding: 6px 12px; background: var(--c-success-soft); font-size: 12px; font-weight: 600; color: var(--c-success-strong); border-bottom: 1px solid var(--c-border);">
+                    改后执行 SQL (Modified & Safe)
                   </div>
-                  <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: #fcfdfc; white-space: pre-wrap; color: #047857; font-weight: 500;">{{ getStandardizedSql(form.sqlText) }}</div>
+                  <div style="flex: 1; overflow: auto; padding: 10px; font-family: monospace; font-size: 12px; background: var(--c-muted-bg); white-space: pre-wrap; color: var(--c-success); font-weight: 500;">{{ getStandardizedSql(form.sqlText) }}</div>
                 </div>
               </div>
             </div>
@@ -1162,7 +1162,7 @@
                 :loading="submitLoading"
                 @click="handleSubmitTicket"
               >
-                {{ isCurrentInstanceTestEnv ? '🚀 确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
+                {{ isCurrentInstanceTestEnv ? '确认提交并直接执行变更 (测试环境直通)' : '确认提交工单' }}
               </el-button>
             </div>
           </div>
@@ -2583,10 +2583,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 12px;
   padding: 16px 20px;
-  background: linear-gradient(120deg, #ffffff 0%, #f5f9ff 60%, #eef4ff 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .header-left {
@@ -2604,35 +2604,35 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-bottom: 2px;
 }
 
 .crumb-link {
   cursor: pointer;
-  color: #64748b;
+  color: var(--c-text-3);
   transition: color 0.15s;
 }
 
 .crumb-link:hover {
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .crumb-sep {
-  color: #cbd5e1;
+  color: var(--c-text-4);
 }
 
 .header-titles .main-title {
   font-size: 20px;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--c-text);
   margin: 0;
   letter-spacing: 0.2px;
 }
 
 .header-titles .sub-title {
   font-size: 12.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 4px;
   display: block;
 }
@@ -2657,29 +2657,29 @@ onBeforeUnmount(() => {
 }
 
 .hdr-pill-danger {
-  background: #fff1f2;
-  border-color: #fecdd3;
-  color: #be123c;
+  background: var(--c-danger-soft);
+  border-color: var(--c-danger-border);
+  color: var(--c-danger-strong);
 }
 
 .hdr-pill-muted {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
-  color: #475569;
+  background: var(--c-subtle);
+  border-color: var(--c-border);
+  color: var(--c-text-2);
 }
 
 .hdr-pill-success {
-  background: #ecfdf5;
-  border-color: #a7f3d0;
-  color: #047857;
+  background: var(--c-success-soft);
+  border-color: var(--c-success-border);
+  color: var(--c-success);
 }
 
 .hdr-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+  background: var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 /* 吸顶步骤导航 */
@@ -2694,11 +2694,11 @@ onBeforeUnmount(() => {
   gap: 4px;
   padding: 10px 16px;
   margin-bottom: 4px;
-  background: rgba(255, 255, 255, 0.94);
+  background: color-mix(in srgb, var(--c-surface) 94%, transparent);
   backdrop-filter: blur(8px);
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 12px;
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+  box-shadow: var(--shadow-sm);
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -2715,7 +2715,7 @@ onBeforeUnmount(() => {
 }
 
 .step-nav-item:hover {
-  background: #f1f5f9;
+  background: var(--c-subtle);
 }
 
 .step-nav-circle {
@@ -2727,21 +2727,21 @@ onBeforeUnmount(() => {
   justify-content: center;
   font-size: 12px;
   font-weight: 800;
-  background: #e2e8f0;
-  color: #475569;
+  background: var(--c-border);
+  color: var(--c-text-2);
   transition: all 0.2s ease;
 }
 
 .step-nav-item.is-required-pending .step-nav-circle {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
   box-shadow: inset 0 0 0 2px #93c5fd;
 }
 
 .step-nav-item.is-done .step-nav-circle {
-  background: linear-gradient(135deg, #10b981, #059669);
+  background: var(--c-success);
   color: #ffffff;
-  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.3);
+  box-shadow: var(--shadow-sm);
 }
 
 .step-nav-text {
@@ -2753,20 +2753,20 @@ onBeforeUnmount(() => {
 .step-nav-title {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-nav-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .step-nav-item.is-done .step-nav-desc {
-  color: #059669;
+  color: var(--c-success);
 }
 
 .step-nav-item.is-required-pending .step-nav-desc {
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .step-nav-line {
@@ -2774,17 +2774,17 @@ onBeforeUnmount(() => {
   min-width: 24px;
   height: 2px;
   border-radius: 2px;
-  background: #e2e8f0;
+  background: var(--c-border);
 }
 
 .step-nav-line.is-done {
-  background: linear-gradient(90deg, #10b981, #6ee7b7);
+  background: var(--c-success);
 }
 
 .step-nav-progress {
   margin-left: 12px;
   padding-left: 14px;
-  border-left: 1px solid #e2e8f0;
+  border-left: 1px solid var(--c-border);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -2794,21 +2794,21 @@ onBeforeUnmount(() => {
 .progress-num {
   font-size: 17px;
   font-weight: 800;
-  color: #2563eb;
+  color: var(--c-accent);
   font-family: 'JetBrains Mono', Consolas, monospace;
   line-height: 1.1;
 }
 
 .progress-label {
   font-size: 10.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .workbench-tabs {
   flex: 1;
-  background-color: #ffffff;
+  background-color: var(--c-surface);
   border-radius: 6px;
-  box-shadow: 0 1px 4px rgba(0, 21, 41, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .tab-label-custom {
@@ -2833,15 +2833,15 @@ onBeforeUnmount(() => {
 
 .stream-section-card {
   position: relative;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 12px;
   padding: 18px 22px 20px 22px;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  box-shadow: var(--shadow-sm);
   transition: box-shadow 0.2s ease, border-color 0.2s ease;
   scroll-margin-top: 84px;
 }
@@ -2865,16 +2865,16 @@ onBeforeUnmount(() => {
   gap: 10px;
   margin-top: 10px;
   padding: 10px 14px;
-  background: linear-gradient(90deg, #f8fafc 0%, #eff6ff 100%);
-  border: 1px solid #cbd5e1;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border-strong);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .basic-collapsed-summary:hover {
-  border-color: #60a5fa;
-  background: linear-gradient(90deg, #f1f5f9 0%, #dbeafe 100%);
+  border-color: var(--c-accent);
+  background: var(--c-subtle);
 }
 
 .summary-Left-pills {
@@ -2889,28 +2889,28 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .summary-chip .chip-k {
-  color: #64748b;
+  color: var(--c-text-3);
   font-size: 12px;
 }
 
 .summary-chip .chip-v {
-  color: #0f172a;
+  color: var(--c-text);
   font-weight: 700;
 }
 
 .summary-chip .chip-mono {
   font-family: 'JetBrains Mono', Consolas, monospace;
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .summary-chip-flow {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  color: var(--c-accent-hover);
   padding: 2px 8px;
   border-radius: 999px;
   font-weight: 600;
@@ -2918,7 +2918,7 @@ onBeforeUnmount(() => {
 }
 
 .summary-sep {
-  color: #cbd5e1;
+  color: var(--c-text-4);
 }
 
 .summary-expand-hint {
@@ -2927,13 +2927,13 @@ onBeforeUnmount(() => {
   gap: 4px;
   font-size: 12px;
   font-weight: 600;
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .basic-section-body {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--c-border);
 }
 
 .compact-basic-form :deep(.el-form-item) {
@@ -2948,7 +2948,7 @@ onBeforeUnmount(() => {
 .basic-bottom-fold-bar {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--c-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2958,7 +2958,7 @@ onBeforeUnmount(() => {
 
 .fold-bar-hint {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .stream-section-card::before {
@@ -2969,12 +2969,12 @@ onBeforeUnmount(() => {
   width: 3px;
   height: 22px;
   border-radius: 0 3px 3px 0;
-  background: linear-gradient(180deg, #3b82f6, #2563eb);
+  background: var(--c-accent);
 }
 
 .stream-section-card:hover {
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
-  border-color: #cbd5e1;
+  box-shadow: var(--shadow-sm);
+  border-color: var(--c-border-strong);
 }
 
 .section-badge {
@@ -2983,13 +2983,13 @@ onBeforeUnmount(() => {
   gap: 10px;
   margin-bottom: 16px;
   padding-bottom: 12px;
-  border-bottom: 1px dashed #e2e8f0;
+  border-bottom: 1px dashed var(--c-border);
 }
 
 .badge-num {
   width: 26px;
   height: 26px;
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  background: var(--c-accent);
   color: #fff;
   border-radius: 8px;
   font-size: 13px;
@@ -2997,24 +2997,24 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+  box-shadow: var(--shadow-sm);
   flex-shrink: 0;
 }
 
 .badge-title {
   font-size: 15.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .custom-form :deep(.el-form-item__label) {
   font-weight: 600;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .field-hint {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 4px;
   line-height: 1.5;
 }
@@ -3022,8 +3022,8 @@ onBeforeUnmount(() => {
 .instance-security-meta-card {
   margin-top: 8px;
   padding: 10px 12px;
-  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -3039,7 +3039,7 @@ onBeforeUnmount(() => {
 
 .meta-label {
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   min-width: 105px;
 }
 
@@ -3052,8 +3052,8 @@ onBeforeUnmount(() => {
 
 .syntax-tip-card {
   margin-top: 20px;
-  background: #ecf5ff;
-  border-left: 4px solid #409EFF;
+  background: var(--c-accent-soft);
+  border-left: 4px solid var(--c-accent);
   border-radius: 4px;
   padding: 12px 14px;
 }
@@ -3063,22 +3063,22 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 6px;
   font-weight: 600;
-  color: #409EFF;
+  color: var(--c-accent);
   font-size: 13px;
   margin-bottom: 6px;
 }
 
 .syntax-tip-card .tip-body {
   font-size: 12px;
-  color: #606266;
+  color: var(--c-text-2);
   line-height: 1.6;
 }
 
 .syntax-tip-card code {
-  background: #d9ecff;
+  background: var(--c-accent-border);
   padding: 1px 5px;
   border-radius: 3px;
-  color: #e6a23c;
+  color: var(--c-warning);
   font-weight: bold;
 }
 
@@ -3092,7 +3092,7 @@ onBeforeUnmount(() => {
 }
 
 .editor-wrapper {
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -3101,7 +3101,7 @@ onBeforeUnmount(() => {
   font-family: Consolas, 'Fira Code', Monaco, monospace;
   font-size: 13px;
   line-height: 1.6;
-  background-color: #fafbfc;
+  background-color: var(--c-muted-bg);
   border: none;
 }
 
@@ -3113,17 +3113,17 @@ onBeforeUnmount(() => {
 .custom-field-textarea :deep(.el-textarea__inner) {
   font-size: 13px;
   line-height: 1.7;
-  border-color: #e2e8f0;
+  border-color: var(--c-border);
   border-radius: 6px;
-  background: #fffdf0;
-  color: #334155;
+  background: var(--c-warning-soft);
+  color: var(--c-text-2);
   padding: 10px 12px;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .custom-field-textarea :deep(.el-textarea__inner:focus) {
-  border-color: #f59e0b;
-  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.15);
+  border-color: var(--c-warning);
+  box-shadow: var(--shadow-sm);
 }
 
 .textarea-tip {
@@ -3131,11 +3131,11 @@ onBeforeUnmount(() => {
   align-items: center;
   margin-top: 6px;
   padding: 6px 10px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
   border-radius: 5px;
   font-size: 12px;
-  color: #92400e;
+  color: var(--c-warning-strong);
   line-height: 1.5;
 }
 
@@ -3153,22 +3153,22 @@ onBeforeUnmount(() => {
 
 .dry-run-desc {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .dry-run-desc code {
-  background: #f4f4f5;
+  background: var(--c-subtle);
   padding: 1px 4px;
   border-radius: 3px;
-  color: #e6a23c;
+  color: var(--c-warning);
 }
 
 .dry-run-result-box {
   margin-top: 10px;
-  background: #fafbfc;
+  background: var(--c-muted-bg);
   padding: 12px;
   border-radius: 6px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--c-border);
 }
 
 .submit-footer-bar {
@@ -3177,11 +3177,11 @@ onBeforeUnmount(() => {
   z-index: 15;
   margin: 24px -22px -20px -22px;
   padding: 14px 22px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid var(--c-border);
   border-radius: 0 0 12px 12px;
-  background: rgba(255, 255, 255, 0.96);
+  background: color-mix(in srgb, var(--c-surface) 96%, transparent);
   backdrop-filter: blur(6px);
-  box-shadow: 0 -6px 16px rgba(15, 23, 42, 0.05);
+  box-shadow: var(--shadow-sm);
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -3196,17 +3196,17 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 12.5px;
   font-weight: 600;
-  color: #b45309;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  color: var(--c-warning);
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
   padding: 5px 12px;
   border-radius: 999px;
 }
 
 .submit-ready-hint.is-ready {
-  color: #047857;
-  background: #ecfdf5;
-  border-color: #a7f3d0;
+  color: var(--c-success);
+  background: var(--c-success-soft);
+  border-color: var(--c-success-border);
 }
 
 .submit-diff-grid {
@@ -3253,8 +3253,8 @@ onBeforeUnmount(() => {
 }
 
 .query-toolbar-card {
-  background: #f8f9fb;
-  border: 1px solid #e4e7ed;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 14px 18px;
 }
@@ -3275,7 +3275,7 @@ onBeforeUnmount(() => {
 .form-item-inline .item-label {
   font-size: 13px;
   font-weight: 600;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .action-buttons-group {
@@ -3294,7 +3294,7 @@ onBeforeUnmount(() => {
 
 .template-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   font-weight: 500;
 }
 
@@ -3304,31 +3304,31 @@ onBeforeUnmount(() => {
 }
 
 .clickable-tag:hover {
-  border-color: #409EFF;
-  color: #409EFF;
-  background: #ecf5ff;
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .query-editor-card {
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--c-surface);
   overflow: hidden;
 }
 
 .editor-header-bar {
-  background: #f5f7fa;
+  background: var(--c-subtle);
   padding: 8px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .editor-header-bar .header-title {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3344,19 +3344,19 @@ onBeforeUnmount(() => {
 }
 
 .query-result-card {
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--c-surface);
   min-height: 260px;
 }
 
 .result-status-bar {
-  background: #f5f7fa;
+  background: var(--c-subtle);
   padding: 10px 16px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .status-badge {
@@ -3364,26 +3364,26 @@ onBeforeUnmount(() => {
   font-weight: bold;
   padding: 2px 8px;
   border-radius: 4px;
-  background: #909399;
+  background: var(--c-text-3);
   color: #ffffff;
   margin-right: 10px;
 }
 
 .status-badge.success {
-  background: #67C23A;
+  background: var(--c-success);
 }
 
 .status-badge.error {
-  background: #F56C6C;
+  background: var(--c-danger);
 }
 
 .meta-info {
   font-size: 13px;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .meta-info b {
-  color: #303133;
+  color: var(--c-text);
 }
 
 .table-container {
@@ -3391,7 +3391,7 @@ onBeforeUnmount(() => {
 }
 
 .null-val {
-  color: #c0c4cc;
+  color: var(--c-text-4);
   font-style: italic;
 }
 
@@ -3410,31 +3410,31 @@ onBeforeUnmount(() => {
 .editor-workbench-container {
   display: flex;
   flex-direction: column;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--c-surface);
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 
 .editor-workbench-container:focus-within {
-  border-color: #409EFF;
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.15);
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .code-editor-box {
   display: flex;
   height: 220px;
-  background: #fafbfc;
+  background: var(--c-muted-bg);
   position: relative;
 }
 
 .editor-gutter {
   width: 52px;
   min-width: 52px;
-  background: #f1f5f9;
-  border-right: 1px solid #e2e8f0;
+  background: var(--c-subtle);
+  border-right: 1px solid var(--c-border);
   padding: 10px 0;
   overflow: hidden;
   user-select: none;
@@ -3446,7 +3446,7 @@ onBeforeUnmount(() => {
   font-family: Consolas, 'Fira Code', Menlo, Monaco, monospace;
   font-size: 13px;
   line-height: 21px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   padding-right: 12px;
   height: 21px;
 }
@@ -3461,14 +3461,14 @@ onBeforeUnmount(() => {
   font-family: Consolas, 'Fira Code', Menlo, Monaco, monospace;
   font-size: 13.5px;
   line-height: 21px;
-  color: #1e293b;
+  color: var(--c-text);
   box-sizing: border-box;
   overflow-y: auto;
   white-space: pre;
 }
 
 .editor-textarea-native::placeholder {
-  color: #94a3b8;
+  color: var(--c-text-4);
   font-style: italic;
 }
 
@@ -3479,10 +3479,10 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   padding: 6px 14px;
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border-top: 1px solid var(--c-border);
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .status-left {
@@ -3498,7 +3498,7 @@ onBeforeUnmount(() => {
 }
 
 .status-chip b {
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0 2px;
 }
 
@@ -3510,12 +3510,12 @@ onBeforeUnmount(() => {
 
 .esc-hint {
   font-size: 11.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .esc-hint b {
-  color: #475569;
-  background: #e2e8f0;
+  color: var(--c-text-2);
+  background: var(--c-border);
   padding: 1px 5px;
   border-radius: 3px;
 }
@@ -3528,14 +3528,14 @@ onBeforeUnmount(() => {
   width: 100vw !important;
   height: 100vh !important;
   z-index: 3500 !important;
-  background: #ffffff !important;
+  background: var(--c-surface) !important;
   padding: 16px 28px !important;
   box-sizing: border-box !important;
   margin: 0 !important;
   border-radius: 0 !important;
   display: flex !important;
   flex-direction: column !important;
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.35) !important;
+  box-shadow: var(--shadow-sm);
   animation: fadeInFullscreen 0.2s ease-in-out;
 }
 
@@ -3568,39 +3568,39 @@ onBeforeUnmount(() => {
 
 /* 必填项缺失时自动高亮聚焦聚光动效 */
 @keyframes pulseHighlight {
-  0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); transform: scale(1); }
-  50% { box-shadow: 0 0 0 8px rgba(239, 68, 68, 0.2); transform: scale(1.008); }
-  100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); transform: scale(1); }
+  0% { box-shadow: var(--shadow-sm); transform: scale(1); }
+  50% { box-shadow: var(--shadow-sm); transform: scale(1.008); }
+  100% { box-shadow: var(--shadow-sm); transform: scale(1); }
 }
 
 .field-highlight-pulse {
   animation: pulseHighlight 0.7s ease-in-out 3;
   border-radius: 8px;
-  background-color: #fff1f2 !important;
+  background-color: var(--c-danger-soft) !important;
   transition: all 0.3s ease;
 }
 
 .field-highlight-pulse :deep(.el-input__wrapper),
 .field-highlight-pulse :deep(.el-textarea__inner),
 .field-highlight-pulse :deep(.editor-workbench-container) {
-  border-color: #ef4444 !important;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.25) !important;
+  border-color: var(--c-danger) !important;
+  box-shadow: var(--shadow-sm);
 }
 
 .rollback-textarea :deep(.el-textarea__inner) {
-  border-color: #86efac;
-  background-color: #f0fdf4;
+  border-color: var(--c-success-border);
+  background-color: var(--c-success-soft);
   font-family: monospace;
 }
 
 .dry-run-gateway-hint {
   margin-bottom: 10px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 4px;
   padding: 8px 12px;
   font-size: 12px;
-  color: #334155;
+  color: var(--c-text-2);
   display: flex;
   align-items: center;
 }
@@ -3608,9 +3608,9 @@ onBeforeUnmount(() => {
 /* ==================== 审批流程预估预览卡片 & BPMN 2.0 五阶段高清流转画布 ==================== */
 .routing-preview-card {
   margin-top: 10px;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  border-top: 3px solid #2563eb;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  border-top: 3px solid var(--c-accent);
   border-radius: 12px;
   padding: 12px 16px;
   width: 100%;
@@ -3618,12 +3618,12 @@ onBeforeUnmount(() => {
   min-width: 0;
   box-sizing: border-box;
   overflow: hidden;
-  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .routing-preview-card.is-pinned-flow {
-  border-top-color: #d97706;
-  background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%);
+  border-top-color: var(--c-warning);
+  background: var(--c-warning-soft);
 }
 
 .routing-card-header {
@@ -3633,7 +3633,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 10px;
   padding-bottom: 10px;
-  border-bottom: 1px dashed #e2e8f0;
+  border-bottom: 1px dashed var(--c-border);
 }
 
 .preview-header-left {
@@ -3646,29 +3646,29 @@ onBeforeUnmount(() => {
   width: 26px;
   height: 26px;
   border-radius: 7px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  color: var(--c-accent);
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .preview-icon-badge.is-pinned {
-  background: #fef3c7;
-  border-color: #fde68a;
-  color: #d97706;
+  background: var(--c-warning-soft);
+  border-color: var(--c-warning-border);
+  color: var(--c-warning);
 }
 
 .preview-title {
   font-weight: 600;
   font-size: 13.5px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .preview-title b {
   font-weight: 800;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .preview-header-right-tags {
@@ -3689,32 +3689,32 @@ onBeforeUnmount(() => {
 }
 
 .bpmn-top-pill.pill-danger {
-  background: #fff1f2;
-  border: 1px solid #fecdd3;
-  color: #e11d48;
+  background: var(--c-danger-soft);
+  border: 1px solid var(--c-danger-border);
+  color: var(--c-danger);
 }
 
 .bpmn-top-pill.pill-success {
-  background: #ecfdf5;
-  border: 1px solid #a7f3d0;
-  color: #059669;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
+  color: var(--c-success);
 }
 
 .bpmn-top-pill.pill-spel {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #b45309;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
+  color: var(--c-warning);
   font-family: 'JetBrains Mono', Consolas, monospace;
 }
 
 .bpmn-top-pill.pill-smart {
-  background: linear-gradient(135deg, #10b981, #059669);
+  background: var(--c-success);
   color: #ffffff;
-  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.22);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-top-pill.pill-pinned {
-  background: linear-gradient(135deg, #f59e0b, #d97706);
+  background: var(--c-warning);
   color: #ffffff;
 }
 
@@ -3725,8 +3725,8 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 8px 12px;
   margin: 10px 0 12px 0;
@@ -3742,30 +3742,30 @@ onBeforeUnmount(() => {
 
 .basis-main-label {
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .basis-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
   border-radius: 5px;
   padding: 2px 7px;
-  color: #475569;
+  color: var(--c-text-2);
   font-size: 11.5px;
 }
 
 .basis-chip b {
-  color: #0f172a;
+  color: var(--c-text);
   font-weight: 700;
 }
 
 .basis-mini-tag {
-  background: #eff6ff;
-  color: #2563eb;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
+  border: 1px solid var(--c-accent-border);
   border-radius: 4px;
   padding: 0 5px;
   font-size: 10.5px;
@@ -3773,24 +3773,24 @@ onBeforeUnmount(() => {
 }
 
 .basis-chip-rule {
-  background: #fffbeb;
-  border-color: #fde68a;
-  color: #92400e;
+  background: var(--c-warning-soft);
+  border-color: var(--c-warning-border);
+  color: var(--c-warning-strong);
 }
 
 .basis-chip-trigger {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-  color: #475569;
+  background: var(--c-subtle);
+  border-color: var(--c-border-strong);
+  color: var(--c-text-2);
 }
 
 .basis-plus {
-  color: #94a3b8;
+  color: var(--c-text-4);
   font-weight: 700;
 }
 
 .basis-raw-text {
-  color: #334155;
+  color: var(--c-text-2);
   font-weight: 500;
 }
 
@@ -3812,15 +3812,15 @@ onBeforeUnmount(() => {
 }
 
 .route-pill-normal {
-  background: #eff6ff;
-  border: 1px solid #93c5fd;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  color: var(--c-accent-hover);
 }
 
 .route-pill-high {
-  background: #fef2f2;
-  border: 1px solid #fca5a5;
-  color: #b91c1c;
+  background: var(--c-danger-soft);
+  border: 1px solid var(--c-danger-border);
+  color: var(--c-danger-strong);
 }
 
 .route-pulse-dot {
@@ -3838,7 +3838,7 @@ onBeforeUnmount(() => {
 
 .branch-preview-switcher {
   display: inline-flex;
-  background: #e2e8f0;
+  background: var(--c-border);
   padding: 2px;
   border-radius: 6px;
   gap: 2px;
@@ -3847,7 +3847,7 @@ onBeforeUnmount(() => {
 .sw-btn {
   border: none;
   background: transparent;
-  color: #475569;
+  color: var(--c-text-2);
   font-size: 11px;
   font-weight: 600;
   padding: 2px 7px;
@@ -3857,22 +3857,22 @@ onBeforeUnmount(() => {
 }
 
 .sw-btn:hover {
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .sw-btn.active {
-  background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--c-surface);
+  color: var(--c-text);
+  box-shadow: var(--shadow-sm);
 }
 
 .sw-btn.sw-normal.active {
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
 }
 
 .sw-btn.sw-high.active {
-  background: #dc2626;
+  background: var(--c-danger);
   color: #ffffff;
 }
 
@@ -3884,12 +3884,12 @@ onBeforeUnmount(() => {
   min-width: 0;
   box-sizing: border-box;
   background:
-    radial-gradient(#cbd5e1 1px, transparent 1px),
+    radial-gradient(var(--c-border-strong) 1px, transparent 1px),
     linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   background-size: 16px 16px, 100% 100%;
   padding: 12px 16px 16px 16px;
   border-radius: 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--c-border-strong);
   overflow-x: auto;
   box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), 0 2px 6px rgba(0, 0, 0, 0.03);
 }
@@ -3912,11 +3912,11 @@ onBeforeUnmount(() => {
   gap: 5px;
   font-size: 11px;
   font-weight: 700;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .stage-step-num {
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 4px;
   padding: 1px 5px;
@@ -3953,7 +3953,7 @@ onBeforeUnmount(() => {
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .pill-main-row {
@@ -3964,20 +3964,20 @@ onBeforeUnmount(() => {
 
 .pill-sub-text {
   font-size: 10px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 500;
 }
 
 .bpmn-start-pill {
-  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
-  border: 2px solid #059669;
-  color: #065f46;
+  background: var(--c-success-soft);
+  border: 2px solid var(--c-success);
+  color: var(--c-success-strong);
 }
 
 .bpmn-end-pill {
-  background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-  border: 2px solid #334155;
-  color: #0f172a;
+  background: var(--c-surface);
+  border: 2px solid var(--c-ink-bg-2);
+  color: var(--c-text);
 }
 
 .bpmn-circle {
@@ -3987,14 +3987,14 @@ onBeforeUnmount(() => {
 }
 
 .start-circle {
-  background: #10b981;
-  border: 2px solid #047857;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+  background: var(--c-success);
+  border: 2px solid var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 .end-circle {
-  background: #1e293b;
-  border: 3px solid #64748b;
+  background: var(--c-ink-bg);
+  border: 3px solid var(--c-text-3);
 }
 
 .bpmn-svg-arrow-wrap,
@@ -4011,25 +4011,25 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #ffffff;
-  border: 1.5px solid #f59e0b;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-warning);
   border-radius: 10px;
   padding: 9px 8px;
-  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-gateway-diamond {
   width: 34px;
   height: 34px;
-  border: 2px solid #d97706;
+  border: 2px solid var(--c-warning);
   border-radius: 6px;
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  background: var(--c-warning-soft);
   transform: rotate(45deg);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 7px;
-  box-shadow: 0 2px 5px rgba(217, 119, 6, 0.2);
+  box-shadow: var(--shadow-sm);
   transition: transform 0.2s ease;
 }
 
@@ -4041,22 +4041,22 @@ onBeforeUnmount(() => {
   transform: rotate(-45deg);
   font-weight: 900;
   font-size: 15px;
-  color: #92400e;
+  color: var(--c-warning-strong);
 }
 
 .gw-card-title {
   font-size: 11.5px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 3px;
 }
 
 .gw-spel-pill {
-  color: #b45309;
+  color: var(--c-warning);
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 10px;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
   padding: 2px 5px;
   border-radius: 4px;
   text-align: center;
@@ -4075,8 +4075,8 @@ onBeforeUnmount(() => {
 .bpmn-branch-card {
   border-radius: 10px;
   padding: 8px 11px;
-  background: #ffffff;
-  border: 2px solid #cbd5e1;
+  background: var(--c-surface);
+  border: 2px solid var(--c-border-strong);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -4084,25 +4084,25 @@ onBeforeUnmount(() => {
 }
 
 .branch-card-high {
-  border-color: #fca5a5;
-  background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-soft);
 }
 
 .branch-card-normal {
-  border-color: #93c5fd;
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+  border-color: var(--c-accent-border);
+  background: var(--c-accent-soft);
 }
 
 .bpmn-branch-card.is-active-high {
-  border-color: #dc2626;
-  background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
-  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.16), 0 0 0 3px rgba(239, 68, 68, 0.12);
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-branch-card.is-active-normal {
-  border-color: #2563eb;
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.16), 0 0 0 3px rgba(59, 130, 246, 0.14);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-branch-card.is-standby-branch {
@@ -4129,11 +4129,11 @@ onBeforeUnmount(() => {
 }
 
 .high-label {
-  color: #dc2626;
+  color: var(--c-danger);
 }
 
 .normal-label {
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .branch-hit-badge {
@@ -4146,18 +4146,18 @@ onBeforeUnmount(() => {
 }
 
 .badge-hit-high {
-  background: #dc2626;
+  background: var(--c-danger);
   color: #ffffff;
 }
 
 .badge-hit-normal {
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
 }
 
 .badge-standby {
-  background: #e2e8f0;
-  color: #64748b;
+  background: var(--c-border);
+  color: var(--c-text-3);
 }
 
 .branch-card-body {
@@ -4172,31 +4172,31 @@ onBeforeUnmount(() => {
   gap: 9px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 2px solid #cbd5e1;
-  background: #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  border: 2px solid var(--c-border-strong);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 
 .bpmn-task-card:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .task-dba {
-  border-color: #ef4444;
-  background: #fef2f2;
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
 }
 
 .task-lead {
-  border-color: #3b82f6;
-  background: #eff6ff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .task-service {
-  border-color: #10b981;
-  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.12);
+  border-color: var(--c-success);
+  background: var(--c-success-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .task-icon-col {
@@ -4210,18 +4210,18 @@ onBeforeUnmount(() => {
 }
 
 .icon-box-dba {
-  background: #fee2e2;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  border: 1px solid var(--c-danger-border);
 }
 
 .icon-box-lead {
-  background: #dbeafe;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
 }
 
 .icon-box-service {
-  background: #dcfce7;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
 }
 
 .task-title-col {
@@ -4240,7 +4240,7 @@ onBeforeUnmount(() => {
 .t-name {
   font-size: 12.5px;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .role-code-chip {
@@ -4252,18 +4252,18 @@ onBeforeUnmount(() => {
 }
 
 .chip-dba {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--c-danger-soft);
+  color: var(--c-danger-strong);
 }
 
 .chip-lead {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
 }
 
 .t-role {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 /* SVG 动画流动虚线 */
@@ -4286,6 +4286,6 @@ onBeforeUnmount(() => {
   padding: 0 8px;
   height: 20px;
   line-height: 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 </style>

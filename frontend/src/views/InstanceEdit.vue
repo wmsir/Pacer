@@ -20,7 +20,7 @@
       </div>
     </div>
 
-    <!-- 主表单区域 (全景单列纵向流式架构 1 ➔ 2 ➔ 3 ➔ 4 ➔ 5) -->
+    <!-- 主表单区域 (全景单列纵向流式架构 1 → 2 → 3 → 4 → 5) -->
     <el-form ref="formRef" :model="form" :rules="rules" label-position="top" class="edit-form instance-edit-stream" v-loading="pageLoading">
       
       <!-- 1️⃣ 基础连接与网络认证配置 -->
@@ -28,7 +28,7 @@
         <template #header>
           <div class="card-header-title">
             <span class="step-num-badge">1</span>
-            <el-icon color="#409EFF"><Coin /></el-icon>
+            <el-icon><Coin /></el-icon>
             <span class="step-title-text">基础连接与认证凭据 (Basic Connection & Auth)</span>
           </div>
         </template>
@@ -197,10 +197,10 @@
         <template #header>
           <div class="card-header-title">
             <span class="step-num-badge">2</span>
-            <el-icon color="#E6A23C"><UserFilled /></el-icon>
+            <el-icon><UserFilled /></el-icon>
             <span class="step-title-text">授权业务资源组绑定 (Resource Groups)</span>
             <el-tooltip content="只有属于所选资源组的用户，才有权限在工单与数据查询中访问使用该实例" placement="top">
-              <el-icon style="margin-left: 6px; cursor: pointer; color: #909399;"><QuestionFilled /></el-icon>
+              <el-icon style="margin-left: 6px; cursor: pointer; color: var(--c-text-3);"><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
         </template>
@@ -258,7 +258,7 @@
             <div class="shuttle-panel chosen-panel">
               <div class="shuttle-header chosen-header">
                 <span>选中的资源组 ({{ chosenResourceGroups.length }})</span>
-                <el-icon color="#67C23A"><Check /></el-icon>
+                <el-icon><Check /></el-icon>
               </div>
               <el-input
                 v-model="rgChosenFilter"
@@ -290,7 +290,7 @@
 
         <!-- 业务与流程联动机制说明 -->
         <div class="flow-relation-tip" style="margin-top: 14px;">
-          <el-icon color="#409EFF"><InfoFilled /></el-icon>
+          <el-icon><InfoFilled /></el-icon>
           <span><b>审批流联动机制：</b>当开发人员提交此实例的 SQL 变更时，审批流引擎将根据上述绑定的资源组，自动路由给对应组内的<b>【开发组长】</b>进行初审。</span>
         </div>
       </el-card>
@@ -300,10 +300,10 @@
         <template #header>
           <div class="card-header-title">
             <span class="step-num-badge">3</span>
-            <el-icon color="#67C23A"><CollectionTag /></el-icon>
+            <el-icon><CollectionTag /></el-icon>
             <span class="step-title-text">实例业务标签管理 (Instance Tags)</span>
             <el-tooltip content="用于在实例列表、工作台与审批流中标识数据库的业务重要级、架构属性及数据敏感分类" placement="top">
-              <el-icon style="margin-left: 6px; cursor: pointer; color: #909399;"><QuestionFilled /></el-icon>
+              <el-icon style="margin-left: 6px; cursor: pointer; color: var(--c-text-3);"><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
         </template>
@@ -340,7 +340,7 @@
             >
               {{ tag }}
             </el-tag>
-            <span v-if="chosenTagsList.length === 0" style="color: #94a3b8; font-size: 13px;">暂未配置标签，请从上方快捷点击或在下方输入</span>
+            <span v-if="chosenTagsList.length === 0" style="color: var(--c-text-4); font-size: 13px;">暂未配置标签，请从上方快捷点击或在下方输入</span>
           </div>
 
           <div class="tag-add-bar">
@@ -361,10 +361,10 @@
         <template #header>
           <div class="card-header-title">
             <span class="step-num-badge">4</span>
-            <el-icon color="#E6A23C"><Share /></el-icon>
+            <el-icon><Share /></el-icon>
             <span class="step-title-text">专属固定审批流配置 (Pinned Workflow · 专库专流)</span>
             <el-tooltip content="针对特定特殊数据库，可绑定一套固定审批流，跳过系统的动态综合决策直接强制生效" placement="top">
-              <el-icon style="margin-left: 6px; cursor: pointer; color: #909399;"><QuestionFilled /></el-icon>
+              <el-icon style="margin-left: 6px; cursor: pointer; color: var(--c-text-3);"><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
         </template>
@@ -373,11 +373,11 @@
           <el-form-item label="审批流决策机制">
             <el-radio-group v-model="workflowRoutingMode" @change="handleWorkflowModeChange" class="custom-radio-group">
               <el-radio value="DYNAMIC">
-                <div class="radio-title">⚡ 动态综合智能决策 (默认)</div>
+                <div class="radio-title">动态综合智能决策 (默认)</div>
                 <div class="radio-desc">根据工单类型、影响行数、实例标签与资源组自动计算最优审批流</div>
               </el-radio>
               <el-radio value="PINNED" style="margin-top: 10px;">
-                <div class="radio-title pinned-title">🔥 指定专属固定审批流 (专库专流)</div>
+                <div class="radio-title pinned-title">指定专属固定审批流 (专库专流)</div>
                 <div class="radio-desc">此实例所有工单均强制走所选的固定流转链路，跳过任何动态判定</div>
               </el-radio>
             </el-radio-group>
@@ -406,12 +406,12 @@
               </el-select>
 
               <!-- 快捷直达流程设计中心引导栏 -->
-              <div class="workflow-jump-banner" style="margin-top: 10px; background: #f0fdf4; border: 1px dashed #86efac; padding: 10px 14px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                <span class="jump-tip" style="font-size: 12px; color: #166534; font-weight: 500;">
-                  💡 没有符合当前业务需要的审批流程？
+              <div class="workflow-jump-banner" style="margin-top: 10px; background: var(--c-success-soft); border: 1px dashed var(--c-success-border); padding: 10px 14px; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+                <span class="jump-tip" style="font-size: 12px; color: var(--c-success-strong); font-weight: 500;">
+                  没有符合当前业务需要的审批流程？
                 </span>
                 <el-button type="success" link :icon="Share" @click="goToWorkflowDesigner" style="font-weight: 600;">
-                  前往【审批流设计中心】新建/编辑流程 ➔
+                  前往【审批流设计中心】新建/编辑流程 →
                 </el-button>
               </div>
             </el-form-item>
@@ -419,13 +419,13 @@
             <!-- 选中的固定模板详情预览 -->
             <div v-if="selectedPinnedTemplate" class="pinned-template-preview">
               <div class="preview-row">
-                <b>🎯 触发与生效说明：</b>{{ selectedPinnedTemplate.triggerCondition || '所有工单强制生效' }}
+                <b>触发与生效说明：</b>{{ selectedPinnedTemplate.triggerCondition || '所有工单强制生效' }}
               </div>
               <div class="preview-row">
-                <b>📋 适用类型：</b><el-tag size="small" type="info">{{ selectedPinnedTemplate.flowType }}</el-tag>
+                <b>适用类型：</b><el-tag size="small" type="info">{{ selectedPinnedTemplate.flowType }}</el-tag>
               </div>
               <div class="preview-row" style="margin-top: 6px;">
-                <b>🔗 预定审批流转链路：</b>
+                <b>预定审批流转链路：</b>
                 <div class="pipeline-tags">
                   <el-tag
                     v-for="(n, idx) in parseNodes(selectedPinnedTemplate.nodeConfig)"
@@ -450,10 +450,10 @@
           <div class="card-header-title" style="justify-content: space-between; width: 100%;">
             <div style="display: flex; align-items: center;">
               <span class="step-num-badge">5</span>
-              <el-icon color="#409EFF"><Operation /></el-icon>
+              <el-icon><Operation /></el-icon>
               <span class="step-title-text">支持操作范围与管控影响 (Supported Operations Matrix)</span>
               <el-tooltip content="严格定义此实例所允许的操作类型。未勾选的操作将在工单提交、在线查询或发布执行时被全链路强行拦截" placement="top">
-                <el-icon style="margin-left: 6px; cursor: pointer; color: #909399;"><QuestionFilled /></el-icon>
+                <el-icon style="margin-left: 6px; cursor: pointer; color: var(--c-text-3);"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
             <div class="op-preset-btns">
@@ -1043,10 +1043,10 @@ onMounted(async () => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 14px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .nav-left {
@@ -1058,13 +1058,13 @@ onMounted(async () => {
 .page-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0;
 }
 
 .page-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 
@@ -1078,8 +1078,8 @@ onMounted(async () => {
 
 .stream-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .step-num-badge {
@@ -1088,7 +1088,7 @@ onMounted(async () => {
   justify-content: center;
   width: 22px;
   height: 22px;
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 50%;
   font-size: 12px;
@@ -1098,7 +1098,7 @@ onMounted(async () => {
 .step-title-text {
   font-weight: 700;
   font-size: 15px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .bottom-action-bar {
@@ -1107,17 +1107,17 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 16px 20px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
   margin-top: 8px;
   margin-bottom: 24px;
 }
 
 .config-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .mb-20 {
@@ -1130,7 +1130,7 @@ onMounted(async () => {
   gap: 8px;
   font-weight: 700;
   font-size: 15px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .sub-section-title {
@@ -1139,15 +1139,15 @@ onMounted(async () => {
   gap: 6px;
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   margin-bottom: 12px;
 }
 
 .structured-box {
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 14px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   margin-bottom: 16px;
 }
 
@@ -1163,9 +1163,9 @@ onMounted(async () => {
 
 .shuttle-panel {
   flex: 1;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  background: #ffffff;
+  background: var(--c-surface);
   display: flex;
   flex-direction: column;
   height: 240px;
@@ -1175,22 +1175,22 @@ onMounted(async () => {
   padding: 8px 12px;
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  color: var(--c-text-2);
+  background: var(--c-muted-bg);
+  border-bottom: 1px solid var(--c-border);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
 .chosen-header {
-  background: #f0fdf4;
-  color: #166534;
+  background: var(--c-success-soft);
+  color: var(--c-success-strong);
 }
 
 .filter-input {
   padding: 6px 8px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .shuttle-list {
@@ -1207,29 +1207,29 @@ onMounted(async () => {
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .shuttle-item:hover {
-  background: #f1f5f9;
+  background: var(--c-subtle);
 }
 
 .shuttle-item.is-selected {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .empty-text {
   text-align: center;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   padding-top: 40px;
 }
 
 .shuttle-footer {
   padding: 6px 12px;
-  border-top: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-muted-bg);
   display: flex;
   justify-content: flex-end;
 }
@@ -1245,8 +1245,8 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 8px;
   font-size: 12px;
-  color: #475569;
-  background: #eff6ff;
+  color: var(--c-text-2);
+  background: var(--c-accent-soft);
   padding: 8px 12px;
   border-radius: 6px;
   margin-top: 12px;
@@ -1265,12 +1265,12 @@ onMounted(async () => {
 .preset-label {
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .tag-input-container {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 12px;
 }
@@ -1302,8 +1302,8 @@ onMounted(async () => {
 }
 
 .op-card-item {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 12px;
   cursor: pointer;
@@ -1314,13 +1314,13 @@ onMounted(async () => {
 }
 
 .op-card-item:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+  border-color: var(--c-accent-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .op-card-item.is-active {
-  border-color: #3b82f6;
-  background: #f0f9ff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .op-card-top {
@@ -1343,12 +1343,12 @@ onMounted(async () => {
 .op-name {
   font-weight: 700;
   font-size: 13px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .op-impact-desc {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.4;
   margin-bottom: 8px;
 }
@@ -1360,8 +1360,8 @@ onMounted(async () => {
 
 .impact-scope {
   font-size: 11px;
-  color: #3b82f6;
-  background: #eff6ff;
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -1370,17 +1370,17 @@ onMounted(async () => {
   margin-top: 16px;
   padding: 12px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .test-feedback-card.is-success {
-  background: #f0fdf4;
-  border-color: #86efac;
+  background: var(--c-success-soft);
+  border-color: var(--c-success-border);
 }
 
 .test-feedback-card.is-error {
-  background: #fef2f2;
-  border-color: #fca5a5;
+  background: var(--c-danger-soft);
+  border-color: var(--c-danger-border);
 }
 
 .feedback-header {
@@ -1393,26 +1393,26 @@ onMounted(async () => {
 .feedback-title {
   font-weight: 600;
   font-size: 13px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .feedback-body {
   font-size: 12px;
-  color: #475569;
+  color: var(--c-text-2);
   line-height: 1.5;
 }
 
 .feedback-body.error-msg {
-  color: #dc2626;
+  color: var(--c-danger);
   font-family: monospace;
 }
 
 /* 专属固定审批流样式 */
 .pinned-flow-content {
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 14px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .custom-radio-group {
@@ -1425,28 +1425,28 @@ onMounted(async () => {
 .radio-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .pinned-title {
-  color: #d97706;
+  color: var(--c-warning);
 }
 
 .radio-desc {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 
 .pinned-select-box {
   margin-top: 14px;
   padding-top: 12px;
-  border-top: 1px dashed #cbd5e1;
+  border-top: 1px dashed var(--c-border-strong);
 }
 
 .pinned-template-preview {
-  background: #ffffff;
-  border: 1px solid #fed7aa;
+  background: var(--c-surface);
+  border: 1px solid var(--c-warning-border);
   border-radius: 6px;
   padding: 10px 12px;
   margin-top: 10px;
@@ -1454,7 +1454,7 @@ onMounted(async () => {
 
 .preview-row {
   font-size: 12px;
-  color: #334155;
+  color: var(--c-text-2);
   line-height: 1.6;
 }
 

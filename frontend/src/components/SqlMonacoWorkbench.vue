@@ -4,9 +4,9 @@
     <div class="workbench-toolbar">
       <div class="toolbar-left">
         <el-radio-group v-model="editorThemeMode" size="small" @change="handleThemeChange">
-          <el-radio-button value="auto">🌓 跟随系统</el-radio-button>
-          <el-radio-button value="light">☀️ 浅色模式</el-radio-button>
-          <el-radio-button value="dark">🌙 深色模式</el-radio-button>
+          <el-radio-button value="auto">跟随系统</el-radio-button>
+          <el-radio-button value="light">浅色模式</el-radio-button>
+          <el-radio-button value="dark">深色模式</el-radio-button>
         </el-radio-group>
 
         <el-divider direction="vertical" />
@@ -26,16 +26,16 @@
         <!-- 风险计数徽标 -->
         <div class="risk-badge-group">
           <el-tag v-if="riskSummary.high > 0" size="small" type="danger" effect="dark" class="risk-pill">
-            🚨 高危 {{ riskSummary.high }}
+            高危 {{ riskSummary.high }}
           </el-tag>
           <el-tag v-if="riskSummary.medium > 0" size="small" type="warning" effect="dark" class="risk-pill">
-            ⚠️ 中危 {{ riskSummary.medium }}
+            中危 {{ riskSummary.medium }}
           </el-tag>
           <el-tag v-if="riskSummary.low > 0" size="small" type="info" effect="plain" class="risk-pill">
-            💡 建议 {{ riskSummary.low }}
+            建议 {{ riskSummary.low }}
           </el-tag>
           <el-tag v-if="riskSummary.total === 0 && modelValue.trim()" size="small" type="success" effect="light" class="risk-pill">
-            ✅ 语法审核安全
+            语法审核安全
           </el-tag>
         </div>
 
@@ -63,12 +63,12 @@
       <div class="diagnostics-col" :class="{ 'collapsed': isPanelCollapsed }">
         <div class="panel-header">
           <div class="panel-title-wrap">
-            <span class="panel-title">🛡️ 风险诊断与修改建议</span>
+            <span class="panel-title">风险诊断与修改建议</span>
             <span class="panel-count" v-if="riskItems.length > 0">({{ riskItems.length }})</span>
           </div>
           <div class="panel-actions">
             <el-button size="small" link @click="isPanelCollapsed = !isPanelCollapsed">
-              {{ isPanelCollapsed ? '展开 ➔' : '收起 ✕' }}
+              {{ isPanelCollapsed ? '展开 →' : '收起 ✕' }}
             </el-button>
           </div>
         </div>
@@ -105,7 +105,7 @@
                   <span class="risk-line-num">第 <b>{{ item.line }}</b> 行</span>
                 </div>
                 <el-button size="small" type="primary" link @click.stop="jumpToLine(item.line, item.col)">
-                  定位 ➔
+                  定位 →
                 </el-button>
               </div>
 
@@ -125,7 +125,7 @@
 
               <div class="risk-card-actions" v-if="item.autoFix">
                 <el-button size="small" type="success" plain @click.stop="applyAutoFix(item)">
-                  ✨ 一键采纳建议
+                  一键采纳建议
                 </el-button>
               </div>
             </div>
@@ -139,7 +139,6 @@
               :image-size="60"
             />
             <div v-else class="safe-congratulations">
-              <div class="safe-icon">🎉</div>
               <div class="safe-title">未发现高危语法隐患</div>
               <div class="safe-desc">当前编写的 SQL 脚本符合防全表变更与语法合规规范，可正常发起预执行校验！</div>
             </div>
@@ -156,7 +155,7 @@
         <span class="sb-item">语句数: <b>{{ editorStats.stmtCount }}</b> (DML: {{ editorStats.dmlCount }})</span>
       </div>
       <div class="sb-right">
-        <span class="sb-tip">💡 在编辑器中风险行已用红/黄/蓝波浪线标识，鼠标悬浮可查看详细审核规则</span>
+        <span class="sb-tip">在编辑器中风险行已用红/黄/蓝波浪线标识，鼠标悬浮可查看详细审核规则</span>
       </div>
     </div>
 
@@ -177,7 +176,7 @@
         <!-- 左侧: 原 SQL -->
         <div class="diff-side-col diff-original">
           <div class="side-title-bar original-bar">
-            <span>📄 原提交 SQL (Original)</span>
+            <span>原提交 SQL (Original)</span>
             <el-tag size="small" type="info">原始输入</el-tag>
           </div>
           <div class="code-view-box">
@@ -191,7 +190,7 @@
         <!-- 右侧: 改后规范化 SQL -->
         <div class="diff-side-col diff-modified">
           <div class="side-title-bar modified-bar">
-            <span>✨ 改后/规范化 SQL (Modified & Safe)</span>
+            <span>改后/规范化 SQL (Modified & Safe)</span>
             <el-tag size="small" type="success">安全加固建议</el-tag>
           </div>
           <div class="code-view-box">
@@ -706,17 +705,17 @@ onBeforeUnmount(() => {
 .sql-monaco-workbench {
   display: flex;
   flex-direction: column;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   overflow: hidden;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
   transition: all 0.2s ease;
 }
 
 .sql-monaco-workbench.is-dark {
-  border-color: #334155;
-  background: #0f172a;
+  border-color: var(--c-ink-bg-2);
+  background: var(--c-ink-bg);
 }
 
 .sql-monaco-workbench.is-fullscreen {
@@ -735,15 +734,15 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border-bottom: 1px solid var(--c-border);
   flex-wrap: wrap;
   gap: 8px;
 }
 
 .is-dark .workbench-toolbar {
-  background: #1e293b;
-  border-bottom-color: #334155;
+  background: var(--c-ink-bg);
+  border-bottom-color: var(--c-ink-bg-2);
 }
 
 .toolbar-left, .toolbar-right {
@@ -789,8 +788,8 @@ onBeforeUnmount(() => {
 /* 右侧风险建议面板 */
 .diagnostics-col {
   width: 360px;
-  border-left: 1px solid #e2e8f0;
-  background: #fdfdfd;
+  border-left: 1px solid var(--c-border);
+  background: var(--c-muted-bg);
   display: flex;
   flex-direction: column;
   transition: width 0.2s ease;
@@ -798,8 +797,8 @@ onBeforeUnmount(() => {
 }
 
 .is-dark .diagnostics-col {
-  border-left-color: #334155;
-  background: #111827;
+  border-left-color: var(--c-ink-bg-2);
+  background: var(--c-ink-bg);
 }
 
 .diagnostics-col.collapsed {
@@ -811,28 +810,28 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   padding: 8px 12px;
-  background: #f1f5f9;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--c-subtle);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .is-dark .panel-header {
-  background: #1e293b;
-  border-bottom-color: #334155;
+  background: var(--c-ink-bg);
+  border-bottom-color: var(--c-ink-bg-2);
 }
 
 .panel-title {
   font-size: 12.5px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .is-dark .panel-title {
-  color: #e2e8f0;
+  color: var(--c-ink-text);
 }
 
 .panel-count {
   font-size: 12px;
-  color: #dc2626;
+  color: var(--c-danger);
   font-weight: 700;
   margin-left: 4px;
 }
@@ -859,41 +858,41 @@ onBeforeUnmount(() => {
 .risk-card {
   padding: 10px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .is-dark .risk-card {
-  background: #1e293b;
-  border-color: #334155;
+  background: var(--c-ink-bg);
+  border-color: var(--c-ink-bg-2);
 }
 
 .risk-card:hover {
   transform: translateY(-1px);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .risk-card-high {
-  border-left: 4px solid #ef4444;
-  background: #fff5f5;
+  border-left: 4px solid var(--c-danger);
+  background: var(--c-danger-soft);
 }
 .is-dark .risk-card-high {
   background: rgba(239, 68, 68, 0.12);
 }
 
 .risk-card-medium {
-  border-left: 4px solid #f59e0b;
-  background: #fffbeb;
+  border-left: 4px solid var(--c-warning);
+  background: var(--c-warning-soft);
 }
 .is-dark .risk-card-medium {
   background: rgba(245, 158, 11, 0.12);
 }
 
 .risk-card-low {
-  border-left: 4px solid #0284c7;
-  background: #f0f9ff;
+  border-left: 4px solid var(--c-accent);
+  background: var(--c-accent-soft);
 }
 .is-dark .risk-card-low {
   background: rgba(2, 132, 199, 0.12);
@@ -914,11 +913,11 @@ onBeforeUnmount(() => {
 
 .risk-line-num {
   font-size: 11.5px;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .is-dark .risk-line-num {
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .risk-code-snippet {
@@ -927,14 +926,14 @@ onBeforeUnmount(() => {
   border-radius: 4px;
   font-size: 11px;
   font-family: monospace;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 6px;
   word-break: break-all;
 }
 
 .is-dark .risk-code-snippet {
-  background: rgba(255, 255, 255, 0.06);
-  color: #f1f5f9;
+  background: color-mix(in srgb, var(--c-surface) 6%, transparent);
+  color: var(--c-ink-text);
 }
 
 .risk-reason-box, .risk-suggestion-box {
@@ -944,21 +943,21 @@ onBeforeUnmount(() => {
 }
 
 .lbl-reason {
-  color: #dc2626;
+  color: var(--c-danger);
   font-weight: 700;
 }
 
 .lbl-sug {
-  color: #059669;
+  color: var(--c-success);
   font-weight: 700;
 }
 
 .text-reason, .text-sug {
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .is-dark .text-reason, .is-dark .text-sug {
-  color: #cbd5e1;
+  color: var(--c-text-4);
 }
 
 .risk-card-actions {
@@ -973,15 +972,15 @@ onBeforeUnmount(() => {
 
 .safe-congratulations {
   padding: 24px 12px;
-  background: #f0fdf4;
-  border: 1px dashed #86efac;
+  background: var(--c-success-soft);
+  border: 1px dashed var(--c-success-border);
   border-radius: 8px;
   text-align: center;
 }
 
 .is-dark .safe-congratulations {
   background: rgba(22, 101, 52, 0.2);
-  border-color: #15803d;
+  border-color: var(--c-success);
 }
 
 .safe-icon {
@@ -992,22 +991,22 @@ onBeforeUnmount(() => {
 .safe-title {
   font-size: 14px;
   font-weight: 700;
-  color: #166534;
+  color: var(--c-success-strong);
   margin-bottom: 4px;
 }
 
 .is-dark .safe-title {
-  color: #86efac;
+  color: var(--c-success);
 }
 
 .safe-desc {
   font-size: 12px;
-  color: #15803d;
+  color: var(--c-success);
   line-height: 1.5;
 }
 
 .is-dark .safe-desc {
-  color: #bbf7d0;
+  color: var(--c-success);
 }
 
 /* 状态栏 */
@@ -1016,16 +1015,16 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   align-items: center;
   padding: 6px 12px;
-  background: #f8fafc;
-  border-top: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border-top: 1px solid var(--c-border);
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .is-dark .workbench-statusbar {
-  background: #1e293b;
-  border-top-color: #334155;
-  color: #94a3b8;
+  background: var(--c-ink-bg);
+  border-top-color: var(--c-ink-bg-2);
+  color: var(--c-text-4);
 }
 
 .sb-left {
@@ -1040,9 +1039,9 @@ onBeforeUnmount(() => {
 /* 并排比对 Grid */
 .diff-dialog-header-hint {
   padding: 8px 12px;
-  background: #eff6ff;
+  background: var(--c-accent-soft);
   border-radius: 6px;
-  color: #1e40af;
+  color: var(--c-accent-hover);
   font-size: 12.5px;
   margin-bottom: 12px;
 }
@@ -1051,7 +1050,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--c-border-strong);
   border-radius: 6px;
   overflow: hidden;
   height: 480px;
@@ -1061,7 +1060,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #ffffff;
+  background: var(--c-surface);
 }
 
 .side-title-bar {
@@ -1071,17 +1070,17 @@ onBeforeUnmount(() => {
   padding: 8px 12px;
   font-size: 13px;
   font-weight: 600;
-  border-bottom: 1px solid #cbd5e1;
+  border-bottom: 1px solid var(--c-border-strong);
 }
 
 .original-bar {
-  background: #f8fafc;
-  color: #334155;
+  background: var(--c-muted-bg);
+  color: var(--c-text-2);
 }
 
 .modified-bar {
-  background: #f0fdf4;
-  color: #166534;
+  background: var(--c-success-soft);
+  color: var(--c-success-strong);
 }
 
 .code-view-box {
@@ -1090,7 +1089,7 @@ onBeforeUnmount(() => {
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 12px;
   padding: 4px 0;
-  background: #fafafa;
+  background: var(--c-muted-bg);
 }
 
 .code-line-row {
@@ -1103,10 +1102,10 @@ onBeforeUnmount(() => {
   width: 40px;
   text-align: right;
   padding-right: 10px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   user-select: none;
-  background: #f1f5f9;
-  border-right: 1px solid #e2e8f0;
+  background: var(--c-subtle);
+  border-right: 1px solid var(--c-border);
 }
 
 .line-content {
@@ -1119,13 +1118,13 @@ onBeforeUnmount(() => {
 }
 
 .is-diff-removed {
-  background: #fee2e2;
-  color: #991b1b;
+  background: var(--c-danger-soft);
+  color: var(--c-danger-strong);
 }
 
 .is-diff-added {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--c-success-soft);
+  color: var(--c-success-strong);
   font-weight: 600;
 }
 

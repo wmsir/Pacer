@@ -4,31 +4,9 @@
  * 定义系统中的所有页面跳转规则。
  */
 import { createRouter, createWebHistory } from 'vue-router'
+// 登录页与框架页直接打包；其余页面按需加载，避免登录页就下载 Monaco、BPMN、ECharts 等大依赖
 import Login from '../views/Login.vue'
 import Layout from '../views/Layout.vue'
-import Dashboard from '../views/Dashboard.vue'
-import TicketList from '../views/TicketList.vue'
-import CreateTicket from '../views/CreateTicket.vue'
-import DataQuery from '../views/DataQuery.vue'
-import DataMaskingConfig from '../views/DataMaskingConfig.vue'
-import AuditDashboard from '../views/AuditDashboard.vue'
-import TicketDetail from '../views/TicketDetail.vue'
-import WorkflowDesigner from '../views/WorkflowDesigner.vue'
-import License from '../views/License.vue'
-import AiSqlReview from '../views/AiSqlReview.vue'
-import Settings from '../views/Settings.vue'
-import InstanceList from '../views/InstanceList.vue'
-import InstanceEdit from '../views/InstanceEdit.vue'
-import DatabaseManage from '../views/DatabaseManage.vue'
-import SessionManage from '../views/SessionManage.vue'
-import AccountManage from '../views/AccountManage.vue'
-import ParamConfig from '../views/ParamConfig.vue'
-import ResourceGroupList from '../views/ResourceGroupList.vue'
-import UserList from '../views/UserList.vue'
-import RoleList from '../views/RoleList.vue'
-import UserProfile from '../views/UserProfile.vue'
-import AiConfig from '../views/AiConfig.vue'
-import NotificationConfig from '../views/NotificationConfig.vue'
 
 import { useUserStore } from '../store/user'
 
@@ -51,18 +29,18 @@ const routes = [
       {
         path: 'dashboard',
         name: 'Dashboard',
-        component: Dashboard
+        component: () => import('../views/Dashboard.vue')
       },
       // 工单中心
       {
         path: 'ticket-list',
         name: 'TicketList',
-        component: TicketList
+        component: () => import('../views/TicketList.vue')
       },
       {
         path: 'ticket-create',
         name: 'CreateTicket',
-        component: CreateTicket
+        component: () => import('../views/CreateTicket.vue')
       },
       {
         path: 'ticket/create',
@@ -71,18 +49,18 @@ const routes = [
       {
         path: 'ticket/:id',
         name: 'TicketDetail',
-        component: TicketDetail
+        component: () => import('../views/TicketDetail.vue')
       },
       {
         path: 'ai-sql-review',
         name: 'AiSqlReview',
-        component: AiSqlReview
+        component: () => import('../views/AiSqlReview.vue')
       },
       // 数据操作 & 安全
       {
         path: 'data-query',
         name: 'DataQuery',
-        component: DataQuery
+        component: () => import('../views/DataQuery.vue')
       },
       {
         path: 'sql-query',
@@ -91,33 +69,33 @@ const routes = [
       {
         path: 'data-masking',
         name: 'DataMaskingConfig',
-        component: DataMaskingConfig
+        component: () => import('../views/DataMaskingConfig.vue')
       },
       {
         path: 'audit-dashboard',
         name: 'AuditDashboard',
-        component: AuditDashboard
+        component: () => import('../views/AuditDashboard.vue')
       },
       // 实例管理子模块
       {
         path: 'instance-list',
         name: 'InstanceList',
-        component: InstanceList
+        component: () => import('../views/InstanceList.vue')
       },
       {
         path: 'instance/create',
         name: 'InstanceCreate',
-        component: InstanceEdit
+        component: () => import('../views/InstanceEdit.vue')
       },
       {
         path: 'instance/edit/:id',
         name: 'InstanceEdit',
-        component: InstanceEdit
+        component: () => import('../views/InstanceEdit.vue')
       },
       {
         path: 'instance-databases',
         name: 'DatabaseManage',
-        component: DatabaseManage
+        component: () => import('../views/DatabaseManage.vue')
       },
       {
         path: 'instance/databases',
@@ -126,7 +104,7 @@ const routes = [
       {
         path: 'instance-sessions',
         name: 'SessionManage',
-        component: SessionManage
+        component: () => import('../views/SessionManage.vue')
       },
       {
         path: 'instance/sessions',
@@ -135,7 +113,7 @@ const routes = [
       {
         path: 'instance-accounts',
         name: 'AccountManage',
-        component: AccountManage
+        component: () => import('../views/AccountManage.vue')
       },
       {
         path: 'instance/accounts',
@@ -144,12 +122,12 @@ const routes = [
       {
         path: 'instance-config',
         name: 'InstanceParamConfig',
-        component: InstanceList
+        component: () => import('../views/InstanceList.vue')
       },
       {
         path: 'instance-params',
         name: 'ParamConfig',
-        component: ParamConfig
+        component: () => import('../views/ParamConfig.vue')
       },
       {
         path: 'instance-global-params',
@@ -163,38 +141,38 @@ const routes = [
       {
         path: 'resource-group-list',
         name: 'ResourceGroupList',
-        component: ResourceGroupList
+        component: () => import('../views/ResourceGroupList.vue')
       },
       {
         path: 'user-list',
         name: 'UserList',
-        component: UserList
+        component: () => import('../views/UserList.vue')
       },
       {
         path: 'role-list',
         name: 'RoleList',
-        component: RoleList
+        component: () => import('../views/RoleList.vue')
       },
       // 系统与流程
       {
         path: 'workflow-designer',
         name: 'WorkflowDesigner',
-        component: WorkflowDesigner
+        component: () => import('../views/WorkflowDesigner.vue')
       },
       {
         path: 'license',
         name: 'License',
-        component: License
+        component: () => import('../views/License.vue')
       },
       {
         path: 'settings',
         name: 'Settings',
-        component: Settings
+        component: () => import('../views/Settings.vue')
       },
       {
         path: 'ai-config',
         name: 'AiConfig',
-        component: AiConfig
+        component: () => import('../views/AiConfig.vue')
       },
       {
         path: 'ai/config',
@@ -203,7 +181,7 @@ const routes = [
       {
         path: 'notification-config',
         name: 'NotificationConfig',
-        component: NotificationConfig
+        component: () => import('../views/NotificationConfig.vue')
       },
       {
         path: 'notification/config',
@@ -213,9 +191,14 @@ const routes = [
       {
         path: 'user-profile',
         name: 'UserProfile',
-        component: UserProfile
+        component: () => import('../views/UserProfile.vue')
       }
     ]
+  },
+  // 未知地址：回到登录页（已登录会再被守卫带到首页），而不是显示一片空白
+  {
+    path: '/:pathMatch(.*)*',
+    redirect: '/login'
   }
 ]
 
@@ -240,6 +223,11 @@ router.beforeEach(async (to, _from, next) => {
       next({ name: 'CreateTicket' })
     }
   } else if (to.meta.requiresAuth && userStore.isAuthenticated) {
+    // 刷新页面或从 SSO 进入时，先取一次真实的角色与权限再判断，避免按本地缓存误放行或误拦截
+    if (!userStore.userInfo && !userStore.userInfoAttempted) {
+      await userStore.fetchUserInfo()
+    }
+
     // 只有超级管理员才可访问平台总览 (/dashboard)，其他角色访问时重定向至新建工单
     if (to.path === '/dashboard' && !userStore.isAdmin) {
       next({ path: '/ticket-create' })
@@ -257,13 +245,34 @@ router.beforeEach(async (to, _from, next) => {
         message: `您所属角色【${userStore.userRole}】无权访问【${String(to.name || to.path)}】页签功能`,
         grouping: true
       })
-      const fallback = userStore.isAdmin ? '/dashboard' : '/ticket-create'
+      // 没有新建工单权限的账号以前会在这里无限重定向，改为落到个人中心
+      const fallback = userStore.isAdmin ? '/dashboard' : (userStore.hasPermission('/ticket-create') ? '/ticket-create' : '/user-profile')
       next({ path: fallback })
       return
     }
     next()
   } else {
     next()
+  }
+})
+
+// 只在登录页显示 index.html 里的「主站门户 / 架构专页 / 移动审批端」悬浮条，
+// 进入控制台后它会遮住表格分页和操作按钮
+router.afterEach((to) => {
+  // 登录、退出或切换账号后，用当前身份重绘水印（此前只在首次打开页面时绘制一次）
+  window.dispatchEvent(new Event('wm-watermark-update'))
+  document.body.classList.toggle('route-login', to.name === 'Login')
+})
+
+// 发布新版本后，旧页面里的按需加载文件名已失效：自动刷新一次拿到新版本
+router.onError((error, to) => {
+  const msg = String(error?.message || '')
+  if (/Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(msg)) {
+    const key = 'pacer_chunk_reload'
+    if (sessionStorage.getItem(key) !== to.fullPath) {
+      sessionStorage.setItem(key, to.fullPath)
+      window.location.assign(router.resolve(to.fullPath).href)
+    }
   }
 })
 

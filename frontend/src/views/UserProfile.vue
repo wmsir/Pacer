@@ -53,7 +53,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#409EFF"><UserFilled /></el-icon>
+                <el-icon><UserFilled /></el-icon>
                 <span>常用联系方式与个人信息维护</span>
               </div>
               <el-tag size="small" type="info">自主维护 · 即时生效</el-tag>
@@ -61,7 +61,7 @@
           </template>
 
           <el-form ref="profileFormRef" :model="form" :rules="profileRules" label-width="115px" v-loading="loading">
-            <el-divider content-position="left"><span class="divider-title">🏢 部门与员工工号</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">部门与员工工号</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="所属部门/产线">
@@ -75,7 +75,7 @@
               </el-col>
             </el-row>
 
-            <el-divider content-position="left"><span class="divider-title">📱 手机与电子邮箱</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">手机与电子邮箱</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="真实姓名" prop="realName">
@@ -102,7 +102,7 @@
               </el-col>
             </el-row>
 
-            <el-divider content-position="left"><span class="divider-title">💬 微信 / 企业微信 / 钉钉 / 飞书</span></el-divider>
+            <el-divider content-position="left"><span class="divider-title">微信 / 企业微信 / 钉钉 / 飞书</span></el-divider>
             <el-row :gutter="16">
               <el-col :xs="24" :sm="12">
                 <el-form-item label="微信账号">
@@ -142,7 +142,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#E6A23C"><Bell /></el-icon>
+                <el-icon><Bell /></el-icon>
                 <span>工单流转与安全告警通知偏好</span>
               </div>
             </div>
@@ -151,7 +151,7 @@
           <div class="notification-pref-grid">
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">🟢 企业微信工作消息提醒</div>
+                <div class="pref-name">企业微信工作消息提醒</div>
                 <div class="pref-desc">当您提交的工单审批通过、被驳回或需要您审批时，通过企业微信应用推送</div>
               </div>
               <el-switch v-model="notifPrefs.wecom" active-text="开启" inactive-text="关闭" />
@@ -159,7 +159,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">🔵 钉钉工作通知提醒</div>
+                <div class="pref-name">钉钉工作通知提醒</div>
                 <div class="pref-desc">工单状态流转、高危 SQL 拦截与定时执行结果推送到钉钉</div>
               </div>
               <el-switch v-model="notifPrefs.dingtalk" active-text="开启" inactive-text="关闭" />
@@ -167,7 +167,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">📧 电子邮箱邮件通知</div>
+                <div class="pref-name">电子邮箱邮件通知</div>
                 <div class="pref-desc">每日待办工单汇总与工单归档审计凭证发送至绑定邮箱</div>
               </div>
               <el-switch v-model="notifPrefs.email" active-text="开启" inactive-text="关闭" />
@@ -175,7 +175,7 @@
 
             <div class="pref-item">
               <div class="pref-left">
-                <div class="pref-name">📱 手机短信紧急告警</div>
+                <div class="pref-name">手机短信紧急告警</div>
                 <div class="pref-desc">生产库高危操作拦截、定时流式执行失败等紧急事件短信通知</div>
               </div>
               <el-switch v-model="notifPrefs.sms" active-text="开启" inactive-text="关闭" />
@@ -197,7 +197,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#67C23A"><Lock /></el-icon>
+                <el-icon><Lock /></el-icon>
                 <span>组织架构与数据权限视图</span>
               </div>
             </div>
@@ -205,7 +205,7 @@
 
           <div class="scope-info-box">
             <div class="scope-header">
-              <span class="scope-label">🛡️ 当前工单数据可见范围：</span>
+              <span class="scope-label">当前工单数据可见范围：</span>
               <el-tag :type="getDataScopeTagType(dataScopeInfo.scope)" effect="dark" size="small">
                 {{ dataScopeInfo.scopeName || '所属资源组工单' }}
               </el-tag>
@@ -214,7 +214,7 @@
           </div>
 
           <div class="perm-section">
-            <div class="perm-title">🏢 归属业务资源组 ({{ (userProfile.resourceGroups || []).length }}个)</div>
+            <div class="perm-title">归属业务资源组 ({{ (userProfile.resourceGroups || []).length }}个)</div>
             <div class="perm-tags">
               <template v-if="(userProfile.resourceGroups || []).length > 0">
                 <el-tag
@@ -228,12 +228,12 @@
                   {{ rg }}
                 </el-tag>
               </template>
-              <span v-else style="color: #94a3b8; font-size: 13px;">暂未分配业务资源组</span>
+              <span v-else style="color: var(--c-text-4); font-size: 13px;">暂未分配业务资源组</span>
             </div>
           </div>
 
           <div class="perm-section" style="margin-top: 14px;">
-            <div class="perm-title">👑 系统角色与特权</div>
+            <div class="perm-title">系统角色与特权</div>
             <div class="perm-tags">
               <el-tag
                 v-for="r in (userProfile.roles || [userProfile.role || 'DEV'])"
@@ -254,7 +254,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#F56C6C"><Key /></el-icon>
+                <el-icon><Key /></el-icon>
                 <span>修改登录密码 (SM3 国密加密)</span>
               </div>
             </div>
@@ -502,8 +502,8 @@ onMounted(() => {
 
 .profile-hero-card {
   border-radius: 10px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
 }
 
 .hero-content {
@@ -517,11 +517,11 @@ onMounted(() => {
 }
 
 .hero-avatar {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  background: var(--c-accent);
   color: #ffffff;
   font-size: 28px;
   font-weight: 700;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  box-shadow: var(--shadow-sm);
 }
 
 .avatar-badge {
@@ -530,14 +530,14 @@ onMounted(() => {
   right: 0;
   width: 22px;
   height: 22px;
-  background: #10b981;
+  background: var(--c-success);
   color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  border: 2px solid #fff;
+  border: 2px solid var(--c-surface);
 }
 
 .hero-info {
@@ -554,11 +554,11 @@ onMounted(() => {
   margin: 0;
   font-size: 22px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .hero-username {
-  color: #64748b;
+  color: var(--c-text-3);
   font-size: 14px;
 }
 
@@ -568,7 +568,7 @@ onMounted(() => {
   align-items: center;
   gap: 16px;
   margin-top: 8px;
-  color: #475569;
+  color: var(--c-text-2);
   font-size: 13px;
 }
 
@@ -580,7 +580,7 @@ onMounted(() => {
 
 .form-card {
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .card-title-row {
@@ -595,13 +595,13 @@ onMounted(() => {
   gap: 8px;
   font-weight: 700;
   font-size: 15px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .divider-title {
   font-size: 13px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .notification-pref-grid {
@@ -615,26 +615,26 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
 }
 
 .pref-name {
   font-weight: 600;
   font-size: 14px;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 2px;
 }
 
 .pref-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .scope-info-box {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 8px;
   padding: 14px;
   margin-bottom: 16px;
@@ -650,12 +650,12 @@ onMounted(() => {
 .scope-label {
   font-weight: 700;
   font-size: 13px;
-  color: #1e3a8a;
+  color: var(--c-accent-hover);
 }
 
 .scope-desc {
   font-size: 12px;
-  color: #3b82f6;
+  color: var(--c-accent);
   line-height: 1.5;
 }
 
@@ -666,7 +666,7 @@ onMounted(() => {
 .perm-title {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   margin-bottom: 8px;
 }
 </style>
