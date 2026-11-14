@@ -10,7 +10,7 @@
       <el-card shadow="hover" class="settings-card">
         <template #header>
           <div class="card-header-title">
-            <el-icon color="#409EFF"><Brush /></el-icon>
+            <el-icon><Brush /></el-icon>
             <span>基础外观与色彩 (Theme & Colors)</span>
           </div>
         </template>
@@ -46,7 +46,7 @@
       <el-card shadow="hover" class="settings-card">
         <template #header>
           <div class="card-header-title">
-            <el-icon color="#E6A23C"><Stamp /></el-icon>
+            <el-icon><Stamp /></el-icon>
             <span>背景安全水印配置 (Security Watermark Settings)</span>
             <el-tag size="small" type="success" effect="plain" style="margin-left: 8px;">即时全局生效</el-tag>
           </div>
@@ -132,15 +132,17 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import { useDark, useToggle } from '@vueuse/core'
+import { DEFAULT_PRIMARY, getSavedPrimaryColor, savePrimaryColor } from '../utils/theme'
 import { ElMessage } from 'element-plus'
 import { Brush, Stamp } from '@element-plus/icons-vue'
 
 const isDark = useDark()
 const toggleDark = useToggle(isDark)
 
-const primaryColor = ref('#409EFF')
+const primaryColor = ref(getSavedPrimaryColor())
 
 const themePresets = [
+  { label: '钴蓝（默认）', value: DEFAULT_PRIMARY },
   { label: '经典蓝 (Element)', value: '#409EFF' },
   { label: '极光绿 (Emerald)', value: '#10B981' },
   { label: '深邃紫 (Violet)', value: '#8B5CF6' },
@@ -152,8 +154,7 @@ const themePresets = [
 
 const handleColorChange = (color: string) => {
   if (color) {
-    document.documentElement.style.setProperty('--el-color-primary', color)
-    localStorage.setItem('primaryColor', color)
+    savePrimaryColor(color)
     ElMessage.success(`主题色已切换为 ${color}`)
   }
 }
@@ -231,11 +232,7 @@ const previewWatermarkStyle = computed(() => {
 })
 
 onMounted(() => {
-  const savedColor = localStorage.getItem('primaryColor')
-  if (savedColor) {
-    primaryColor.value = savedColor
-    document.documentElement.style.setProperty('--el-color-primary', savedColor)
-  }
+  primaryColor.value = getSavedPrimaryColor()
 
   const enabledStr = localStorage.getItem('wm_watermark_enabled')
   if (enabledStr !== null) {
@@ -268,13 +265,13 @@ onMounted(() => {
 .page-title {
   font-size: 20px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0 0 6px 0;
 }
 
 .page-subtitle {
   font-size: 13px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .settings-grid {
@@ -285,7 +282,7 @@ onMounted(() => {
 
 .settings-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .card-header-title {
@@ -294,7 +291,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 15px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .color-picker-row {
@@ -319,7 +316,7 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   transition: transform 0.2s, box-shadow 0.2s;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 .color-pill:hover {
@@ -348,7 +345,7 @@ onMounted(() => {
   font-weight: 700;
   font-family: monospace;
   font-size: 14px;
-  color: #2563eb;
+  color: var(--c-accent);
   min-width: 40px;
 }
 
@@ -362,7 +359,7 @@ onMounted(() => {
 
 .preset-title {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .preview-stage-box {
@@ -370,7 +367,7 @@ onMounted(() => {
   width: 100%;
   max-width: 580px;
   min-height: 160px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--c-border-strong);
   border-radius: 8px;
   overflow: hidden;
   display: flex;
@@ -396,23 +393,23 @@ onMounted(() => {
 }
 
 .stage-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 14px 18px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .stage-title {
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 6px;
 }
 
 .stage-desc {
   font-size: 12px;
-  color: #475569;
+  color: var(--c-text-2);
   line-height: 1.5;
   margin-bottom: 10px;
 }

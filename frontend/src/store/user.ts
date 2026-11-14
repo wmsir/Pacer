@@ -17,12 +17,24 @@ const getInitialToken = () => {
   return localStorage.getItem('wmdb_token') || localStorage.getItem('fwpt_token') || ''
 }
 
+const readStoredPermissions = (): string[] => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem('wmdb_permissions') || '[]')
+    return Array.isArray(parsed) ? parsed : []
+  } catch (e) {
+    return []
+  }
+}
+
 export const useUserStore = defineStore('user', {
   state: () => ({
     token: getInitialToken(),
-    userRole: localStorage.getItem('wmdb_role') || 'ADMIN',
-    permissions: JSON.parse(localStorage.getItem('wmdb_permissions') || '["*"]') as string[],
-    userInfo: null as any
+    // 默认按最小权限处理：以前缺省值是 ADMIN + 全部权限，新登录 / SSO 进来、还没拿到 user-info 时界面会按超级管理员渲染
+    userRole: localStorage.getItem('wmdb_role') || 'DEV',
+    permissions: readStoredPermissions(),
+    userInfo: null as any,
+    // 本次页面加载是否已经请求过 user-info（失败也只请求一次，避免每次切页都等待超时）
+    userInfoAttempted: false
   }),
   getters: {
     isAuthenticated: (state) => {
@@ -50,7 +62,10 @@ export const useUserStore = defineStore('user', {
       }
     },
     isAdmin: (state) => {
-      return state.userRole === 'ADMIN' || state.permissions.includes('*')
+      // 后端的 role 可能是多个角色用逗号拼接（如 "ADMIN, DBA"），并且会直接给出 isAdmin
+      if (state.userInfo?.isAdmin === true) return true
+      const roles = String(state.userRole || '').toUpperCase().split(/[\s,]+/)
+      return roles.includes('ADMIN') || roles.includes('ROLE_ADMIN') || state.permissions.includes('*')
     }
   },
   actions: {
@@ -64,18 +79,20 @@ export const useUserStore = defineStore('user', {
       this.userRole = 'DEV'
       this.permissions = []
       this.userInfo = null
+      this.userInfoAttempted = false
       localStorage.removeItem('wmdb_token')
       localStorage.removeItem('wmdb_role')
       localStorage.removeItem('wmdb_permissions')
     },
     async fetchUserInfo() {
       if (!this.token) return
+      this.userInfoAttempted = true
       try {
         const res: any = await request.get('/v1/auth/user-info')
         if (res.data) {
           this.userInfo = res.data
           this.userRole = res.data.role || 'DEV'
-          this.permissions = Array.isArray(res.data.permissions) ? res.data.permissions : ['*']
+          this.permissions = Array.isArray(res.data.permissions) ? res.data.permissions : []
           localStorage.setItem('wmdb_role', this.userRole)
           localStorage.setItem('wmdb_permissions', JSON.stringify(this.permissions))
         }

@@ -1,4 +1,10 @@
-/* 原先从仓库外的 ../../../design/design-tokens.css 引入，CI 中不存在导致构建失败；本项目只用到等宽字体变量，直接在下方定义 */
+/* =============================================================================
+   稳骥 PacerSQL · 全局设计系统（极简）
+   - 一套中性色（锌灰）+ 一个强调色（钴蓝），状态色只用于状态
+   - 层级靠留白、细边框和字重，不靠渐变、彩色阴影和大面积色块
+   - 所有颜色走变量：浅色 / 深色（html.dark）各一套；Element Plus 变量映射到同一套令牌
+   - 强调色可在「自定义主题」里更换，由 src/utils/theme.ts 计算明暗梯度
+   ============================================================================= */
 
 *,
 *::before,
@@ -7,34 +13,162 @@
 }
 
 :root {
-  --fwpt-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
-  /* 基础色彩系统 (基于 Slate / Indigo / Sky 顶级企业级 SaaS 配色) */
-  --primary-color: #3b82f6;
-  --primary-hover: #2563eb;
-  --primary-light: #eff6ff;
-  
-  --success-color: #10b981;
-  --warning-color: #f59e0b;
-  --danger-color: #ef4444;
-  --info-color: #64748b;
-  
-  --bg-color: #f8fafc;
-  --bg-card: #ffffff;
-  
-  --text-main: #0f172a;
-  --text-regular: #334155;
-  --text-secondary: #64748b;
-  --text-muted: #94a3b8;
-  
-  --border-color: #e2e8f0;
-  --border-light: #f1f5f9;
-  
-  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  /* ---- 中性色 ---- */
+  --c-bg: #f6f6f7;            /* 页面底色 */
+  --c-surface: #ffffff;       /* 卡片、表格、弹窗 */
+  --c-muted-bg: #fafafa;      /* 表头、卡片头等次级面 */
+  --c-subtle: #f2f2f4;        /* 悬停、输入框禁用、标签底 */
+  --c-border: #e5e5e8;
+  --c-border-strong: #d4d4d8;
+  --c-text: #18181b;
+  --c-text-2: #3f3f46;
+  --c-text-3: #71717a;
+  --c-text-4: #a1a1aa;
+
+  /* ---- 强调色（钴蓝）---- */
+  --c-accent: #2f55d4;
+  --c-accent-hover: #2445b4;
+  --c-accent-soft: #eef2fc;
+  --c-accent-border: #cdd8f6;
+  --c-on-accent: #ffffff;
+
+  /* ---- 状态色：只用于表达状态 ---- */
+  --c-success: #15803d;
+  --c-success-strong: #166534;
+  --c-success-soft: #f0fdf4;
+  --c-success-border: #bbf7d0;
+  --c-warning: #b45309;
+  --c-warning-strong: #92400e;
+  --c-warning-soft: #fffbeb;
+  --c-warning-border: #fde68a;
+  --c-danger: #dc2626;
+  --c-danger-strong: #b91c1c;
+  --c-danger-soft: #fef2f2;
+  --c-danger-border: #fecaca;
+
+  /* 代码区等始终深色的面 */
+  --c-ink-bg: #18181b;
+  --c-ink-bg-2: #27272a;
+  --c-ink-text: #e4e4e7;
+
+  /* ---- 形状、阴影、字体 ---- */
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
+  --shadow-sm: 0 1px 2px rgba(24, 24, 27, 0.05);
+  --shadow-md: 0 4px 16px -6px rgba(24, 24, 27, 0.12);
+  --shadow-lg: 0 16px 40px -12px rgba(24, 24, 27, 0.18);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --fwpt-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+  /* ---- 旧变量名：部分页面仍在使用，保留为别名 ---- */
+  --primary-color: var(--c-accent);
+  --primary-hover: var(--c-accent-hover);
+  --primary-light: var(--c-accent-soft);
+  --success-color: var(--c-success);
+  --warning-color: var(--c-warning);
+  --danger-color: var(--c-danger);
+  --info-color: var(--c-text-3);
+  --bg-color: var(--c-bg);
+  --bg-card: var(--c-surface);
+  --text-main: var(--c-text);
+  --text-regular: var(--c-text-2);
+  --text-secondary: var(--c-text-3);
+  --text-muted: var(--c-text-4);
+  --border-color: var(--c-border);
+  --border-light: var(--c-subtle);
+
+  /* ---- Element Plus 映射 ---- */
+  --el-color-primary: #2f55d4;
+  --el-color-primary-light-3: #6d88e1;
+  --el-color-primary-light-5: #97aaea;
+  --el-color-primary-light-7: #c1ccf2;
+  --el-color-primary-light-8: #d5ddf6;
+  --el-color-primary-light-9: #eaeefb;
+  --el-color-primary-dark-2: #2644aa;
+  --el-color-success: #16a34a;
+  --el-color-success-light-9: #f0fdf4;
+  --el-color-warning: #d97706;
+  --el-color-warning-light-9: #fffbeb;
+  --el-color-danger: #dc2626;
+  --el-color-danger-light-9: #fef2f2;
+  --el-color-error: #dc2626;
+  --el-color-info: #71717a;
+  --el-color-info-light-9: #f4f4f5;
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-page: var(--c-bg);
+  --el-bg-color-overlay: var(--c-surface);
+  --el-text-color-primary: var(--c-text);
+  --el-text-color-regular: var(--c-text-2);
+  --el-text-color-secondary: var(--c-text-3);
+  --el-text-color-placeholder: var(--c-text-4);
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border);
+  --el-border-color-lighter: var(--c-subtle);
+  --el-border-color-extra-light: var(--c-subtle);
+  --el-border-color-hover: var(--c-border-strong);
+  --el-fill-color: var(--c-subtle);
+  --el-fill-color-light: var(--c-muted-bg);
+  --el-fill-color-lighter: var(--c-muted-bg);
+  --el-fill-color-blank: var(--c-surface);
+  --el-border-radius-base: var(--radius-sm);
+  --el-border-radius-small: 4px;
+  --el-font-family: var(--font-sans);
+  --el-box-shadow-light: var(--shadow-md);
+  --el-box-shadow: var(--shadow-lg);
+  --el-mask-color: rgba(24, 24, 27, 0.4);
+  color-scheme: light;
+}
+
+html.dark {
+  --c-bg: #111113;
+  --c-surface: #18181b;
+  --c-muted-bg: #1c1c1f;
+  --c-subtle: #232327;
+  --c-border: #2c2c31;
+  --c-border-strong: #3f3f46;
+  --c-text: #f4f4f5;
+  --c-text-2: #d4d4d8;
+  --c-text-3: #a1a1aa;
+  --c-text-4: #71717a;
+
+  --c-accent: #7b96f0;
+  --c-accent-hover: #9cb0f4;
+  --c-accent-soft: rgba(123, 150, 240, 0.14);
+  --c-accent-border: rgba(123, 150, 240, 0.35);
+  --c-on-accent: #0e1530;
+
+  --c-success: #4ade80;
+  --c-success-strong: #86efac;
+  --c-success-soft: rgba(74, 222, 128, 0.12);
+  --c-success-border: rgba(74, 222, 128, 0.3);
+  --c-warning: #fbbf24;
+  --c-warning-strong: #fcd34d;
+  --c-warning-soft: rgba(251, 191, 36, 0.12);
+  --c-warning-border: rgba(251, 191, 36, 0.3);
+  --c-danger: #f87171;
+  --c-danger-strong: #fca5a5;
+  --c-danger-soft: rgba(248, 113, 113, 0.12);
+  --c-danger-border: rgba(248, 113, 113, 0.3);
+
+  --c-ink-bg: #0c0c0e;
+  --c-ink-bg-2: #1c1c1f;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 6px 18px -8px rgba(0, 0, 0, 0.7);
+  --shadow-lg: 0 20px 48px -16px rgba(0, 0, 0, 0.8);
+
+  --el-color-success: #4ade80;
+  --el-color-success-light-9: rgba(74, 222, 128, 0.12);
+  --el-color-warning: #fbbf24;
+  --el-color-warning-light-9: rgba(251, 191, 36, 0.12);
+  --el-color-danger: #f87171;
+  --el-color-danger-light-9: rgba(248, 113, 113, 0.12);
+  --el-color-error: #f87171;
+  --el-color-info: #a1a1aa;
+  --el-color-info-light-9: #232327;
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
 }
 
 html,
@@ -44,12 +178,14 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "WenQuanYi Micro Hei", sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
-  color: var(--text-main);
-  background-color: var(--bg-color);
+  line-height: 1.55;
+  color: var(--c-text);
+  background-color: var(--c-bg);
+  font-variant-numeric: tabular-nums;
 }
 
 #app {
@@ -61,31 +197,35 @@ body {
   text-align: left;
 }
 
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 2px;
+}
+
+code,
+kbd,
+pre,
+.mono {
+  font-family: var(--fwpt-font-mono);
+}
+
 /* ===================================================
-   统一页面容器与标题规范
+   页面容器与标题
    =================================================== */
 .page-container {
   width: 100%;
-  box-sizing: border-box;
-  background-color: var(--bg-card);
-  border-radius: var(--radius-md);
-  padding: 22px 24px;
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s ease;
-}
-
-.page-container:hover {
-  box-shadow: var(--shadow-md);
+  background-color: var(--c-surface);
+  border-radius: var(--radius-lg);
+  padding: 24px 28px;
+  border: 1px solid var(--c-border);
 }
 
 .page-title {
-  margin-top: 0;
-  margin-bottom: 6px;
-  font-size: 19px;
-  font-weight: 700;
-  color: var(--text-main);
-  letter-spacing: -0.2px;
+  margin: 0 0 4px;
+  font-size: 20px;
+  font-weight: 650;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -93,275 +233,149 @@ body {
 
 .page-subtitle {
   font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.5;
-  margin-bottom: 18px;
+  color: var(--c-text-3);
+  line-height: 1.6;
+  margin-bottom: 20px;
 }
 
-/* 统一常用文字辅助类 */
-.text-success { color: var(--success-color); }
-.text-warning { color: var(--warning-color); }
-.text-danger { color: var(--danger-color); }
-.text-primary { color: var(--primary-color); }
-.text-info { color: var(--text-secondary); }
+.text-success { color: var(--c-success); }
+.text-warning { color: var(--c-warning); }
+.text-danger { color: var(--c-danger); }
+.text-primary { color: var(--c-accent); }
+.text-info { color: var(--c-text-3); }
 
 /* ===================================================
-   Element Plus 深度组件视觉美化
+   Element Plus 组件：只调结构细节，颜色交给上面的变量
    =================================================== */
 
-/* 1. 卡片 Card (通过提升选择器特异性避免 !important 强覆盖) */
+/* 卡片 */
 body .el-card {
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-sm);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--c-border);
+  box-shadow: none;
+  background: var(--c-surface);
 }
-
-body .el-card:hover {
-  box-shadow: var(--shadow-md);
-}
-
-.el-card__header {
-  padding: 14px 20px !important;
-  border-bottom: 1px solid var(--border-color) !important;
-  background: #fafbfc;
+body .el-card.is-hover-shadow:hover,
+body .el-card.is-always-shadow { box-shadow: var(--shadow-sm); }
+body .el-card__header {
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--c-border);
   font-weight: 600;
-  font-size: 14.5px;
+  font-size: 14px;
+  color: var(--c-text);
 }
 
-/* 2. 表格 Table */
-.el-table {
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  border: 1px solid var(--border-color) !important;
-}
-
-.el-table th.el-table__cell {
-  background-color: #f8fafc !important;
-  color: #475569 !important;
-  font-weight: 600 !important;
-  font-size: 13px !important;
-  border-bottom: 1px solid var(--border-color) !important;
-}
-
-.el-table td.el-table__cell {
-  border-bottom: 1px solid var(--border-light) !important;
+/* 表格：去掉外框，只留横线 */
+body .el-table {
+  --el-table-border-color: var(--c-border);
+  --el-table-header-bg-color: var(--c-muted-bg);
+  --el-table-header-text-color: var(--c-text-3);
+  --el-table-row-hover-bg-color: var(--c-muted-bg);
+  --el-table-tr-bg-color: var(--c-surface);
+  --el-table-bg-color: var(--c-surface);
+  border-radius: var(--radius-md);
   font-size: 13px;
-  padding: 10px 0 !important;
 }
-
-.el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
-  background-color: #fafbfc;
+body .el-table th.el-table__cell {
+  font-weight: 500;
+  font-size: 12.5px;
 }
+body .el-table td.el-table__cell { padding: 11px 0; }
+body .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell { background: var(--c-muted-bg); }
 
-.el-table .el-table__body tr:hover > td.el-table__cell {
-  background-color: #f1f5f9 !important;
-}
-
-/* 3. 按钮 Button 体系规范（确保所有场景下文字与背景高对比度清晰可见） */
-.el-button {
+/* 按钮 */
+body .el-button {
   font-weight: 500;
   border-radius: var(--radius-sm);
-  transition: all 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: none;
+}
+body .el-button--primary:not(.is-link):not(.is-text):not(.is-plain) {
+  --el-button-text-color: var(--c-on-accent);
+  --el-button-hover-text-color: var(--c-on-accent);
+  --el-button-active-text-color: var(--c-on-accent);
+}
+body .el-button.is-link,
+body .el-button.is-text {
+  font-weight: 500;
+}
+body .el-button.is-text:not(.is-disabled):hover,
+body .el-button.is-link:not(.is-disabled):hover { background-color: var(--c-subtle); }
+body .el-button.is-plain {
+  --el-button-bg-color: var(--c-surface);
 }
 
-.el-button:active {
-  transform: scale(0.97);
+/* 输入与选择 */
+body .el-input__wrapper,
+body .el-select__wrapper,
+body .el-textarea__inner {
+  box-shadow: 0 0 0 1px var(--c-border) inset;
+  background-color: var(--c-surface);
+}
+body .el-input__wrapper:hover,
+body .el-select__wrapper:hover,
+body .el-textarea__inner:hover { box-shadow: 0 0 0 1px var(--c-border-strong) inset; }
+body .el-input__wrapper.is-focus,
+body .el-select__wrapper.is-focused,
+body .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--el-color-primary) inset, 0 0 0 3px var(--el-color-primary-light-9);
 }
 
-/* 3.1 实心主按钮 (Solid Primary) - 确保文字为纯正高对比度白色 */
-.el-button--primary:not(.is-link):not(.is-text):not(.is-plain) {
-  background-color: var(--primary-color) !important;
-  border-color: var(--primary-color) !important;
-  color: #ffffff !important;
-}
-
-.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):hover,
-.el-button--primary:not(.is-link):not(.is-text):not(.is-plain):focus {
-  background-color: var(--primary-hover) !important;
-  border-color: var(--primary-hover) !important;
-  color: #ffffff !important;
-  box-shadow: 0 4px 10px rgba(59, 130, 246, 0.25);
-}
-
-/* 3.2 链接型按钮 (Link / Text) - 彻底移除实心底色，确保高对比度文字与柔和悬浮态 */
-.el-button.is-link,
-.el-button.is-text {
-  background-color: transparent !important;
-  border-color: transparent !important;
-  padding: 4px 8px !important;
-  height: auto !important;
-  font-weight: 600 !important;
-}
-
-.el-button--primary.is-link,
-.el-button--primary.is-text {
-  color: #2563eb !important;
-}
-.el-button--primary.is-link:hover,
-.el-button--primary.is-text:hover {
-  color: #1d4ed8 !important;
-  background-color: #eff6ff !important;
-  border-radius: 4px;
-}
-
-.el-button--success.is-link,
-.el-button--success.is-text {
-  color: #059669 !important;
-}
-.el-button--success.is-link:hover,
-.el-button--success.is-text:hover {
-  color: #047857 !important;
-  background-color: #ecfdf5 !important;
-  border-radius: 4px;
-}
-
-.el-button--warning.is-link,
-.el-button--warning.is-text {
-  color: #d97706 !important;
-}
-.el-button--warning.is-link:hover,
-.el-button--warning.is-text:hover {
-  color: #b45309 !important;
-  background-color: #fffbeb !important;
-  border-radius: 4px;
-}
-
-.el-button--danger.is-link,
-.el-button--danger.is-text {
-  color: #dc2626 !important;
-}
-.el-button--danger.is-link:hover,
-.el-button--danger.is-text:hover {
-  color: #b91c1c !important;
-  background-color: #fef2f2 !important;
-  border-radius: 4px;
-}
-
-/* 3.3 朴素型按钮 (Plain) */
-.el-button--primary.is-plain {
-  color: #2563eb !important;
-  background-color: #eff6ff !important;
-  border-color: #bfdbfe !important;
-}
-.el-button--primary.is-plain:hover {
-  color: #ffffff !important;
-  background-color: #2563eb !important;
-  border-color: #2563eb !important;
-}
-
-.el-button--success.is-plain {
-  color: #059669 !important;
-  background-color: #ecfdf5 !important;
-  border-color: #a7f3d0 !important;
-}
-.el-button--success.is-plain:hover {
-  color: #ffffff !important;
-  background-color: #059669 !important;
-  border-color: #059669 !important;
-}
-
-.el-button--danger.is-plain {
-  color: #dc2626 !important;
-  background-color: #fef2f2 !important;
-  border-color: #fecaca !important;
-}
-.el-button--danger.is-plain:hover {
-  color: #ffffff !important;
-  background-color: #dc2626 !important;
-  border-color: #dc2626 !important;
-}
-
-/* 4. 输入框与下拉选择 Input & Select */
-.el-input__wrapper,
-.el-select__wrapper {
-  border-radius: var(--radius-sm) !important;
-  box-shadow: 0 0 0 1px var(--border-color) inset !important;
-  transition: all 0.2s ease !important;
-}
-
-.el-input__wrapper:hover,
-.el-select__wrapper:hover {
-  box-shadow: 0 0 0 1px #94a3b8 inset !important;
-}
-
-.el-input__wrapper.is-focus,
-.el-select__wrapper.is-focused {
-  box-shadow: 0 0 0 1px var(--primary-color) inset, 0 0 0 3px rgba(59, 130, 246, 0.15) !important;
-}
-
-/* 5. 标签 Tag */
-.el-tag {
+/* 标签：浅底、无边框 */
+body .el-tag {
   border-radius: 4px;
   font-weight: 500;
-  padding: 0 8px;
+  border-color: transparent;
 }
+body .el-tag--dark { border-color: transparent; }
+body .el-tag.el-tag--info:not(.el-tag--dark) { background: var(--c-subtle); color: var(--c-text-2); }
 
-.el-tag--small {
-  height: 22px;
-  line-height: 20px;
+/* 弹窗 */
+body .el-dialog {
+  --el-dialog-border-radius: var(--radius-lg);
+  --el-dialog-padding-primary: 24px;
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-lg);
 }
+body .el-dialog__header { padding-bottom: 12px; }
+body .el-dialog__title { font-size: 16px; font-weight: 600; color: var(--c-text); }
+body .el-drawer { --el-drawer-padding-primary: 24px; }
 
-/* 6. 对话框 Dialog */
-.el-dialog {
-  border-radius: var(--radius-lg) !important;
-  overflow: hidden;
-  box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
-}
+/* 标签页 */
+body .el-tabs__item { font-weight: 500; }
+body .el-tabs__nav-wrap::after { height: 1px; background-color: var(--c-border); }
 
-.el-dialog__header {
-  padding: 18px 24px 14px 24px !important;
-  margin-right: 0 !important;
-  border-bottom: 1px solid var(--border-color);
-  background: #fafbfc;
-}
-
-.el-dialog__title {
-  font-size: 16px !important;
-  font-weight: 700 !important;
-  color: var(--text-main) !important;
-}
-
-.el-dialog__body {
-  padding: 24px !important;
-}
-
-.el-dialog__footer {
-  padding: 14px 24px 18px 24px !important;
-  border-top: 1px solid var(--border-color);
-  background: #fafbfc;
-}
-
-/* 7. 分页 Pagination */
-.el-pagination {
-  margin-top: 18px;
+/* 分页 */
+body .el-pagination {
+  margin-top: 20px;
   display: flex;
   justify-content: flex-end;
 }
 
+/* 消息、下拉、弹出层 */
+body .el-message { border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
+body .el-popper.is-light,
+body .el-dropdown__popper.el-popper,
+body .el-select__popper.el-popper {
+  border-color: var(--c-border);
+  box-shadow: var(--shadow-md);
+}
+body .el-empty__description p { color: var(--c-text-3); }
+
 /* ===================================================
-   优化全站滚动条样式
+   滚动条
    =================================================== */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--c-text-4) 45%, transparent);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.7);
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
+::-webkit-scrollbar-thumb:hover { background-color: var(--c-text-4); }
+::-webkit-scrollbar-track { background: transparent; }
 
 /* ===================================================
-   配速 Pacer 统一工单详情头部与 SQL 代码区规范
+   工单详情头部与 SQL 代码区
    =================================================== */
 .pacer-detail-header {
   display: flex;
@@ -370,20 +384,23 @@ body .el-card:hover {
   justify-content: space-between;
   gap: 12px;
   padding: 16px 20px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg);
   margin-bottom: 16px;
 }
 
 .pacer-sql-code {
-  font-family: var(--fwpt-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-family: var(--fwpt-font-mono);
   font-size: 13px;
-  line-height: 1.6;
-  background: #0f172a;
-  color: #e2e8f0;
+  line-height: 1.65;
+  background: var(--c-ink-bg);
+  color: var(--c-ink-text);
   padding: 14px 16px;
   border-radius: var(--radius-md);
   overflow-x: auto;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}

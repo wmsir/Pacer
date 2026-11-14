@@ -1,33 +1,12 @@
 <template>
   <div class="login-wrapper">
-    <!-- 背景流光与科技网格点缀 -->
-    <div class="ambient-glow glow-1"></div>
-    <div class="ambient-glow glow-2"></div>
-    <div class="ambient-glow glow-3"></div>
-    <div class="cyber-grid-overlay"></div>
-
     <!-- 顶栏微导航 -->
     <header class="top-nav-bar">
       <div class="nav-brand">
-        <div class="nav-brand-logo">
-          <span class="logo-emoji">🐎</span>
-        </div>
-        <div class="nav-brand-text">
-          <span class="brand-title">稳骥 PacerSQL</span>
-          <span class="brand-badge">Enterprise v2.8</span>
-        </div>
+        <div class="nav-brand-logo" aria-hidden="true">骥</div>
+        <span class="brand-title">稳骥 PacerSQL</span>
       </div>
-      <div class="nav-status-group">
-        <router-link to="/portal" class="env-pill portal-link" style="text-decoration: none; color: inherit; display: flex; align-items: center; gap: 4px; background: rgba(59, 130, 246, 0.15); border-color: rgba(59, 130, 246, 0.3);">
-          <span>🌐</span>
-          <span>fwpt.cn 旗舰门户</span>
-        </router-link>
-        <div class="status-indicator">
-          <span class="pulse-dot"></span>
-          <span class="status-text">生产安全网关集群正常</span>
-        </div>
-        <div class="env-pill">RDS MySQL 8.0 联动在线</div>
-      </div>
+      <router-link to="/portal" class="portal-link">返回门户</router-link>
     </header>
 
     <!-- 主展示与登录双栏区域 -->
@@ -35,25 +14,17 @@
       <!-- 左栏：产品定位与核心能力展台 -->
       <section class="hero-showcase-panel">
         <div class="hero-header">
-          <div class="hero-tag">
-            <span class="tag-sparkle">✨</span>
-            <span>“骥”为千里良驹 · “稳”压倒一切</span>
-          </div>
           <h1 class="hero-headline">
-            稳骥 PacerSQL<br />
-            <span class="gradient-text">企业级高可用数据库变更自治平台</span>
+            让每一次数据库变更<br />都可审、可控、可回溯
           </h1>
           <p class="hero-description">
-            Pacer（匀速平稳赛马）之律动，直击生产高可用痛点。融合 AI 深度预检、SpEL 智能路由与灰度分批流式引擎，保障百万级核心数据库稳健运行。
+            SQL 工单、AI 预检、分级审批与分批执行，在一个平台里完成。
           </p>
         </div>
 
         <!-- 4 大技术特性矩阵 -->
         <div class="feature-matrix-grid">
           <div class="feature-card">
-            <div class="feature-icon-box icon-shield">
-              <span>🛡️</span>
-            </div>
             <div class="feature-info">
               <div class="feature-title">SQL 智能预检与安全网关</div>
               <div class="feature-desc">Dry-Run 影响行数深度推导比对，高危 DDL/DML 自动阻断与偏差告警</div>
@@ -61,19 +32,13 @@
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon-box icon-workflow">
-              <span>⛓️</span>
-            </div>
             <div class="feature-info">
               <div class="feature-title">动态多级排他审批流水线</div>
-              <div class="feature-desc">业务初审 ➔ 核心 DBA 复核 ➔ 安全总监终审，基于规则灵活条件分流</div>
+              <div class="feature-desc">业务初审、DBA 复核、安全终审，按规则自动分流</div>
             </div>
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon-box icon-speed">
-              <span>⚡</span>
-            </div>
             <div class="feature-info">
               <div class="feature-title">灰度分批与定时窗口调度</div>
               <div class="feature-desc">低峰期自动流式下发，大批量 DML 平滑提交，杜绝长事务锁表与从库延迟</div>
@@ -81,9 +46,6 @@
           </div>
 
           <div class="feature-card">
-            <div class="feature-icon-box icon-bell">
-              <span>🔔</span>
-            </div>
             <div class="feature-info">
               <div class="feature-title">全渠道消息与加急催办总线</div>
               <div class="feature-desc">企业微信工作消息、飞书富文本互动卡片、钉钉加急群通知多端即刻触达</div>
@@ -111,10 +73,8 @@
         <div class="login-card-glass">
           <div class="card-header">
             <div class="card-title-row">
-              <h2 class="card-title">欢迎登录</h2>
-              <span class="card-title-badge">用户控制台</span>
+              <h2 class="card-title">登录</h2>
             </div>
-            <p class="card-subtitle">请选择身份验证方式接入数据库变更管控中心</p>
           </div>
 
           <!-- 定制胶囊式选项卡 (Segmented Pills) -->
@@ -326,7 +286,7 @@
 
                   <!-- 扫码成功待确认遮罩 -->
                   <div class="qr-mask scanned-mask" v-else-if="qrInfo?.status === 'SCANNED'">
-                    <el-icon :size="32" color="#10b981"><Check /></el-icon>
+                    <el-icon :size="32"><Check /></el-icon>
                     <span class="mask-text">手机端已识别</span>
                     <span class="mask-sub">请在移动终端点击确认授权</span>
                   </div>
@@ -344,8 +304,8 @@
 
                 <!-- 会话授权码可直接在移动端录入 -->
                 <div v-if="qrInfo && qrInfo.qrKey" style="margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 11.5px; background: rgba(30,41,59,0.06); padding: 5px 12px; border-radius: 6px;">
-                  <span style="color: #64748b;">授权密钥:</span>
-                  <code style="font-weight: bold; color: #0284c7; font-family: monospace; font-size: 12px;">{{ qrInfo.qrKey }}</code>
+                  <span style="color: var(--c-text-3);">授权密钥:</span>
+                  <code style="font-weight: bold; color: var(--c-accent); font-family: monospace; font-size: 12px;">{{ qrInfo.qrKey }}</code>
                   <el-button link type="primary" size="small" @click="copyQrKey(qrInfo.qrKey)" style="font-size: 11px; padding: 0 4px;">复制</el-button>
                 </div>
 
@@ -370,7 +330,7 @@
           <!-- 精致快速演练账号选择栏 (Horizontal Role Pills) -->
           <div class="fast-account-strip">
             <div class="strip-header">
-              <span class="strip-title">🎯 快捷身份一键切换 (预置演练账号)</span>
+              <span class="strip-title">演示账号</span>
               <span class="strip-hint">点击填入</span>
             </div>
             <div class="role-chips-grid">
@@ -380,7 +340,6 @@
                 :class="{ active: selectedRoleKey === 'admin' }"
                 @click="fillTestRole('admin', 'testadmin1', '123456')"
               >
-                <span class="role-icon">👑</span>
                 <span class="role-label">超级管理员</span>
               </button>
               <button
@@ -389,7 +348,6 @@
                 :class="{ active: selectedRoleKey === 'lead' }"
                 @click="fillTestRole('lead', 'testadmin2', '123456')"
               >
-                <span class="role-icon">👔</span>
                 <span class="role-label">开发组长</span>
               </button>
               <button
@@ -398,7 +356,6 @@
                 :class="{ active: selectedRoleKey === 'dba' }"
                 @click="fillTestRole('dba', 'testadmin3', '123456')"
               >
-                <span class="role-icon">🛡️</span>
                 <span class="role-label">核心 DBA</span>
               </button>
               <button
@@ -407,7 +364,6 @@
                 :class="{ active: selectedRoleKey === 'audit' }"
                 @click="fillTestRole('audit', 'test_auditor', '123456')"
               >
-                <span class="role-icon">🔍</span>
                 <span class="role-label">安全合规官</span>
               </button>
               <button
@@ -416,7 +372,6 @@
                 :class="{ active: selectedRoleKey === 'dev' }"
                 @click="fillTestRole('dev', 'test_dev', '123456')"
               >
-                <span class="role-icon">💻</span>
                 <span class="role-label">开发工程师</span>
               </button>
             </div>
@@ -424,28 +379,19 @@
 
           <!-- 底部辅助功能：注册新账号 -->
           <div class="card-footer-actions">
-            <span class="footer-hint">暂无内部权限凭证？</span>
+            <span class="footer-hint">还没有账号？</span>
             <el-button link type="primary" class="register-link" @click="registerDialogVisible = true">
-              申请注册新账号 ➔
+              申请注册
             </el-button>
           </div>
 
-          <div class="security-meta-bar">
-            <span>🔒 国密 SM2/SM4 传输防护</span>
-            <span>·</span>
-            <span>TLS 1.3</span>
-            <span>·</span>
-            <span>延迟 &lt; 15ms</span>
-          </div>
         </div>
       </section>
     </main>
 
     <!-- 页脚版权信息 -->
     <footer class="bottom-copyright-bar">
-      <span>© 2026 稳骥 PacerSQL · 企业级高可用数据库变更自治云平台 · fwpt.cn</span>
-      <span class="pipe-split">|</span>
-      <span>粤ICP备2025000000号-1</span>
+      <span>© {{ new Date().getFullYear() }} 稳骥 PacerSQL</span>
     </footer>
 
     <!-- 用户多渠道注册弹窗 -->
@@ -990,451 +936,154 @@ onUnmounted(() => {
 <style scoped>
 /* 整个页面主容器：清爽明亮白底、柔和空气感护眼 */
 .login-wrapper {
-  position: relative;
   min-height: 100vh;
-  width: 100%;
-  background: #f8fafc;
-  overflow-x: hidden;
   display: flex;
   flex-direction: column;
-  color: #0f172a;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--c-bg);
+  color: var(--c-text);
 }
 
-/* 柔和科技流光微晕背景（低饱和轻柔明亮） */
-.ambient-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(140px);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.glow-1 {
-  width: 650px;
-  height: 650px;
-  top: -150px;
-  left: -100px;
-  background: radial-gradient(circle, rgba(59, 130, 246, 0.09) 0%, rgba(59, 130, 246, 0) 70%);
-}
-
-.glow-2 {
-  width: 600px;
-  height: 600px;
-  bottom: -100px;
-  right: -80px;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, rgba(99, 102, 241, 0) 70%);
-}
-
-.glow-3 {
-  width: 500px;
-  height: 500px;
-  top: 40%;
-  left: 45%;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.06) 0%, rgba(16, 185, 129, 0) 70%);
-}
-
-/* 细腻网格轻底纹 */
-.cyber-grid-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-image: 
-    linear-gradient(to right, rgba(15, 23, 42, 0.025) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(15, 23, 42, 0.025) 1px, transparent 1px);
-  background-size: 40px 40px;
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* 顶部品牌微导航：高通透白净玻璃 */
+/* 顶栏 */
 .top-nav-bar {
-  position: relative;
-  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 48px;
-  border-bottom: 1px solid #e2e8f0;
-  background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(16px);
+  padding: 20px 40px;
 }
-
-.nav-brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
+.nav-brand { display: flex; align-items: center; gap: 10px; }
 .nav-brand-logo {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #2563eb 0%, #38bdf8 100%);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--c-text);
+  color: var(--c-surface);
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
-}
-
-.logo-emoji {
-  font-size: 20px;
-}
-
-.nav-brand-text {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.brand-title {
-  font-size: 18px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.3px;
-  color: #0f172a;
 }
+.brand-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+.portal-link { font-size: 13px; color: var(--c-text-3); text-decoration: none; }
+.portal-link:hover { color: var(--c-text); }
 
-.brand-badge {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 20px;
-  background: #eff6ff;
-  color: #2563eb;
-  border: 1px solid #bfdbfe;
-  font-weight: 600;
-}
-
-.nav-status-group {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.status-indicator {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: #475569;
-}
-
-.pulse-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background-color: #10b981;
-  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.25);
-  animation: pulse-ring 2s infinite ease-in-out;
-}
-
-@keyframes pulse-ring {
-  0% { transform: scale(0.95); opacity: 0.7; }
-  50% { transform: scale(1.2); opacity: 1; }
-  100% { transform: scale(0.95); opacity: 0.7; }
-}
-
-.env-pill {
-  font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  color: #334155;
-  font-weight: 500;
-}
-
-/* 主展示区域 */
+/* 主体：左侧介绍 + 右侧登录卡 */
 .login-main-stage {
-  position: relative;
-  z-index: 10;
   flex: 1;
-  max-width: 1320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(40px, 8vw, 120px);
+  padding: 32px 40px 56px;
+  max-width: 1160px;
   width: 100%;
   margin: 0 auto;
-  padding: 36px 48px 24px;
   box-sizing: border-box;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 60px;
 }
-
-/* 左侧品牌展台：明亮大方、层次分明 */
-.hero-showcase-panel {
-  flex: 1.15;
-  max-width: 680px;
-}
-
-.hero-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: 30px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  color: #2563eb;
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 20px;
-}
-
+.hero-showcase-panel { flex: 1; max-width: 520px; }
 .hero-headline {
-  font-size: 38px;
-  font-weight: 800;
+  margin: 0 0 14px;
+  font-size: 34px;
   line-height: 1.25;
-  margin: 0 0 16px;
-  color: #0f172a;
-  letter-spacing: -0.5px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  color: var(--c-text);
 }
-
-.gradient-text {
-  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
 .hero-description {
-  font-size: 15px;
-  line-height: 1.65;
-  color: #475569;
   margin: 0 0 32px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--c-text-3);
 }
-
-/* 特性矩阵卡片：白净微润卡片 */
 .feature-matrix-grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 16px;
-  margin-bottom: 32px;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--c-border);
 }
-
-.feature-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 16px 18px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-  transition: all 0.25s ease;
-}
-
-.feature-card:hover {
-  background: #ffffff;
-  border-color: #93c5fd;
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.08);
-}
-
-.feature-icon-box {
-  width: 38px;
-  height: 38px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  flex-shrink: 0;
-}
-
-.icon-shield { background: #eff6ff; border: 1px solid #dbeafe; }
-.icon-workflow { background: #f5f3ff; border: 1px solid #ede9fe; }
-.icon-speed { background: #fffbeb; border: 1px solid #fef3c7; }
-.icon-bell { background: #ecfdf5; border: 1px solid #d1fae5; }
-
-.feature-title {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: #1e293b;
-  margin-bottom: 4px;
-}
-
-.feature-desc {
-  font-size: 12px;
-  line-height: 1.5;
-  color: #64748b;
-}
-
-/* 底部引擎标签 */
+.feature-title { font-size: 14px; font-weight: 600; color: var(--c-text); margin-bottom: 4px; }
+.feature-desc { font-size: 13px; line-height: 1.6; color: var(--c-text-3); }
 .db-ecosystem-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding-top: 20px;
-  border-top: 1px solid #e2e8f0;
-}
-
-.db-eco-label {
-  font-size: 12px;
-  color: #64748b;
-  font-weight: 600;
-}
-
-.db-badges-wrap {
+  margin-top: 28px;
   display: flex;
   flex-wrap: wrap;
+  align-items: baseline;
   gap: 6px;
+  font-size: 12.5px;
+  color: var(--c-text-4);
 }
+.db-badges-wrap { display: contents; }
+.db-badge { color: var(--c-text-3); }
+.db-badge:not(:last-child)::after { content: "、"; color: var(--c-text-4); }
 
-.db-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  color: #475569;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
-/* 右侧登录卡片容器：明亮纯净高光立体 */
-.login-card-panel {
-  flex: 0.95;
-  max-width: 480px;
-  width: 100%;
-}
-
+.login-card-panel { width: 400px; flex-shrink: 0; }
 .login-card-glass {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 20px;
-  padding: 32px 30px 26px;
-  box-shadow: 
-    0 20px 40px -15px rgba(15, 23, 42, 0.08),
-    0 1px 3px rgba(0, 0, 0, 0.03);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-lg, 14px);
+  padding: 32px 32px 24px;
+  box-shadow: var(--shadow-md);
 }
+.card-header { margin-bottom: 18px; }
+.card-title { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.02em; }
 
-.card-header {
-  margin-bottom: 20px;
-}
-
-.card-title-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 6px;
-}
-
-.card-title {
-  font-size: 24px;
-  font-weight: 800;
-  color: #0f172a;
-  margin: 0;
-  letter-spacing: 0.3px;
-}
-
-.card-title-badge {
-  font-size: 11.5px;
-  font-weight: 600;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  padding: 2px 8px;
-  border-radius: 20px;
-}
-
-.card-subtitle {
-  font-size: 13px;
-  color: #64748b;
-  margin: 0;
-}
-
-/* 现代胶囊选项卡：白底柔灰分段器 */
+/* 登录方式：下划线选项卡 */
 .segmented-tabs-bar {
   display: flex;
-  background: #f1f5f9;
-  padding: 4px;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  gap: 20px;
+  border-bottom: 1px solid var(--c-border);
   margin-bottom: 22px;
-  gap: 4px;
 }
-
 .tab-pill-btn {
-  flex: 1;
   display: flex;
   align-items: center;
-  justify-content: center;
   gap: 6px;
-  padding: 8px 12px;
-  background: transparent;
+  padding: 8px 0 10px;
+  margin-bottom: -1px;
+  background: none;
   border: none;
-  border-radius: 8px;
-  color: #64748b;
-  font-size: 13px;
-  font-weight: 600;
+  border-bottom: 2px solid transparent;
+  color: var(--c-text-3);
+  font: inherit;
+  font-size: 13.5px;
   cursor: pointer;
-  transition: all 0.2s ease;
 }
+.tab-pill-btn .el-icon { display: none; }
+.tab-pill-btn:hover { color: var(--c-text); }
+.tab-pill-btn.active { color: var(--c-text); font-weight: 600; border-bottom-color: var(--c-text); }
+.tab-pill-btn:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
 
-.tab-pill-btn:hover {
-  color: #0f172a;
-}
+.tab-content-fade { animation: fadeIn 0.2s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-.tab-pill-btn.active {
-  background: #ffffff;
-  color: #2563eb;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.tab-content-fade {
-  animation: fadeIn 0.25s ease;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-/* 表单定制输入框：高质感轻盈边框 */
 .custom-login-form :deep(.el-form-item) {
   margin-bottom: 18px;
 }
 
 .custom-login-form :deep(.el-form-item__label) {
-  color: #334155;
+  color: var(--c-text-2);
   font-size: 13px;
   font-weight: 600;
   padding-bottom: 6px;
 }
 
 .tech-input :deep(.el-input__wrapper) {
-  background: #ffffff !important;
-  border: 1px solid #d1d5db !important;
-  box-shadow: none !important;
-  border-radius: 10px !important;
-  padding: 6px 14px;
-  transition: all 0.2s;
-}
-
-.tech-input :deep(.el-input__wrapper:hover) {
-  border-color: #93c5fd !important;
-}
-
-.tech-input :deep(.el-input__wrapper.is-focus) {
-  border-color: #2563eb !important;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15) !important;
+  border-radius: var(--radius-sm) !important;
+  padding: 4px 12px;
 }
 
 .tech-input :deep(.el-input__inner) {
-  color: #0f172a !important;
+  color: var(--c-text) !important;
   font-size: 14px;
 }
 
 .tech-input :deep(.el-input__inner::placeholder) {
-  color: #94a3b8 !important;
+  color: var(--c-text-4) !important;
   font-size: 13px;
 }
 
-.tech-input :deep(.el-input__prefix-inner) {
-  color: #2563eb;
-  font-size: 16px;
-}
+.tech-input :deep(.el-input__prefix-inner) { color: var(--c-text-4); }
 
 .code-input-row {
   display: flex;
@@ -1448,37 +1097,17 @@ onUnmounted(() => {
 
 .send-code-btn {
   flex-shrink: 0;
-  width: 120px;
+  width: 112px;
+  height: 40px;
+}
+
+.tech-submit-btn {
+  width: 100%;
   height: 42px;
-  border-radius: 10px;
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 600;
 }
 
-/* 提交按钮：高级品牌蓝渐变高光 */
-.tech-submit-btn {
-  width: 100%;
-  height: 44px;
-  border-radius: 10px;
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 1px;
-  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
-  border: none !important;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
-  transition: all 0.2s;
-}
-
-.tech-submit-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45);
-}
-
-.tech-submit-btn:active {
-  transform: translateY(0);
-}
-
-/* 扫码登录区 */
 .qr-login-container {
   display: flex;
   flex-direction: column;
@@ -1488,10 +1117,10 @@ onUnmounted(() => {
 
 .qr-channel-selector {
   display: flex;
-  background: #f1f5f9;
+  background: var(--c-subtle);
   padding: 4px;
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   margin-bottom: 16px;
   width: 100%;
 }
@@ -1502,7 +1131,7 @@ onUnmounted(() => {
   padding: 7px 4px;
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--c-text-3);
   cursor: pointer;
   border-radius: 7px;
   transition: all 0.2s;
@@ -1513,9 +1142,9 @@ onUnmounted(() => {
 }
 
 .channel-tab.active {
-  background: #ffffff;
-  color: #2563eb;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  background: var(--c-surface);
+  color: var(--c-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .qr-card-wrapper {
@@ -1529,10 +1158,10 @@ onUnmounted(() => {
   width: 180px;
   height: 180px;
   padding: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 14px;
-  background: #ffffff;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
   position: relative;
   box-sizing: border-box;
 }
@@ -1559,9 +1188,9 @@ onUnmounted(() => {
   transform: translate(-50%, -50%);
   width: 32px;
   height: 32px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 7px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: var(--shadow-sm);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1589,8 +1218,8 @@ onUnmounted(() => {
 }
 
 .scanned-mask {
-  background: rgba(255, 255, 255, 0.95);
-  color: #1e293b;
+  background: color-mix(in srgb, var(--c-surface) 95%, transparent);
+  color: var(--c-text);
 }
 
 .mask-text {
@@ -1610,12 +1239,12 @@ onUnmounted(() => {
 
 .qr-tip-text {
   font-size: 13px;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .qr-expire-tag {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 4px;
 }
 
@@ -1629,172 +1258,54 @@ onUnmounted(() => {
 
 /* 快捷演练账号选择栏：清爽卡片色 */
 .fast-account-strip {
-  margin-top: 18px;
-  padding: 12px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--c-border);
 }
-
-.strip-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.strip-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: #475569;
-}
-
-.strip-hint {
-  font-size: 11px;
-  color: #2563eb;
-  font-weight: 500;
-}
-
-.role-chips-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
+.strip-header { display: flex; justify-content: space-between; margin-bottom: 8px; }
+.strip-title { font-size: 12.5px; color: var(--c-text-3); }
+.strip-hint { font-size: 12px; color: var(--c-text-4); }
+.role-chips-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 .role-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 5px 9px;
-  border-radius: 6px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  color: #475569;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  color: var(--c-text-2);
+  font: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.2s;
 }
+.role-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
+.role-chip.active { border-color: var(--c-text); color: var(--c-text); font-weight: 600; }
 
-.role-chip:hover {
-  background: #eff6ff;
-  border-color: #93c5fd;
-  color: #2563eb;
-}
-
-.role-chip.active {
-  background: #dbeafe;
-  border-color: #3b82f6;
-  color: #1d4ed8;
-  font-weight: 600;
-}
-
-.role-icon {
-  font-size: 12px;
-}
-
-.role-label {
-  font-size: 11.5px;
-}
-
-/* 底部辅助链接 */
 .card-footer-actions {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 6px;
-  margin-top: 14px;
-  font-size: 12.5px;
+  gap: 4px;
+  margin-top: 18px;
+  font-size: 13px;
 }
+.footer-hint { color: var(--c-text-3); }
+.register-link { font-size: 13px; font-weight: 600; }
 
-.footer-hint {
-  color: #64748b;
-}
-
-.register-link {
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.security-meta-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid #f1f5f9;
-  font-size: 11px;
-  color: #94a3b8;
-}
-
-/* 页脚版权：清亮微边界 */
 .bottom-copyright-bar {
-  position: relative;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 16px 20px;
-  border-top: 1px solid #e2e8f0;
+  padding: 18px 20px;
+  text-align: center;
   font-size: 12px;
-  color: #64748b;
-  background: #ffffff;
+  color: var(--c-text-4);
 }
 
-.pipe-split {
-  opacity: 0.4;
+@media (max-width: 960px) {
+  .login-main-stage { flex-direction: column-reverse; align-items: stretch; padding: 16px 20px 40px; gap: 40px; }
+  .login-card-panel { width: 100%; max-width: 420px; margin: 0 auto; }
+  .hero-showcase-panel { max-width: 420px; margin: 0 auto; }
+  .hero-headline { font-size: 26px; }
 }
-
-/* 响应式适配 */
-@media (max-width: 1080px) {
-  .login-main-stage {
-    flex-direction: column;
-    padding: 30px 24px;
-    gap: 36px;
-  }
-  
-  .hero-showcase-panel {
-    max-width: 100%;
-    text-align: center;
-  }
-
-  .hero-tag {
-    margin: 0 auto 16px;
-  }
-
-  .hero-headline {
-    font-size: 28px;
-  }
-
-  .feature-matrix-grid {
-    text-align: left;
-  }
-
-  .db-ecosystem-footer {
-    justify-content: center;
-  }
-
-  .login-card-panel {
-    max-width: 480px;
-  }
-}
-
 @media (max-width: 640px) {
-  .top-nav-bar {
-    padding: 14px 20px;
-  }
-
-  .nav-status-group {
-    display: none;
-  }
-
-  .feature-matrix-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .login-card-glass {
-    padding: 24px 18px;
-  }
+  .top-nav-bar { padding: 16px 20px; }
+  .feature-matrix-grid { grid-template-columns: 1fr; }
+  .login-card-glass { padding: 24px 20px 20px; }
 }
 </style>

@@ -1,158 +1,39 @@
 <template>
   <div class="dashboard-container">
-    <!-- 1. 顶层清爽护眼专属欢迎横幅与快捷操作台 -->
+    <!-- 1. 问候与常用操作 -->
     <div class="welcome-hero-banner">
       <div class="welcome-left">
-        <div class="welcome-badge">
-          <span class="pulse-green-dot"></span>
-          <span>云原生数据库自治平台 · 生产网关集群正常运行中</span>
-        </div>
-        <h1 class="welcome-heading">
-          早安，{{ userStore.userInfo?.realName || userStore.userInfo?.username || '管理员' }}！欢迎回到 稳骥 PacerSQL 智能云
-        </h1>
+        <h1 class="welcome-heading">{{ greeting }}，{{ userStore.userInfo?.realName || userStore.userInfo?.username || userStore.realName || '你好' }}</h1>
         <p class="welcome-subtext">
-          已全天候纳管多源异构数据库实例，8 大核心业务资源组平稳运行，智能预检实时守护生产变更安全。
+          <template v-if="stats.pendingTickets">有 <b>{{ stats.pendingTickets }}</b> 张工单在等待审批。</template>
+          <template v-else>当前没有等待审批的工单。</template>
         </p>
       </div>
 
       <div class="welcome-actions">
-        <el-button type="primary" size="default" :icon="Plus" class="hero-btn primary-glow" @click="router.push('/ticket-create')">
-          新建 SQL 工单
-        </el-button>
-        <el-button size="default" :icon="Search" class="hero-btn ghost-btn" @click="router.push('/data-query')">
-          数据查询
-        </el-button>
-        <el-button size="default" :icon="MagicStick" class="hero-btn ghost-btn" @click="router.push('/ai-sql-review')">
-          AI 预检
-        </el-button>
-        <el-button size="default" :icon="Refresh" :loading="loading" class="hero-btn ghost-btn" @click="loadStats">
-          刷新指标
-        </el-button>
+        <el-button type="primary" :icon="Plus" @click="router.push('/ticket-create')">新建工单</el-button>
+        <el-button :icon="Search" @click="router.push('/data-query')">数据查询</el-button>
+        <el-button :icon="MagicStick" @click="router.push('/ai-sql-review')">AI 审核</el-button>
+        <el-tooltip content="刷新数据" placement="bottom">
+          <el-button :icon="Refresh" :loading="loading" circle aria-label="刷新数据" @click="loadStats" />
+        </el-tooltip>
       </div>
     </div>
 
-    <!-- 2. 6 核心业务与效能指标卡片（明亮微润、护眼微彩设计） -->
-    <el-row :gutter="14" class="stat-row">
-      <!-- 实例数量 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card sky-card" @click="router.push('/instance-list')">
-          <div class="metric-header">
-            <span class="metric-title">纳管数据库实例</span>
-            <div class="metric-icon-box bg-sky">
-              <el-icon :size="20"><Coin /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-sky">{{ stats.instancesCount ?? 1 }}</span>
-            <span class="metric-unit">个</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-sky">在线率 100%</span>
-            <span class="metric-sub">多源异构引擎</span>
-          </div>
-        </div>
-      </el-col>
-
-      <!-- 资源组数 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card teal-card" @click="router.push('/resource-group-list')">
-          <div class="metric-header">
-            <span class="metric-title">业务资源组数</span>
-            <div class="metric-icon-box bg-teal">
-              <el-icon :size="20"><Suitcase /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-teal">{{ stats.resourceGroupsCount ?? 8 }}</span>
-            <span class="metric-unit">组</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-teal">业务资源隔离</span>
-            <span class="metric-sub">8大业务条线</span>
-          </div>
-        </div>
-      </el-col>
-
-      <!-- 工单变更总量 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card indigo-card" @click="router.push('/ticket-list')">
-          <div class="metric-header">
-            <span class="metric-title">工单变更总量</span>
-            <div class="metric-icon-box bg-indigo">
-              <el-icon :size="20"><Tickets /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-indigo">{{ stats.totalTickets ?? 0 }}</span>
-            <span class="metric-unit">条</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-indigo">我发起 {{ stats.myTicketsCount ?? 0 }} 笔</span>
-            <span class="metric-sub">已闭环归档</span>
-          </div>
-        </div>
-      </el-col>
-
-      <!-- 待办 / 审批中工单 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card amber-card" @click="router.push('/ticket-list')">
-          <div class="metric-header">
-            <span class="metric-title">待办 / 审批中</span>
-            <div class="metric-icon-box bg-amber">
-              <el-icon :size="20"><Clock /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-amber">{{ stats.pendingTickets ?? 0 }}</span>
-            <span class="metric-unit">条</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-amber">平均流转 0.8h</span>
-            <span class="metric-sub">支持加急催办</span>
-          </div>
-        </div>
-      </el-col>
-
-      <!-- 成功执行 / 归档 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card emerald-card" @click="router.push('/ticket-list')">
-          <div class="metric-header">
-            <span class="metric-title">成功执行 / 归档</span>
-            <div class="metric-icon-box bg-emerald">
-              <el-icon :size="20"><CircleCheck /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-emerald">{{ stats.executedTickets ?? 0 }}</span>
-            <span class="metric-unit">条</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-emerald">流式下发完成</span>
-            <span class="metric-sub">执行成功率 98%</span>
-          </div>
-        </div>
-      </el-col>
-
-      <!-- 平台注册用户 -->
-      <el-col :xs="12" :sm="8" :md="8" :lg="4" class="col-item">
-        <div class="metric-card slate-card" @click="router.push('/user-list')">
-          <div class="metric-header">
-            <span class="metric-title">系统活跃成员</span>
-            <div class="metric-icon-box bg-slate">
-              <el-icon :size="20"><User /></el-icon>
-            </div>
-          </div>
-          <div class="metric-body">
-            <span class="metric-number text-slate">{{ stats.usersCount ?? 8 }}</span>
-            <span class="metric-unit">位</span>
-          </div>
-          <div class="metric-footer">
-            <span class="tag-pill tag-slate">覆盖 5 大角色</span>
-            <span class="metric-sub">三权分立鉴权</span>
-          </div>
-        </div>
-      </el-col>
-    </el-row>
+    <!-- 2. 核心指标：一条带分隔的数字行，不再是六张彩色卡片 -->
+    <div class="metric-strip">
+      <button
+        v-for="m in metricItems"
+        :key="m.label"
+        type="button"
+        class="metric-cell"
+        @click="router.push(m.to)"
+      >
+        <span class="metric-title">{{ m.label }}</span>
+        <span class="metric-number" :class="m.tone">{{ m.value ?? '—' }}</span>
+        <span class="metric-sub">{{ m.sub }}</span>
+      </button>
+    </div>
 
     <!-- 2.5 生产服务多节点集群拓扑矩阵 (支持多台机器展示、IP/名称/备注与指标监控) -->
     <div class="clean-section-card cluster-nodes-section">
@@ -337,7 +218,7 @@
           </div>
           <div class="tile-value text-emerald font-mono">{{ monitorStats.slowSql }} <span class="tile-sub-val">条 / {{ monitorStats.lockWaits }} 次</span></div>
           <div class="tile-status-clean">
-            <el-icon color="#10b981"><CircleCheck /></el-icon>
+            <el-icon><CircleCheck /></el-icon>
             <span>无长事务阻塞锁表</span>
           </div>
           <div class="tile-desc">阈值 &gt; 1000ms 自动拦截</div>
@@ -399,7 +280,7 @@
     <!-- 5. 极速工作流与日常效能导航条 (高级设计师体验设计) -->
     <div class="quick-workflow-panel">
       <div class="workflow-panel-title">
-        <el-icon color="#2563eb"><Operation /></el-icon>
+        <el-icon><Operation /></el-icon>
         <span>核心管理与协同功能直达</span>
       </div>
       <div class="workflow-shortcuts-grid">
@@ -580,7 +461,7 @@
 
           <el-form-item label="主从最大容忍延迟" v-if="policyForm.failoverEnabled">
             <el-input-number v-model="policyForm.maxLagSeconds" :min="1" :max="60" :step="1" style="width: 160px;" />
-            <span style="margin-left: 10px; color: #64748b; font-size: 13px;">秒（从库延迟超过该阈值时自动降级回退主库）</span>
+            <span style="margin-left: 10px; color: var(--c-text-3); font-size: 13px;">秒（从库延迟超过该阈值时自动降级回退主库）</span>
           </el-form-item>
 
           <el-form-item label="慢查询 / AI 算力隔离">
@@ -623,9 +504,6 @@ import {
   Refresh,
   CircleCheck,
   Tickets,
-  Clock,
-  Coin,
-  User,
   Suitcase,
   MagicStick,
   Operation,
@@ -844,20 +722,39 @@ const stats = ref<any>({
   healthScore: 99,
   totalSqls: 0,
   riskSqls: 0,
-  totalTickets: 0,
-  pendingTickets: 0,
-  executedTickets: 0,
+  totalTickets: null,
+  pendingTickets: null,
+  executedTickets: null,
   rejectedTickets: 0,
   myTicketsCount: 0,
-  instancesCount: 1,
-  usersCount: 8,
-  resourceGroupsCount: 5,
+  // 加载完成前显示「—」，不再用假数字占位
+  instancesCount: null,
+  usersCount: null,
+  resourceGroupsCount: null,
   dbaWorkload: 35,
   approvalEfficiency: '0.8h',
   statusDistribution: {},
   trendDates: [],
   trendCounts: []
 })
+
+const greeting = computed(() => {
+  const h = new Date().getHours()
+  if (h < 6) return '夜深了'
+  if (h < 11) return '早上好'
+  if (h < 13) return '中午好'
+  if (h < 18) return '下午好'
+  return '晚上好'
+})
+
+const metricItems = computed(() => [
+  { label: '数据库实例', value: stats.value.instancesCount, sub: '查看实例', to: '/instance-list', tone: '' },
+  { label: '业务资源组', value: stats.value.resourceGroupsCount, sub: '查看资源组', to: '/resource-group-list', tone: '' },
+  { label: '工单总数', value: stats.value.totalTickets, sub: `我发起 ${stats.value.myTicketsCount ?? 0}`, to: '/ticket-list', tone: '' },
+  { label: '待审批', value: stats.value.pendingTickets, sub: stats.value.approvalEfficiency ? `平均流转 ${stats.value.approvalEfficiency}` : '审批中', to: '/ticket-list?status=AUDITING', tone: stats.value.pendingTickets ? 'is-warning' : '' },
+  { label: '已执行', value: stats.value.executedTickets, sub: '执行完成', to: '/ticket-list', tone: '' },
+  { label: '平台用户', value: stats.value.usersCount, sub: '查看用户', to: '/user-list', tone: '' }
+])
 
 const monitorStats = ref({
   cpuUsage: 25,
@@ -1100,217 +997,98 @@ onBeforeUnmount(() => {
   padding: 0 0 32px 0;
 }
 
-/* ===================================================
-   1. 顶层专属欢迎横幅：柔光轻渐变、清爽空气感
-   =================================================== */
+/* ---- 问候与常用操作 ---- */
 .welcome-hero-banner {
-  background: linear-gradient(135deg, #f0f7ff 0%, #f0fdf4 50%, #ffffff 100%);
-  border: 1px solid #dbeafe;
-  border-radius: 14px;
-  padding: 22px 26px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 18px;
-  box-shadow: 0 2px 10px rgba(37, 99, 235, 0.04);
+  align-items: flex-end;
   flex-wrap: wrap;
   gap: 16px;
+  padding: 4px 0 20px;
 }
-
-.welcome-left {
-  flex: 1;
-  min-width: 280px;
-}
-
-.welcome-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid #bbf7d0;
-  border-radius: 20px;
-  font-size: 11.5px;
-  color: #15803d;
-  font-weight: 500;
-  margin-bottom: 8px;
-}
-
-.pulse-green-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #16a34a;
-  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.2);
-}
-
+.welcome-left { flex: 1; min-width: 260px; }
 .welcome-heading {
   margin: 0;
-  font-size: 19px;
-  font-weight: 700;
-  color: #0f172a;
-  letter-spacing: -0.2px;
+  font-size: 22px;
+  font-weight: 650;
+  color: var(--c-text);
+  letter-spacing: -0.02em;
 }
-
 .welcome-subtext {
-  margin: 6px 0 0 0;
-  font-size: 13px;
-  color: #64748b;
-  line-height: 1.5;
+  margin: 6px 0 0;
+  font-size: 13.5px;
+  color: var(--c-text-3);
 }
-
+.welcome-subtext b { color: var(--c-text); font-weight: 600; }
 .welcome-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   align-items: center;
 }
+.welcome-actions .el-button + .el-button { margin-left: 0; }
 
-.hero-btn {
-  border-radius: 8px;
-  font-weight: 500;
-  font-size: 13px;
-  transition: all 0.2s;
-}
-
-.primary-glow {
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
-}
-
-.ghost-btn {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  color: #334155;
-}
-
-.ghost-btn:hover {
-  border-color: #3b82f6;
-  color: #2563eb;
-  background: #eff6ff;
-}
-
-/* ===================================================
-   2. 6 核心业务统计卡：纯净卡片、微润色谱、无眩光
-   =================================================== */
-.stat-row {
+/* ---- 指标条 ---- */
+.metric-strip {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
   margin-bottom: 16px;
+  overflow: hidden;
 }
-
-.col-item {
-  margin-bottom: 12px;
-}
-
-.metric-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 16px 16px 14px;
-  cursor: pointer;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
-}
-
-.metric-card:hover {
-  transform: translateY(-3px);
-  box-shadow: 0 10px 20px -4px rgba(15, 23, 42, 0.07);
-  border-color: #93c5fd;
-}
-
-.metric-header {
+.metric-cell {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 10px;
-}
-
-.metric-title {
-  font-size: 12.5px;
-  color: #64748b;
-  font-weight: 500;
-}
-
-.metric-icon-box {
-  width: 36px;
-  height: 36px;
-  border-radius: 9px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.bg-sky { background: #eff6ff; color: #2563eb; }
-.bg-teal { background: #f0fdfa; color: #0d9488; }
-.bg-indigo { background: #eef2ff; color: #4f46e5; }
-.bg-amber { background: #fffbeb; color: #d97706; }
-.bg-emerald { background: #ecfdf5; color: #059669; }
-.bg-slate { background: #f8fafc; color: #475569; }
-
-.text-sky { color: #2563eb; }
-.text-teal { color: #0d9488; }
-.text-indigo { color: #4f46e5; }
-.text-amber { color: #d97706; }
-.text-emerald { color: #059669; }
-.text-slate { color: #334155; }
-
-.metric-body {
-  display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 4px;
+  padding: 16px 18px;
+  background: none;
+  border: none;
+  border-left: 1px solid var(--c-border);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
-
+.metric-cell:first-child { border-left: none; }
+.metric-cell:hover { background: var(--c-muted-bg); }
+.metric-cell:focus-visible { outline: 2px solid var(--c-accent); outline-offset: -2px; }
+.metric-title { font-size: 12.5px; color: var(--c-text-3); }
 .metric-number {
   font-size: 26px;
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: -0.5px;
-  font-feature-settings: "tnum";
+  font-weight: 650;
+  line-height: 1.15;
+  color: var(--c-text);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
 }
+.metric-number.is-warning { color: var(--c-warning-strong, var(--c-warning)); }
+.metric-sub { font-size: 12px; color: var(--c-text-4); }
+.metric-cell:hover .metric-sub { color: var(--c-accent); }
 
-.metric-unit {
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: normal;
+@media (max-width: 1200px) {
+  .metric-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric-cell:nth-child(3n + 1) { border-left: none; }
+  .metric-cell:nth-child(n + 4) { border-top: 1px solid var(--c-border); }
 }
-
-.metric-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #f8fafc;
-}
-
-.tag-pill {
-  font-size: 10.5px;
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.tag-sky { background: #eff6ff; color: #2563eb; border: 1px solid #dbeafe; }
-.tag-teal { background: #f0fdfa; color: #0d9488; border: 1px solid #ccfbf1; }
-.tag-indigo { background: #eef2ff; color: #4f46e5; border: 1px solid #e0e7ff; }
-.tag-amber { background: #fffbeb; color: #d97706; border: 1px solid #fef3c7; }
-.tag-emerald { background: #ecfdf5; color: #059669; border: 1px solid #d1fae5; }
-.tag-slate { background: #f8fafc; color: #475569; border: 1px solid #e2e8f0; }
-
-.metric-sub {
-  font-size: 11px;
-  color: #94a3b8;
+@media (max-width: 640px) {
+  .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric-cell:nth-child(3n + 1) { border-left: 1px solid var(--c-border); }
+  .metric-cell:nth-child(2n + 1) { border-left: none; }
+  .metric-cell:nth-child(n + 3) { border-top: 1px solid var(--c-border); }
 }
 
 /* ===================================================
    3. 实时性能监控：清爽磁贴式微架构
    =================================================== */
 .clean-section-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 14px;
   padding: 18px 20px 20px;
   margin-bottom: 16px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .section-card-header {
@@ -1334,18 +1112,18 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-.bg-blue-dot { background: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+.bg-blue-dot { background: var(--c-accent); box-shadow: var(--shadow-sm); }
 
 .section-heading {
   margin: 0;
   font-size: 14.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .section-subtext {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-left: 6px;
 }
 
@@ -1361,17 +1139,17 @@ onBeforeUnmount(() => {
 }
 
 .monitor-tile {
-  background: #f8fafc;
-  border: 1px solid #f1f5f9;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 12px 14px;
   transition: all 0.2s ease;
 }
 
 .monitor-tile:hover {
-  background: #ffffff;
-  border-color: #cbd5e1;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04);
+  background: var(--c-surface);
+  border-color: var(--c-border-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .tile-top {
@@ -1383,7 +1161,7 @@ onBeforeUnmount(() => {
 
 .tile-label {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 500;
 }
 
@@ -1394,21 +1172,21 @@ onBeforeUnmount(() => {
   font-weight: 500;
 }
 
-.tag-success { background: #ecfdf5; color: #059669; }
-.tag-primary { background: #eff6ff; color: #2563eb; }
-.tag-info { background: #f1f5f9; color: #475569; }
+.tag-success { background: var(--c-success-soft); color: var(--c-success); }
+.tag-primary { background: var(--c-accent-soft); color: var(--c-accent); }
+.tag-info { background: var(--c-subtle); color: var(--c-text-2); }
 
 .tile-value {
   font-size: 18px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   line-height: 1.2;
   margin-bottom: 6px;
 }
 
 .tile-sub-val {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   font-weight: normal;
 }
 
@@ -1418,7 +1196,7 @@ onBeforeUnmount(() => {
 
 .tile-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 4px;
 }
 
@@ -1427,7 +1205,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: #10b981;
+  color: var(--c-success);
   margin: 6px 0;
   font-weight: 500;
 }
@@ -1442,7 +1220,7 @@ onBeforeUnmount(() => {
 
 .bar-pill {
   flex: 1;
-  background: #3b82f6;
+  background: var(--c-accent);
   border-radius: 2px;
   opacity: 0.6;
 }
@@ -1465,11 +1243,11 @@ onBeforeUnmount(() => {
 }
 
 .chart-card-box {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 14px;
   padding: 16px 18px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .chart-box-header {
@@ -1485,7 +1263,7 @@ onBeforeUnmount(() => {
   gap: 8px;
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .chart-dot {
@@ -1494,8 +1272,8 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-.dot-blue { background: #3b82f6; }
-.dot-emerald { background: #10b981; }
+.dot-blue { background: var(--c-accent); }
+.dot-emerald { background: var(--c-success); }
 
 .chart-container {
   height: 280px;
@@ -1506,11 +1284,11 @@ onBeforeUnmount(() => {
    5. 极速工作流与日常效能导航条
    =================================================== */
 .quick-workflow-panel {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 14px;
   padding: 18px 20px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .workflow-panel-title {
@@ -1519,7 +1297,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 13.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 12px;
 }
 
@@ -1534,18 +1312,18 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .shortcut-pill:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent);
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .sc-icon {
@@ -1559,11 +1337,11 @@ onBeforeUnmount(() => {
   flex-shrink: 0;
 }
 
-.bg-amber-soft { background: #fffbeb; color: #d97706; }
-.bg-sky-soft { background: #eff6ff; color: #2563eb; }
-.bg-teal-soft { background: #f0fdfa; color: #0d9488; }
-.bg-purple-soft { background: #f5f3ff; color: #7c3aed; }
-.bg-rose-soft { background: #fff1f2; color: #e11d48; }
+.bg-amber-soft { background: var(--c-warning-soft); color: var(--c-warning); }
+.bg-sky-soft { background: var(--c-accent-soft); color: var(--c-accent); }
+.bg-teal-soft { background: var(--c-success-soft); color: var(--c-success); }
+.bg-purple-soft { background: var(--c-accent-soft); color: var(--c-accent); }
+.bg-rose-soft { background: var(--c-danger-soft); color: var(--c-danger); }
 
 .sc-text {
   flex: 1;
@@ -1573,12 +1351,12 @@ onBeforeUnmount(() => {
 .sc-name {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .sc-desc {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
@@ -1593,8 +1371,8 @@ onBeforeUnmount(() => {
 }
 
 .bg-indigo-dot {
-  background: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+  background: var(--c-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .cluster-nodes-grid {
@@ -1605,26 +1383,26 @@ onBeforeUnmount(() => {
 }
 
 .node-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 12px;
   padding: 16px 18px;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
   position: relative;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-card:hover {
-  border-color: #93c5fd;
+  border-color: var(--c-accent-border);
   transform: translateY(-2px);
-  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-card.active {
-  border-color: #2563eb;
-  background: linear-gradient(180deg, #f8faff 0%, #ffffff 100%);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15), 0 8px 24px rgba(37, 99, 235, 0.1);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-card-top {
@@ -1643,7 +1421,7 @@ onBeforeUnmount(() => {
 .node-name {
   font-size: 14px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .node-role-tag {
@@ -1656,11 +1434,11 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 5px;
   padding: 2px 8px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
   border-radius: 12px;
   font-size: 11px;
-  color: #15803d;
+  color: var(--c-success);
   font-weight: 500;
 }
 
@@ -1668,14 +1446,14 @@ onBeforeUnmount(() => {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #16a34a;
+  background: var(--c-success);
   animation: pulse-ring 2s infinite;
 }
 
 @keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.4); }
-  70% { box-shadow: 0 0 0 5px rgba(22, 163, 74, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+  0% { box-shadow: var(--shadow-sm); }
+  70% { box-shadow: var(--shadow-sm); }
+  100% { box-shadow: var(--shadow-sm); }
 }
 
 .node-ip-row {
@@ -1685,44 +1463,44 @@ onBeforeUnmount(() => {
   font-size: 12.5px;
   margin-bottom: 8px;
   padding-bottom: 8px;
-  border-bottom: 1px dashed #f1f5f9;
+  border-bottom: 1px dashed var(--c-border);
 }
 
 .ip-label {
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .ip-value {
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
   letter-spacing: 0.3px;
 }
 
 .copy-icon {
-  color: #94a3b8;
+  color: var(--c-text-4);
   cursor: pointer;
   font-size: 14px;
   transition: color 0.15s;
 }
 
 .copy-icon:hover {
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .node-link-btn {
   margin-left: auto;
   font-size: 12px;
-  color: #2563eb;
+  color: var(--c-accent);
   text-decoration: none;
   font-weight: 500;
   padding: 1px 8px;
   border-radius: 4px;
-  background: #eff6ff;
+  background: var(--c-accent-soft);
   transition: all 0.15s;
 }
 
 .node-link-btn:hover {
-  background: #dbeafe;
+  background: var(--c-accent-soft);
 }
 
 .node-remark-box {
@@ -1734,8 +1512,8 @@ onBeforeUnmount(() => {
 
 .node-region-tag {
   font-size: 11px;
-  color: #475569;
-  background: #f1f5f9;
+  color: var(--c-text-2);
+  background: var(--c-subtle);
   padding: 1px 6px;
   border-radius: 4px;
   flex-shrink: 0;
@@ -1743,7 +1521,7 @@ onBeforeUnmount(() => {
 
 .node-remark-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1753,7 +1531,7 @@ onBeforeUnmount(() => {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
   gap: 8px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 8px 10px;
   border-radius: 8px;
 }
@@ -1764,28 +1542,28 @@ onBeforeUnmount(() => {
 
 .mm-label {
   font-size: 10.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-bottom: 2px;
 }
 
 .mm-val {
   font-size: 13px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 3px;
 }
 
 .mm-sub {
   font-size: 10.5px;
-  color: #10b981;
+  color: var(--c-success);
 }
 
 .focused-node-badge {
   font-size: 12px;
   font-weight: 500;
-  color: #2563eb;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   padding: 2px 8px;
   border-radius: 6px;
   margin-left: 10px;
@@ -1793,8 +1571,8 @@ onBeforeUnmount(() => {
 
 /* 扩展添加卡片 */
 .add-node-card {
-  border: 2px dashed #cbd5e1;
-  background: #fafafa;
+  border: 2px dashed var(--c-border-strong);
+  background: var(--c-muted-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1802,8 +1580,8 @@ onBeforeUnmount(() => {
 }
 
 .add-node-card:hover {
-  border-color: #3b82f6;
-  background: #f8faff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .add-card-inner {
@@ -1815,8 +1593,8 @@ onBeforeUnmount(() => {
   width: 42px;
   height: 42px;
   border-radius: 50%;
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1826,20 +1604,20 @@ onBeforeUnmount(() => {
 
 .add-node-card:hover .add-icon-circle {
   transform: scale(1.08);
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
 }
 
 .add-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 4px;
 }
 
 .add-desc {
   font-size: 11.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   max-width: 240px;
   margin: 0 auto;
 }
@@ -1848,7 +1626,7 @@ onBeforeUnmount(() => {
 .dialog-section-title {
   font-size: 14px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
   margin: 14px 0 8px;
 }
 
@@ -1856,10 +1634,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 14px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .step-item {
@@ -1872,7 +1650,7 @@ onBeforeUnmount(() => {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
   font-size: 12px;
   font-weight: 600;
@@ -1885,16 +1663,16 @@ onBeforeUnmount(() => {
 
 .step-desc {
   font-size: 13px;
-  color: #334155;
+  color: var(--c-text-2);
   line-height: 1.6;
 }
 
 .step-desc code {
-  background: #e2e8f0;
+  background: var(--c-border);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: monospace;
-  color: #0f172a;
+  color: var(--c-text);
   font-size: 12px;
 }
 
@@ -1902,8 +1680,8 @@ onBeforeUnmount(() => {
 .cluster-policy-banner {
   margin-top: 14px;
   margin-bottom: 16px;
-  background: linear-gradient(135deg, #f0fdf4 0%, #f8fafc 100%);
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
   border-radius: 10px;
   padding: 10px 16px;
   display: flex;
@@ -1914,8 +1692,8 @@ onBeforeUnmount(() => {
 }
 
 .cluster-policy-banner:hover {
-  border-color: #86efac;
-  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.08);
+  border-color: var(--c-success-border);
+  box-shadow: var(--shadow-sm);
   transform: translateY(-1px);
 }
 
@@ -1936,20 +1714,20 @@ onBeforeUnmount(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #10b981;
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5);
+  background: var(--c-success);
+  box-shadow: var(--shadow-sm);
   animation: pulseEmerald 2s infinite;
 }
 
 @keyframes pulseEmerald {
-  0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
-  70% { box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+  0% { box-shadow: var(--shadow-sm); }
+  70% { box-shadow: var(--shadow-sm); }
+  100% { box-shadow: var(--shadow-sm); }
 }
 
 .policy-mode-title {
   font-size: 13px;
-  color: #166534;
+  color: var(--c-success-strong);
 }
 
 .policy-route-tags {
@@ -1969,21 +1747,21 @@ onBeforeUnmount(() => {
 }
 
 .route-chip.route-query {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
+  border: 1px solid var(--c-accent-border);
 }
 
 .route-chip.route-exec {
-  background: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  color: var(--c-danger-strong);
+  border: 1px solid var(--c-danger-border);
 }
 
 .route-chip.route-failover {
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid #e2e8f0;
+  background: var(--c-subtle);
+  color: var(--c-text-2);
+  border: 1px solid var(--c-border);
 }
 
 .policy-banner-right {
@@ -1992,7 +1770,7 @@ onBeforeUnmount(() => {
 
 .policy-btn-hint {
   font-size: 12px;
-  color: #059669;
+  color: var(--c-success);
   font-weight: 500;
   display: inline-flex;
   align-items: center;
@@ -2006,23 +1784,23 @@ onBeforeUnmount(() => {
 }
 
 .preset-card {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 12px;
-  background: #ffffff;
+  background: var(--c-surface);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .preset-card:hover {
-  border-color: #93c5fd;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
+  border-color: var(--c-accent-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .preset-card.active {
-  border-color: #2563eb;
-  background: #f0f7ff;
-  box-shadow: 0 0 0 1px #2563eb;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .preset-card-head {
@@ -2035,12 +1813,12 @@ onBeforeUnmount(() => {
 .preset-name {
   font-size: 13.5px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .preset-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.5;
   margin-bottom: 8px;
   min-height: 36px;
@@ -2050,23 +1828,23 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: rgba(255, 255, 255, 0.7);
+  background: color-mix(in srgb, var(--c-surface) 70%, transparent);
   padding: 6px 8px;
   border-radius: 6px;
   font-size: 11.5px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .dialog-sub-title {
   font-size: 14px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 8px;
 }
 
 .form-tip-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.5;
   margin-top: 4px;
 }

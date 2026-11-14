@@ -11,7 +11,7 @@
       <el-tab-pane name="list" :closable="false">
         <template #label>
           <div class="tab-label-item">
-            <el-icon color="#409EFF"><Coin /></el-icon>
+            <el-icon><Coin /></el-icon>
             <span>数据库实例资产 (Instances)</span>
           </div>
         </template>
@@ -44,11 +44,11 @@
               type="info"
               :closable="false"
               show-icon
-              style="margin-bottom: 16px; border: 1px solid #e0e7ff; background: #f5f3ff;"
+              style="margin-bottom: 16px; border: 1px solid var(--c-accent-soft); background: var(--c-accent-soft);"
             >
               <template #title>
                 <div style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
-                  <span style="font-weight: 600; color: #4338ca;">💡 流程设计指引：没有符合当前业务需要的审批流程？</span>
+                  <span style="font-weight: 600; color: var(--c-accent);">💡 流程设计指引：没有符合当前业务需要的审批流程？</span>
                   <el-button type="primary" link :icon="Share" @click="goToWorkflowDesigner" style="font-weight: 600;">
                     前往【审批流设计中心】新建/编辑 BPMN 审批流程 ➔
                   </el-button>
@@ -77,7 +77,7 @@
                       </el-tag>
                     </el-tooltip>
                   </div>
-                  <div v-if="scope.row.description" style="font-size: 11px; color: #909399; line-height: 1.2; margin-top: 2px;">
+                  <div v-if="scope.row.description" style="font-size: 11px; color: var(--c-text-3); line-height: 1.2; margin-top: 2px;">
                     {{ scope.row.description }}
                   </div>
                 </template>
@@ -124,7 +124,7 @@
                         </el-tag>
                       </el-tooltip>
                     </template>
-                    <span v-else style="color: #c0c4cc; font-size: 12px;">全员默认业务组</span>
+                    <span v-else style="color: var(--c-text-4); font-size: 12px;">全员默认业务组</span>
                   </div>
                 </template>
               </el-table-column>
@@ -316,7 +316,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">1</span>
-                  <el-icon color="#409EFF"><Tools /></el-icon>
+                  <el-icon><Tools /></el-icon>
                   <span>实例核心执行与安全管控参数 (Execution & Safety Parameters)</span>
                 </div>
               </template>
@@ -376,7 +376,7 @@
                 <div class="card-header-title" style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <span class="step-num-badge">2</span>
-                    <el-icon color="#409EFF"><Tickets /></el-icon>
+                    <el-icon><Tickets /></el-icon>
                     <span>工单可配置化扩展字段与必填约束 (Custom Form Fields & Constraints)</span>
                   </div>
                   <div style="display: flex; gap: 8px;">
@@ -477,7 +477,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">3</span>
-                  <el-icon color="#409EFF"><Share /></el-icon>
+                  <el-icon><Share /></el-icon>
                   <span>专属固定审批流与操作管控标签 (Workflow & Operations)</span>
                 </div>
               </template>
@@ -522,7 +522,7 @@
             <el-card shadow="hover" class="config-card mb-16">
               <template #header>
                 <div class="card-header-title">
-                  <el-icon color="#409EFF"><Coin /></el-icon>
+                  <el-icon><Coin /></el-icon>
                   <span>实例基础连接与凭据信息 (Basic Connection & Auth)</span>
                 </div>
               </template>
@@ -1120,10 +1120,10 @@ onMounted(() => {
   top: 0px;
   z-index: 100;
   margin-bottom: 0px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px 8px 0 0;
   padding: 8px 14px 0 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
@@ -1131,17 +1131,17 @@ onMounted(() => {
   font-weight: 600;
   font-size: 13px;
   transition: all 0.2s ease;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   margin-right: 4px;
   border-radius: 6px 6px 0 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
 .instance-workbench-tabs :deep(.el-tabs__item.is-active) {
-  background: #ffffff;
-  color: #3b82f6;
-  border-color: #cbd5e1;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  border-color: var(--c-border-strong);
 }
 
 .tab-label-item {
@@ -1160,10 +1160,10 @@ onMounted(() => {
   align-items: center;
   margin-top: 14px;
   margin-bottom: 16px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   flex-wrap: wrap;
   gap: 12px;
 }
@@ -1171,13 +1171,13 @@ onMounted(() => {
 .page-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0 0 4px 0;
 }
 
 .page-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .action-btns {
@@ -1186,10 +1186,10 @@ onMounted(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .tag-cell-wrap {
@@ -1212,12 +1212,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px 16px;
   border-radius: 0 0 8px 8px;
-  border: 1px solid #e2e8f0;
-  border-top: 1px solid #f1f5f9;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--c-border);
+  border-top: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
   margin-bottom: 4px;
 }
 
@@ -1236,12 +1236,12 @@ onMounted(() => {
 .nav-main-title {
   font-size: 15px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .nav-sub-desc {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .nav-actions {
@@ -1251,9 +1251,9 @@ onMounted(() => {
 }
 
 .config-card {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--c-surface);
 }
 
 .card-header-title {
@@ -1262,7 +1262,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 14.5px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-num-badge {
@@ -1271,7 +1271,7 @@ onMounted(() => {
   justify-content: center;
   width: 20px;
   height: 20px;
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 50%;
   font-size: 11px;
@@ -1280,7 +1280,7 @@ onMounted(() => {
 
 .form-item-tip {
   font-size: 11.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin-top: 4px;
   line-height: 1.3;
 }

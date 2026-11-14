@@ -57,7 +57,7 @@
       <div class="chart-card">
         <div class="chart-header">
           <div class="chart-title">
-            <el-icon color="#409EFF"><TrendCharts /></el-icon>
+            <el-icon><TrendCharts /></el-icon>
             <span>24小时 SQL 执行走势与异常拦截时序</span>
           </div>
           <el-tag size="small" type="primary" effect="plain">实时监控</el-tag>
@@ -69,7 +69,7 @@
       <div class="chart-card">
         <div class="chart-header">
           <div class="chart-title">
-            <el-icon color="#67C23A"><PieChart /></el-icon>
+            <el-icon><PieChart /></el-icon>
             <span>SQL 指令类型分布占比</span>
           </div>
           <el-tag size="small" type="success" effect="plain">操作分布</el-tag>
@@ -84,7 +84,7 @@
         <template #header>
           <div class="section-header-flex">
             <div class="section-title">
-              <el-icon color="#E6A23C"><WarningFilled /></el-icon>
+              <el-icon><WarningFilled /></el-icon>
               <span>慢 SQL TOP 10 性能分析与影响诊断</span>
             </div>
             <el-tag size="small" type="warning" effect="dark">重点优化</el-tag>
@@ -97,7 +97,7 @@
               <span v-if="row.ticketId" class="ticket-link" @click="goToTicket(row.ticketId)">
                 #{{ row.ticketId }}
               </span>
-              <span v-else style="color: #94a3b8;">系统直通</span>
+              <span v-else style="color: var(--c-text-4);">系统直通</span>
             </template>
           </el-table-column>
           <el-table-column prop="executeSql" label="执行 SQL 语句" min-width="320" show-overflow-tooltip>
@@ -131,7 +131,7 @@
           <el-tab-pane label="📜 变更工单与底层执行防篡改审计" name="ticket_audit">
             <div class="section-header-flex" style="margin-bottom: 14px;">
               <div class="section-title">
-                <el-icon color="#409EFF"><Search /></el-icon>
+                <el-icon><Search /></el-icon>
                 <span>工单执行防篡改存证链 (共 {{ logsTotal }} 条记录)</span>
               </div>
               <div class="right-filters">
@@ -161,7 +161,7 @@
                   <span v-if="row.ticketId" class="ticket-link" @click="goToTicket(row.ticketId)">
                     #{{ row.ticketId }}
                   </span>
-                  <span v-else style="color: #94a3b8;">直接执行</span>
+                  <span v-else style="color: var(--c-text-4);">直接执行</span>
                 </template>
               </el-table-column>
               <el-table-column prop="executeSql" label="执行 SQL 语句" min-width="280" show-overflow-tooltip>
@@ -214,7 +214,7 @@
           <el-tab-pane label="🔍 在线查询与 EXPLAIN 操作审计" name="query_audit">
             <div class="section-header-flex" style="margin-bottom: 14px; flex-wrap: wrap; gap: 8px;">
               <div class="section-title">
-                <el-icon color="#67C23A"><Search /></el-icon>
+                <el-icon><Search /></el-icon>
                 <span>在线查询审计日志 (共 {{ queryLogsTotal }} 条)</span>
               </div>
               <div class="right-filters" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
@@ -258,13 +258,13 @@
               <el-table-column prop="id" label="审计ID" width="80" align="center" />
               <el-table-column prop="createTime" label="执行时间" width="150" align="center">
                 <template #default="{ row }">
-                  <span style="font-size: 12px; color: #475569;">{{ formatTime(row.createTime) }}</span>
+                  <span style="font-size: 12px; color: var(--c-text-2);">{{ formatTime(row.createTime) }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="realName" label="执行人员" width="130" align="center">
                 <template #default="{ row }">
                   <span style="font-weight: 600;">{{ row.realName || row.username }}</span>
-                  <span style="font-size: 11px; color: #94a3b8; display: block;">@{{ row.username }}</span>
+                  <span style="font-size: 11px; color: var(--c-text-4); display: block;">@{{ row.username }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="opType" label="操作类型" width="95" align="center">
@@ -276,8 +276,8 @@
               </el-table-column>
               <el-table-column prop="dbName" label="目标数据库" width="180" show-overflow-tooltip>
                 <template #default="{ row }">
-                  <span style="font-weight: 600; color: #0284c7;">{{ row.instanceName }}</span>
-                  <span style="color: #64748b; font-size: 11px; display: block;">/ {{ row.dbName }}</span>
+                  <span style="font-weight: 600; color: var(--c-accent);">{{ row.instanceName }}</span>
+                  <span style="color: var(--c-text-3); font-size: 11px; display: block;">/ {{ row.dbName }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="sqlText" label="查询 SQL 语句" min-width="260" show-overflow-tooltip>
@@ -426,7 +426,7 @@
       width="640px"
       append-to-body
     >
-      <div style="margin-bottom: 12px; font-size: 13px; color: #475569; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 10px 14px;">
+      <div style="margin-bottom: 12px; font-size: 13px; color: var(--c-text-2); background: var(--c-success-soft); border: 1px solid var(--c-success-border); border-radius: 6px; padding: 10px 14px;">
         💡 <b>审计策略说明</b>：您可以按具体数据库维度配置是否开启在线查询与 EXPLAIN 审计。支持对核心生产库全量审计，对测试/非敏感库灵活关闭审计。
       </div>
 
@@ -457,7 +457,7 @@
               :value="db.value"
             />
           </el-select>
-          <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">
+          <div style="font-size: 11px; color: var(--c-text-4); margin-top: 4px;">
             在黑名单中的数据库执行 SELECT / EXPLAIN 时将不再生成审计日志
           </div>
         </el-form-item>
@@ -844,13 +844,13 @@ onBeforeUnmount(() => {
   padding: 18px 20px;
   border-radius: 10px;
   color: #fff;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
-.card-blue { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
-.card-green { background: linear-gradient(135deg, #10b981, #047857); }
-.card-orange { background: linear-gradient(135deg, #f59e0b, #b45309); }
-.card-purple { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+.card-blue { background: var(--c-accent); }
+.card-green { background: var(--c-success); }
+.card-orange { background: var(--c-warning); }
+.card-purple { background: var(--c-accent); }
 
 .card-icon-wrap {
   font-size: 32px;
@@ -878,10 +878,10 @@ onBeforeUnmount(() => {
 }
 
 .chart-card {
-  background: #fff;
+  background: var(--c-surface);
   border-radius: 10px;
   padding: 16px 20px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .chart-header {
@@ -896,7 +896,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
   font-size: 15px;
 }
 
@@ -922,7 +922,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
   font-size: 15px;
 }
 
@@ -935,8 +935,8 @@ onBeforeUnmount(() => {
 .sql-code-text {
   font-family: monospace;
   font-size: 12px;
-  color: #334155;
-  background: #f1f5f9;
+  color: var(--c-text-2);
+  background: var(--c-subtle);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -944,7 +944,7 @@ onBeforeUnmount(() => {
 .ticket-link {
   font-family: monospace;
   font-weight: 600;
-  color: #409eff;
+  color: var(--c-accent);
   cursor: pointer;
 }
 
@@ -955,7 +955,7 @@ onBeforeUnmount(() => {
 .hash-text {
   font-family: monospace;
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .pagination-wrap {
@@ -982,19 +982,19 @@ onBeforeUnmount(() => {
 
 .d-label {
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   min-width: 130px;
   font-size: 13px;
 }
 
 .d-val {
-  color: #1e293b;
+  color: var(--c-text);
   font-size: 13px;
 }
 
 .sql-code-block, .error-code-block {
-  background: #1e293b;
-  color: #f8fafc;
+  background: var(--c-ink-bg);
+  color: var(--c-ink-text);
   padding: 12px;
   border-radius: 6px;
   font-size: 12px;
@@ -1006,17 +1006,17 @@ onBeforeUnmount(() => {
 }
 
 .error-code-block {
-  background: #450a0a;
-  color: #fca5a5;
+  background: var(--c-danger-strong);
+  color: var(--c-danger);
 }
 
 .hash-block {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   padding: 6px 8px;
   border-radius: 4px;
   font-size: 11px;
-  color: #475569;
+  color: var(--c-text-2);
   word-break: break-all;
   width: 100%;
 }

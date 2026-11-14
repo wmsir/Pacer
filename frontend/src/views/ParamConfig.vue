@@ -63,13 +63,13 @@
 
         <el-table-column prop="name" label="参数名称 (Variable Name)" min-width="260" show-overflow-tooltip>
           <template #default="scope">
-            <span style="font-family: monospace; font-weight: 600; color: #2563eb;">{{ scope.row.name }}</span>
+            <span style="font-family: monospace; font-weight: 600; color: var(--c-accent);">{{ scope.row.name }}</span>
           </template>
         </el-table-column>
 
         <el-table-column prop="value" label="当前运行值 (Value)" min-width="240" show-overflow-tooltip>
           <template #default="scope">
-            <span style="font-family: monospace; font-weight: 500; color: #1e293b;">{{ scope.row.value }}</span>
+            <span style="font-family: monospace; font-weight: 500; color: var(--c-text);">{{ scope.row.value }}</span>
           </template>
         </el-table-column>
 
@@ -81,7 +81,7 @@
 
         <el-table-column prop="description" label="参数中文说明与调优建议" min-width="280" show-overflow-tooltip>
           <template #default="scope">
-            <span style="color: #475569; font-size: 13px;">{{ scope.row.description }}</span>
+            <span style="color: var(--c-text-2); font-size: 13px;">{{ scope.row.description }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -201,7 +201,7 @@ onMounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -215,7 +215,7 @@ onMounted(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow-x: auto;
 }

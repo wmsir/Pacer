@@ -35,7 +35,7 @@
         <el-table-column prop="user" label="数据库账号名 (User)" min-width="160">
           <template #default="scope">
             <div style="display: flex; align-items: center; gap: 8px;">
-              <el-icon color="#409EFF"><UserFilled /></el-icon>
+              <el-icon><UserFilled /></el-icon>
               <span style="font-weight: 600; font-family: monospace;">{{ scope.row.user }}</span>
             </div>
           </template>
@@ -118,7 +118,7 @@
 
     <!-- 重置密码弹窗 -->
     <el-dialog title="重置数据库账号密码" v-model="resetDialogVisible" width="460px" destroy-on-close>
-      <div style="margin-bottom: 16px; font-size: 13px; color: #606266;">
+      <div style="margin-bottom: 16px; font-size: 13px; color: var(--c-text-2);">
         重置目标账号：<b>{{ currentResetUser?.user }}</b> @ <b>{{ currentResetUser?.host }}</b>
       </div>
       <el-form label-width="90px">
@@ -307,7 +307,7 @@ onMounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -317,7 +317,7 @@ onMounted(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow-x: auto;
 }

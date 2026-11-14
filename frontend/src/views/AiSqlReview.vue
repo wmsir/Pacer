@@ -154,13 +154,13 @@ onMounted(() => {
 .page-title {
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   margin: 0 0 4px 0;
 }
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .header-actions {
@@ -221,7 +221,7 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
-  background-color: #fafafa;
+  background-color: var(--c-muted-bg);
   border-radius: 4px;
 }
 
@@ -229,12 +229,12 @@ onMounted(() => {
   font-size: 14px;
   line-height: 1.6;
   white-space: pre-wrap;
-  color: #303133;
+  color: var(--c-text);
 }
 
 .unconfigured-banner {
-  background-color: #fffbe6;
-  border: 1px solid #ffe58f;
+  background-color: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
   padding: 16px;
   border-radius: 6px;
 }
@@ -242,13 +242,13 @@ onMounted(() => {
 .banner-title {
   font-size: 15px;
   font-weight: 600;
-  color: #d46b08;
+  color: var(--c-warning);
   margin-bottom: 8px;
 }
 
 .banner-desc {
   font-size: 13px;
-  color: #595959;
+  color: var(--c-text-2);
   line-height: 1.5;
 }
 </style>

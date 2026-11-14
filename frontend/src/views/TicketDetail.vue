@@ -91,7 +91,7 @@
               :type="ticketDetail?.workflowTemplateInfo?.isPinned ? 'warning' : 'info'"
               effect="dark"
               size="small"
-              style="margin-left: 8px; background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.3); color: #e0f2fe;"
+              style="margin-left: 8px; background: color-mix(in srgb, var(--c-surface) 15%, transparent); border-color: rgba(255,255,255,0.3); color: var(--c-accent-hover);"
             >
               {{ ticketDetail?.workflowTemplateInfo?.isPinned ? '🔥 专属固定审批流：' : '流程模板：' }}{{ ticketDetail?.workflowTemplateInfo?.templateName || ticketDetail?.ticket?.workflowTemplateName || '标准生产 SQL 变更审批流' }}
             </el-tag>
@@ -106,7 +106,7 @@
               :loading="urgeLoading"
               :disabled="urgeCooldown > 0"
               @click="handleOpenUrgeDialog()"
-              style="font-weight: 600; background: rgba(239, 68, 68, 0.9); border-color: #ef4444; color: #fff;"
+              style="font-weight: 600; background: rgba(239, 68, 68, 0.9); border-color: var(--c-danger); color: #fff;"
             >
               {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '⏰ 加急催办' }}
             </el-button>
@@ -116,7 +116,7 @@
               :icon="Refresh"
               @click="handleManualRefresh"
               :loading="refreshLoading"
-              style="background: rgba(255,255,255,0.15); border-color: rgba(255,255,255,0.35); color: #e0f2fe;"
+              style="background: color-mix(in srgb, var(--c-surface) 15%, transparent); border-color: rgba(255,255,255,0.35); color: var(--c-accent-hover);"
             >
               刷新状态
             </el-button>
@@ -152,7 +152,7 @@
       <!-- 视图呈现切换栏与当前审批人快速指示 -->
       <div class="view-switch-row" style="display: flex; justify-content: space-between; align-items: center; margin: 12px 0 16px 0; padding: 0 4px; flex-wrap: wrap; gap: 8px;">
         <div style="display: flex; align-items: center; gap: 8px;">
-          <span style="font-size: 13px; font-weight: 600; color: #475569;">流转呈现模式：</span>
+          <span style="font-size: 13px; font-weight: 600; color: var(--c-text-2);">流转呈现模式：</span>
           <el-radio-group v-model="flowDisplayMode" size="small">
             <el-radio-button value="bpmn">🔀 BPMN 2.0 拓扑全景图 (推荐)</el-radio-button>
             <el-radio-button value="timeline">⏱️ Flowable 时间线视图</el-radio-button>
@@ -266,7 +266,7 @@
               </div>
               <div class="branch-card-body">
                 <div class="task-icon-col icon-box-dba">
-                  <el-icon :size="18" color="#dc2626"><UserFilled /></el-icon>
+                  <el-icon :size="18"><UserFilled /></el-icon>
                 </div>
                 <div class="task-title-col">
                   <div class="t-name-row">
@@ -293,7 +293,7 @@
               </div>
               <div class="branch-card-body">
                 <div class="task-icon-col icon-box-lead">
-                  <el-icon :size="18" color="#2563eb"><User /></el-icon>
+                  <el-icon :size="18"><User /></el-icon>
                 </div>
                 <div class="task-title-col">
                   <div class="t-name-row">
@@ -332,7 +332,7 @@
           <!-- 阶段 04：JDBC 流式执行 -->
           <div class="bpmn-task-card task-service">
             <div class="task-icon-col icon-box-service">
-              <el-icon :size="18" color="#16a34a"><Tools /></el-icon>
+              <el-icon :size="18"><Tools /></el-icon>
             </div>
             <div class="task-title-col">
               <div class="t-name-row">
@@ -364,7 +364,7 @@
       </div>
 
       <!-- 1.1 Flowable 时间线流转呈现模式 -->
-      <div v-if="flowDisplayMode === 'timeline'" class="flow-timeline-container" style="padding: 16px 20px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; margin-bottom: 16px;">
+      <div v-if="flowDisplayMode === 'timeline'" class="flow-timeline-container" style="padding: 16px 20px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 8px; margin-bottom: 16px;">
         <el-timeline>
           <el-timeline-item
             v-for="(node, idx) in flowNodes"
@@ -377,7 +377,7 @@
             <el-card shadow="never" class="timeline-node-card" :style="node.status === 'ACTIVE' ? 'border: 2px solid #3b82f6; background: #eff6ff;' : (node.status === 'COMPLETED' ? 'border-left: 4px solid #10b981;' : 'border-left: 4px solid #94a3b8;')">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <span style="font-weight: 700; font-size: 14px; color: #1e293b;">{{ Number(idx) + 1 }}. {{ node.nodeName }}</span>
+                  <span style="font-weight: 700; font-size: 14px; color: var(--c-text);">{{ Number(idx) + 1 }}. {{ node.nodeName }}</span>
                   <el-tag size="small" :type="getNodeStatusTagType(node.status)" effect="light">
                     {{ getNodeStatusLabel(node.status) }}
                   </el-tag>
@@ -385,18 +385,18 @@
                     📍 当前审批节点
                   </el-tag>
                 </div>
-                <span style="font-size: 12px; color: #64748b; font-family: monospace;">
+                <span style="font-size: 12px; color: var(--c-text-3); font-family: monospace;">
                   Flowable 任务定义: {{ node.nodeKey }}
                 </span>
               </div>
 
-              <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; margin-top: 6px; color: #475569;">
+              <div style="display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; margin-top: 6px; color: var(--c-text-2);">
                 <div>
-                  <span style="color: #64748b;">审批角色：</span>
+                  <span style="color: var(--c-text-3);">审批角色：</span>
                   <span class="role-badge" :class="getRoleBadgeClass(node.approverRole)">{{ formatStandardRoleText(node.approverRole) }}</span>
                 </div>
                 <div>
-                  <span style="color: #64748b; font-weight: 600;">责任审批人：</span>
+                  <span style="color: var(--c-text-3); font-weight: 600;">责任审批人：</span>
                   <template v-if="node.eligibleApprovers && node.eligibleApprovers.length > 0">
                     <el-tag
                       v-for="approver in node.eligibleApprovers"
@@ -409,19 +409,19 @@
                       👤 {{ approver }}
                     </el-tag>
                   </template>
-                  <span v-else style="color: #94a3b8;">系统指定责任人</span>
+                  <span v-else style="color: var(--c-text-4);">系统指定责任人</span>
                 </div>
                 <div v-if="node.actualApprover">
-                  <span style="color: #64748b;">实际操作人：</span>
-                  <span style="font-weight: 600; color: #047857;">✅ {{ node.actualApprover }}</span>
+                  <span style="color: var(--c-text-3);">实际操作人：</span>
+                  <span style="font-weight: 600; color: var(--c-success);">✅ {{ node.actualApprover }}</span>
                 </div>
                 <div v-if="node.finishTime">
-                  <span style="color: #64748b;">完成时间：</span>
+                  <span style="color: var(--c-text-3);">完成时间：</span>
                   <span style="font-family: monospace;">{{ node.finishTime }}</span>
                 </div>
               </div>
 
-              <div v-if="node.comment" style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.03); border-radius: 4px; font-size: 12px; color: #334155;">
+              <div v-if="node.comment" style="margin-top: 8px; padding: 6px 10px; background: rgba(0,0,0,0.03); border-radius: 4px; font-size: 12px; color: var(--c-text-2);">
                 💬 <b>审批意见：</b>{{ node.comment }}
               </div>
 
@@ -524,7 +524,7 @@
                 <span class="detail-val font-mono">{{ node.finishTime }}</span>
               </div>
               <div v-if="node.comment" class="detail-comment-row">
-                <el-icon color="#67C23A" style="margin-right: 4px;"><ChatLineSquare /></el-icon>
+                <el-icon style="margin-right: 4px;"><ChatLineSquare /></el-icon>
                 <span class="comment-text">{{ node.comment }}</span>
               </div>
             </div>
@@ -584,7 +584,7 @@
       <template #header>
         <div class="dba-feedback-header">
           <div class="header-title-wrap">
-            <el-icon style="font-size: 20px; color: #E6A23C;"><Tools /></el-icon>
+            <el-icon style="font-size: 20px; color: var(--c-warning);"><Tools /></el-icon>
             <span class="title-text">DBA 线下工具执行与结果反馈工作台</span>
             <el-tag type="warning" effect="dark" size="small">待 DBA 反馈执行结果</el-tag>
           </div>
@@ -703,7 +703,7 @@
       <el-card shadow="hover" class="exec-result-card">
         <template #header>
           <div class="section-title-wrap">
-            <el-icon style="color: #67C23A;"><Finished /></el-icon>
+            <el-icon style="color: var(--c-success);"><Finished /></el-icon>
             <span>工单执行结果与防篡改审计报告</span>
             <el-tag
               :type="ticketDetail.ticket.status === 'EXECUTED' ? 'success' : 'danger'"
@@ -727,7 +727,7 @@
           <template #default>
             <div style="font-size: 13px; line-height: 1.6; margin-top: 4px;">
               <b>报错原因：</b>
-              <span style="font-family: monospace; color: #F56C6C;">
+              <span style="font-family: monospace; color: var(--c-danger);">
                 {{ ticketDetail?.executionInfo?.errorTrace || ticketDetail?.ticket?.executionWindow || '数据库语法错误或执行异常' }}
               </span>
             </div>
@@ -737,7 +737,7 @@
         <div class="exec-result-grid">
           <div class="result-metric-card">
             <div class="metric-lbl">实际影响行数</div>
-            <div class="metric-val" style="color: #67C23A;">
+            <div class="metric-val" style="color: var(--c-success);">
               {{ getActualAffectRowsDisplay() }} 行
             </div>
             <div class="metric-sub">流式事务安全提交</div>
@@ -745,7 +745,7 @@
 
           <div class="result-metric-card">
             <div class="metric-lbl">执行总耗时</div>
-            <div class="metric-val font-mono" style="color: #409EFF;">
+            <div class="metric-val font-mono" style="color: var(--c-accent);">
               {{ ticketDetail.detail?.durationMs || ticketDetail.executionInfo?.durationMs || 15 }} ms
             </div>
             <div class="metric-sub">高并发低锁耗时</div>
@@ -753,7 +753,7 @@
 
           <div class="result-metric-card">
             <div class="metric-lbl">执行调度模式</div>
-            <div class="metric-val" style="font-size: 15px; color: #303133;">
+            <div class="metric-val" style="font-size: 15px; color: var(--c-text);">
               {{ formatExecutionWindow(ticketDetail.ticket.executionWindow) }}
             </div>
             <div class="metric-sub">自动化流式引擎</div>
@@ -761,7 +761,7 @@
 
           <div class="result-metric-card">
             <div class="metric-lbl">区块链存证凭据</div>
-            <div class="metric-val font-mono" style="font-size: 13px; color: #909399;" :title="ticketDetail.detail?.proofHash || ticketDetail.executionInfo?.proofHash || 'HASH-9f8e7d6c5b4a'">
+            <div class="metric-val font-mono" style="font-size: 13px; color: var(--c-text-3);" :title="ticketDetail.detail?.proofHash || ticketDetail.executionInfo?.proofHash || 'HASH-9f8e7d6c5b4a'">
               {{ (ticketDetail.detail?.proofHash || ticketDetail.executionInfo?.proofHash || 'HASH-9f8e7d6c5b4a').substring(0, 16) }}...
             </div>
             <div class="metric-sub">SHA-256 全流程存证</div>
@@ -793,7 +793,7 @@
           <el-table :data="ticketInfoList" border style="width: 100%" stripe>
             <el-table-column prop="ticketId" label="工单编号" min-width="190">
               <template #default="{ row }">
-                <span style="font-family: monospace; font-weight: 700; color: #1e3a8a;">#{{ row.ticketId }}</span>
+                <span style="font-family: monospace; font-weight: 700; color: var(--c-accent-hover);">#{{ row.ticketId }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="type" label="变更类型" min-width="135" align="center">
@@ -803,7 +803,7 @@
             </el-table-column>
             <el-table-column prop="instance" label="目标数据库实例" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">
-                <span style="font-weight: 600; color: #303133;">{{ getInstanceName(row.instance) }}</span>
+                <span style="font-weight: 600; color: var(--c-text);">{{ getInstanceName(row.instance) }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="dbName" label="目标数据库" min-width="140" show-overflow-tooltip>
@@ -811,7 +811,7 @@
                 <el-tag v-if="row.dbName" size="small" type="success" effect="plain" style="font-family: monospace; font-weight: 600;">
                   🗃️ {{ row.dbName }}
                 </el-tag>
-                <span v-else style="color: #94a3b8; font-size: 12px;">全局 / 默认库</span>
+                <span v-else style="color: var(--c-text-4); font-size: 12px;">全局 / 默认库</span>
               </template>
             </el-table-column>
             <el-table-column label="所属业务资源组" min-width="160" show-overflow-tooltip>
@@ -823,22 +823,22 @@
             </el-table-column>
             <el-table-column label="所属部门与业务系统" min-width="180" show-overflow-tooltip>
               <template #default="{ row }">
-                <span style="font-size: 12px; color: #475569;">{{ getInstanceDeptOrSystem(row) }}</span>
+                <span style="font-size: 12px; color: var(--c-text-2);">{{ getInstanceDeptOrSystem(row) }}</span>
               </template>
             </el-table-column>
             <el-table-column label="申请人" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <el-avatar :size="24" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); font-size: 11px; color: #fff; font-weight: 600;">
+                  <el-avatar :size="24" style="background: var(--c-accent); font-size: 11px; color: #fff; font-weight: 600;">
                     {{ getAvatarInitial(row.applicantName || row.applicant) }}
                   </el-avatar>
-                  <span style="font-weight: 600; color: #1e293b; font-size: 13px;">{{ cleanApplicantName(row.applicantName || row.applicant) }}</span>
+                  <span style="font-weight: 600; color: var(--c-text); font-size: 13px;">{{ cleanApplicantName(row.applicantName || row.applicant) }}</span>
                 </div>
               </template>
             </el-table-column>
             <el-table-column label="提交时间" min-width="165" align="center">
               <template #default="{ row }">
-                <span style="font-family: monospace; font-size: 12px; color: #64748b;">{{ row.createTime || '-' }}</span>
+                <span style="font-family: monospace; font-size: 12px; color: var(--c-text-3);">{{ row.createTime || '-' }}</span>
               </template>
             </el-table-column>
             <el-table-column prop="status" label="当前状态" min-width="125" align="center">
@@ -856,7 +856,7 @@
       <el-card shadow="hover" class="custom-fields-card">
         <template #header>
           <div class="section-title-wrap">
-            <el-icon style="color: #409EFF;"><Tickets /></el-icon>
+            <el-icon style="color: var(--c-accent);"><Tickets /></el-icon>
             <span>业务上线与执行约束属性</span>
             <el-tag size="small" type="info" effect="plain" style="margin-left: 8px;">
               基于所属实例与资源组定制规范
@@ -946,22 +946,22 @@
             <el-table-column label="声明预期影响行数" width="150" align="center">
               <template #default="{ row }">
                 <span v-if="row.isDml">
-                  <span v-if="row.expectedRows !== null" style="font-weight: 700; color: #2563eb;">
+                  <span v-if="row.expectedRows !== null" style="font-weight: 700; color: var(--c-accent);">
                     {{ row.expectedRows }} 行
                   </span>
-                  <span v-else style="color: #94a3b8;">未指定 (免声明)</span>
+                  <span v-else style="color: var(--c-text-4);">未指定 (免声明)</span>
                 </span>
-                <span v-else-if="row.isDdl" style="color: #94a3b8; font-size: 12px;">免声明 (DDL)</span>
-                <span v-else style="color: #94a3b8; font-size: 12px;">--</span>
+                <span v-else-if="row.isDdl" style="color: var(--c-text-4); font-size: 12px;">免声明 (DDL)</span>
+                <span v-else style="color: var(--c-text-4); font-size: 12px;">--</span>
               </template>
             </el-table-column>
             <el-table-column label="预执行影响行数 (Dry-Run)" width="165" align="center">
               <template #default="{ row }">
-                <span v-if="row.isDml" style="font-weight: 700; color: #16a34a;">
+                <span v-if="row.isDml" style="font-weight: 700; color: var(--c-success);">
                   {{ row.dryRunRows !== null ? row.dryRunRows : 0 }} 行
                 </span>
-                <span v-else-if="row.isDdl" style="color: #94a3b8; font-size: 12px;">0 行 (DDL结构变更)</span>
-                <span v-else style="color: #94a3b8; font-size: 12px;">-- (只读查询)</span>
+                <span v-else-if="row.isDdl" style="color: var(--c-text-4); font-size: 12px;">0 行 (DDL结构变更)</span>
+                <span v-else style="color: var(--c-text-4); font-size: 12px;">-- (只读查询)</span>
               </template>
             </el-table-column>
             <el-table-column label="比对与校验状态" width="160" align="center">
@@ -1000,8 +1000,8 @@
           </el-table>
 
           <!-- SQL 列表独立分页栏（针对海量 SQL 高效分页浏览） -->
-          <div class="sql-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 8px 4px; border-top: 1px dashed #e2e8f0;">
-            <span style="font-size: 12.5px; color: #64748b;">
+          <div class="sql-pagination-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 14px; padding: 8px 4px; border-top: 1px dashed var(--c-border);">
+            <span style="font-size: 12.5px; color: var(--c-text-3);">
               共 <b>{{ filteredSqlList.length }}</b> 条语句（显示第 {{ (sqlCurrentPage - 1) * sqlPageSize + (filteredSqlList.length > 0 ? 1 : 0) }} ~ {{ Math.min(sqlCurrentPage * sqlPageSize, filteredSqlList.length) }} 条）
             </span>
             <el-pagination
@@ -1028,7 +1028,7 @@
       <template #header>
         <div class="approval-header">
           <div class="user-perm-info">
-            <el-icon style="font-size: 18px; color: #E6A23C;"><Stamp /></el-icon>
+            <el-icon style="font-size: 18px; color: var(--c-warning);"><Stamp /></el-icon>
             <span class="perm-title">{{ isFinalApprovalStep ? '工单终审与执行决策面板' : '工单阶段初审 / 复核面板' }}</span>
             <el-tag :type="isFinalApprovalStep ? 'warning' : 'primary'" effect="dark" size="small" style="margin-left: 8px;">
               {{ currentOperatorDesc }}
@@ -1045,7 +1045,7 @@
         <div v-if="!isFinalApprovalStep" class="intermediate-stage-banner">
           <div class="stage-banner-header">
             <div class="stage-icon-col">
-              <el-icon color="#2563eb" :size="22"><Operation /></el-icon>
+              <el-icon :size="22"><Operation /></el-icon>
             </div>
             <div class="stage-text-col">
               <div class="stage-main-title">
@@ -1143,7 +1143,7 @@
           <template v-if="isFinalApprovalStep">
             <div v-if="approvalExecutionMode === 'SCHEDULED'" class="inline-mode-config-box box-scheduled">
               <div class="config-title-row">
-                <el-icon color="#e6a23c"><Clock /></el-icon>
+                <el-icon><Clock /></el-icon>
                 <span>配置定时执行计划时间窗口：</span>
               </div>
               <div class="config-control-row">
@@ -1162,7 +1162,7 @@
 
             <div v-else-if="approvalExecutionMode === 'CANARY_BATCH'" class="inline-mode-config-box box-batch">
               <div class="config-title-row">
-                <el-icon color="#409eff"><DataLine /></el-icon>
+                <el-icon><DataLine /></el-icon>
                 <span>配置灰度分批执行调度参数：</span>
               </div>
               <div class="config-control-row">
@@ -1221,7 +1221,7 @@
         <template #header>
           <div class="table-actions-bar">
             <div class="section-title-wrap">
-              <el-icon style="color: #67C23A;"><Check /></el-icon>
+              <el-icon style="color: var(--c-success);"><Check /></el-icon>
               <span>数据备份与回滚方案 (Rollback & Backup Scheme)</span>
               <el-tag
                 size="small"
@@ -1267,7 +1267,7 @@
             </template>
           </el-alert>
         </div>
-        <div v-else class="text-muted" style="padding: 12px; color: #909399;">
+        <div v-else class="text-muted" style="padding: 12px; color: var(--c-text-3);">
           该工单提交时未提供独立回滚脚本。
         </div>
       </el-card>
@@ -1279,7 +1279,7 @@
         <template #header>
           <div class="table-actions-bar">
             <div class="section-title-wrap">
-              <el-icon style="color: #409EFF;"><Tickets /></el-icon>
+              <el-icon style="color: var(--c-accent);"><Tickets /></el-icon>
               <span>工单操作日志 (Operation Log)</span>
               <el-tag size="small" type="primary" effect="plain" style="margin-left: 8px;">
                 全流程节点追踪 · 共 {{ (operationLogs && operationLogs.length) || 0 }} 条记录
@@ -1326,7 +1326,7 @@
         <el-collapse-transition>
           <div v-if="isLogDetailsExpanded && operationLogs && operationLogs.length > 0" class="full-log-timeline-wrapper">
             <el-divider content-position="left">
-              <span style="font-size: 12px; color: #94a3b8;">全流程防篡改审计明细时间轴</span>
+              <span style="font-size: 12px; color: var(--c-text-4);">全流程防篡改审计明细时间轴</span>
             </el-divider>
             <el-timeline style="padding: 12px 10px;">
               <el-timeline-item
@@ -1346,16 +1346,16 @@
                     >
                       {{ getOperationTypeLabel(log.operationType) }}
                     </el-tag>
-                    <span style="font-size: 13px; color: #374151; font-weight: 600;">
+                    <span style="font-size: 13px; color: var(--c-text-2); font-weight: 600;">
                       {{ log.nodeName || '操作节点' }}
                     </span>
                     <el-divider direction="vertical" />
-                    <span style="font-size: 13px; color: #6b7280;">
+                    <span style="font-size: 13px; color: var(--c-text-3);">
                       <el-icon style="vertical-align: middle;"><UserFilled /></el-icon>
                       {{ log.operatorName || log.operatorIdCard }}
                     </span>
                   </div>
-                  <div v-if="log.comment" style="margin-top: 8px; font-size: 13px; color: #64748b; background: #f8fafc; padding: 6px 10px; border-radius: 4px; border-left: 3px solid #93c5fd;">
+                  <div v-if="log.comment" style="margin-top: 8px; font-size: 13px; color: var(--c-text-3); background: var(--c-muted-bg); padding: 6px 10px; border-radius: 4px; border-left: 3px solid var(--c-accent-border);">
                     {{ log.comment }}
                   </div>
                 </el-card>
@@ -1364,7 +1364,7 @@
           </div>
         </el-collapse-transition>
 
-        <div v-if="!operationLogs || operationLogs.length === 0" class="text-muted" style="padding: 16px; color: #909399; text-align: center;">
+        <div v-if="!operationLogs || operationLogs.length === 0" class="text-muted" style="padding: 16px; color: var(--c-text-3); text-align: center;">
           <el-empty description="暂无操作日志记录" :image-size="60" />
         </div>
       </el-card>
@@ -1382,8 +1382,8 @@
         <div class="reschedule-tip-banner">
           <el-icon><Clock /></el-icon>
           <div>
-            <div style="font-weight: 600; color: #1e293b;">当前计划执行时间</div>
-            <div style="font-size: 13px; color: #64748b; font-family: monospace; margin-top: 2px;">
+            <div style="font-weight: 600; color: var(--c-text);">当前计划执行时间</div>
+            <div style="font-size: 13px; color: var(--c-text-3); font-family: monospace; margin-top: 2px;">
               {{ ticketDetail?.ticket?.executionWindow || '未指定时间' }}
             </div>
           </div>
@@ -1552,7 +1552,7 @@
             <div style="display: flex; gap: 8px; flex-wrap: wrap;">
               <el-tag type="success">🟢 企业微信应用工作消息</el-tag>
               <el-tag type="primary">🔵 阿里钉钉群/工作通知</el-tag>
-              <el-tag type="success" style="background: rgba(16,185,129,0.1); border-color: #10b981; color: #047857;">🟣 字节飞书 / Lark 交互卡片</el-tag>
+              <el-tag type="success" style="background: rgba(16,185,129,0.1); border-color: var(--c-success); color: var(--c-success);">🟣 字节飞书 / Lark 交互卡片</el-tag>
               <el-tag type="warning">🟡 站内待办审批提醒</el-tag>
             </div>
           </el-form-item>
@@ -2445,8 +2445,8 @@ const openSqlViewerDialog = () => {
   *{box-sizing:border-box;margin:0;padding:0}
   body{
     font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;
-    background:#f4f6f8;
-    color:#1e293b;
+    background:var(--c-muted-bg);
+    color:var(--c-text);
     display:flex;
     flex-direction:column;
     height:100vh;
@@ -2457,16 +2457,16 @@ const openSqlViewerDialog = () => {
     align-items:center;
     gap:10px;
     padding:10px 20px;
-    background:#ffffff;
-    border-bottom:1px solid #e2e8f0;
-    box-shadow:0 1px 3px rgba(0,0,0,0.04);
+    background:var(--c-surface);
+    border-bottom:1px solid var(--c-border);
+    box-shadow:var(--shadow-sm);
     flex-shrink:0;
     flex-wrap:wrap;
   }
   .toolbar-title{
     font-size:15px;
     font-weight:700;
-    color:#0f172a;
+    color:var(--c-text);
     display:flex;
     align-items:center;
     gap:6px;
@@ -2481,29 +2481,29 @@ const openSqlViewerDialog = () => {
     align-items:center;
     gap:4px;
   }
-  .tag-schema{background:#ecfdf5;color:#047857;border:1px solid #a7f3d0}
-  .tag-user{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
-  .tag-type{background:#f8fafc;color:#475569;border:1px solid #cbd5e1}
-  .tag-inst{background:#fffbeb;color:#b45309;border:1px solid #fde68a}
+  .tag-schema{background:var(--c-success-soft);color:var(--c-success);border:1px solid var(--c-success-border)}
+  .tag-user{background:var(--c-accent-soft);color:var(--c-accent-hover);border:1px solid var(--c-accent-border)}
+  .tag-type{background:var(--c-muted-bg);color:var(--c-text-2);border:1px solid var(--c-border-strong)}
+  .tag-inst{background:var(--c-warning-soft);color:var(--c-warning);border:1px solid var(--c-warning-border)}
   .spacer{flex:1}
   .actions{display:flex;align-items:center;gap:8px}
   .search-box{
     padding:6px 12px;
     border-radius:6px;
-    border:1px solid #cbd5e1;
-    background:#f8fafc;
-    color:#1e293b;
+    border:1px solid var(--c-border-strong);
+    background:var(--c-muted-bg);
+    color:var(--c-text);
     font-size:12.5px;
     width:220px;
     outline:none;
     transition:all 0.2s;
   }
   .search-box:focus{
-    background:#ffffff;
-    border-color:#3b82f6;
-    box-shadow:0 0 0 3px rgba(59,130,246,0.15);
+    background:var(--c-surface);
+    border-color:var(--c-accent);
+    box-shadow:var(--shadow-sm);
   }
-  .search-box::placeholder{color:#94a3b8}
+  .search-box::placeholder{color:var(--c-text-4)}
   .btn{
     display:inline-flex;
     align-items:center;
@@ -2517,30 +2517,30 @@ const openSqlViewerDialog = () => {
     border:1px solid transparent;
   }
   .btn-default{
-    background:#ffffff;
-    border-color:#cbd5e1;
-    color:#334155;
+    background:var(--c-surface);
+    border-color:var(--c-border-strong);
+    color:var(--c-text-2);
   }
   .btn-default:hover{
-    background:#f1f5f9;
-    border-color:#94a3b8;
-    color:#0f172a;
+    background:var(--c-subtle);
+    border-color:var(--c-border-strong);
+    color:var(--c-text);
   }
   .btn-primary{
-    background:#2563eb;
+    background:var(--c-accent);
     color:#ffffff;
   }
   .btn-primary:hover{
-    background:#1d4ed8;
+    background:var(--c-accent-hover);
   }
   .stats-bar{
     display:flex;
     gap:18px;
     padding:8px 20px;
-    background:#f8fafc;
-    border-bottom:1px solid #e2e8f0;
+    background:var(--c-muted-bg);
+    border-bottom:1px solid var(--c-border);
     font-size:12px;
-    color:#64748b;
+    color:var(--c-text-3);
     flex-shrink:0;
     flex-wrap:wrap;
   }
@@ -2548,7 +2548,7 @@ const openSqlViewerDialog = () => {
   .code-container{
     flex:1;
     overflow:auto;
-    background:#ffffff;
+    background:var(--c-surface);
     display:flex;
     flex-direction:column;
   }
@@ -2561,16 +2561,16 @@ const openSqlViewerDialog = () => {
     font-family:Consolas, 'Fira Code', Menlo, Monaco, monospace;
     transition:background 0.15s;
   }
-  .line:hover{background:#f1f5f9}
-  .line.hl{background:#fef08a;box-shadow:inset 3px 0 0 #eab308}
+  .line:hover{background:var(--c-subtle)}
+  .line.hl{background:var(--c-warning-border);box-shadow:inset 3px 0 0 #eab308}
   .ln{
     width:58px;
     min-width:58px;
     text-align:right;
     padding-right:16px;
-    color:#94a3b8;
-    background:#f8fafc;
-    border-right:1px solid #edf2f7;
+    color:var(--c-text-4);
+    background:var(--c-muted-bg);
+    border-right:1px solid var(--c-border);
     user-select:none;
     font-size:12px;
   }
@@ -2579,21 +2579,21 @@ const openSqlViewerDialog = () => {
     padding-left:14px;
     padding-right:20px;
     white-space:pre;
-    color:#1e293b;
+    color:var(--c-text);
     word-break:break-all;
   }
-  .lc-comment{color:#15803d;font-style:italic}
+  .lc-comment{color:var(--c-success);font-style:italic}
   .toast{
     position:fixed;
     top:16px;
     left:50%;
     transform:translateX(-50%);
-    background:#0f172a;
+    background:var(--c-ink-bg);
     color:#ffffff;
     padding:8px 16px;
     border-radius:6px;
     font-size:13px;
-    box-shadow:0 4px 12px rgba(0,0,0,0.15);
+    box-shadow:var(--shadow-sm);
     opacity:0;
     transition:opacity 0.2s, top 0.2s;
     pointer-events:none;
@@ -3024,16 +3024,16 @@ onUnmounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 10px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px 18px;
   border-radius: 8px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--c-border);
   position: sticky;
   top: 8px;
   z-index: 100;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);
-  background: rgba(255, 255, 255, 0.96);
+  background: color-mix(in srgb, var(--c-surface) 96%, transparent);
 }
 
 .sticky-bar-left {
@@ -3058,7 +3058,7 @@ onUnmounted(() => {
 .ticket-id-label {
   font-size: 14px;
   font-weight: 800;
-  color: #1e3a8a;
+  color: var(--c-accent-hover);
   font-family: Consolas, monospace;
   letter-spacing: 0.5px;
 }
@@ -3075,13 +3075,13 @@ onUnmounted(() => {
 }
 
 .meta-sep {
-  color: #cbd5e1;
+  color: var(--c-text-4);
   font-size: 13px;
 }
 
 .meta-text {
   font-size: 12.5px;
-  color: #475569;
+  color: var(--c-text-2);
   font-weight: 500;
   white-space: nowrap;
 }
@@ -3106,7 +3106,7 @@ onUnmounted(() => {
 
 .status-tip-text {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   font-weight: 500;
 }
 
@@ -3120,12 +3120,12 @@ onUnmounted(() => {
 .workflow-card {
   border-radius: 8px;
   border: none;
-  background: linear-gradient(135deg, #f0f9ff 0%, #f8fafc 100%);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .workflow-card :deep(.el-card__header) {
-  background: linear-gradient(90deg, #1e3a8a 0%, #1d4ed8 100%);
+  background: var(--c-accent-hover);
   border-radius: 8px 8px 0 0;
   padding: 12px 18px;
 }
@@ -3135,7 +3135,7 @@ onUnmounted(() => {
 }
 
 .workflow-card :deep(.el-card__header) .title-icon {
-  color: #93c5fd;
+  color: var(--c-accent);
 }
 
 .workflow-card :deep(.el-card__header) .card-header-flex {
@@ -3144,8 +3144,8 @@ onUnmounted(() => {
 
 /* 智能排他网关决策横幅 */
 .gateway-decision-banner {
-  background: linear-gradient(135deg, #eff6ff 0%, #f0fdf4 100%);
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 8px;
   padding: 10px 16px;
   margin-bottom: 16px;
@@ -3154,7 +3154,7 @@ onUnmounted(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  box-shadow: var(--shadow-sm);
 }
 
 .gateway-banner-left {
@@ -3162,19 +3162,19 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #1e293b;
+  color: var(--c-text);
   line-height: 1.5;
 }
 
 .gw-icon {
   font-size: 16px;
-  color: #2563eb;
+  color: var(--c-accent);
   flex-shrink: 0;
 }
 
 .gw-text code {
-  background: #e2e8f0;
-  color: #0f172a;
+  background: var(--c-border);
+  color: var(--c-text);
   padding: 2px 6px;
   border-radius: 4px;
   font-family: 'Fira Code', Consolas, monospace;
@@ -3191,7 +3191,7 @@ onUnmounted(() => {
 .curr-approver-label {
   font-size: 12.5px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .approver-pill-group {
@@ -3211,12 +3211,12 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background:
-    radial-gradient(#cbd5e1 1px, transparent 1px),
+    radial-gradient(var(--c-border-strong) 1px, transparent 1px),
     linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   background-size: 16px 16px, 100% 100%;
   padding: 12px 16px 16px 16px;
   border-radius: 10px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--c-border-strong);
   overflow-x: auto;
   box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.8), 0 2px 6px rgba(0, 0, 0, 0.03);
 }
@@ -3238,11 +3238,11 @@ onUnmounted(() => {
   gap: 5px;
   font-size: 11px;
   font-weight: 700;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .stage-step-num {
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 4px;
   padding: 1px 5px;
@@ -3270,7 +3270,7 @@ onUnmounted(() => {
   font-weight: 700;
   white-space: nowrap;
   flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .pill-main-row {
@@ -3281,20 +3281,20 @@ onUnmounted(() => {
 
 .pill-sub-text {
   font-size: 10px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 500;
 }
 
 .bpmn-start-pill {
-  background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
-  border: 2px solid #059669;
-  color: #065f46;
+  background: var(--c-success-soft);
+  border: 2px solid var(--c-success);
+  color: var(--c-success-strong);
 }
 
 .bpmn-end-pill {
-  background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-  border: 2px solid #334155;
-  color: #0f172a;
+  background: var(--c-surface);
+  border: 2px solid var(--c-ink-bg-2);
+  color: var(--c-text);
 }
 
 .bpmn-circle {
@@ -3304,14 +3304,14 @@ onUnmounted(() => {
 }
 
 .start-circle {
-  background: #10b981;
-  border: 2px solid #047857;
-  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.2);
+  background: var(--c-success);
+  border: 2px solid var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 .end-circle {
-  background: #1e293b;
-  border: 3px solid #64748b;
+  background: var(--c-ink-bg);
+  border: 3px solid var(--c-text-3);
 }
 
 .bpmn-svg-arrow-wrap,
@@ -3327,47 +3327,47 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  background: #ffffff;
-  border: 1.5px solid #f59e0b;
+  background: var(--c-surface);
+  border: 1.5px solid var(--c-warning);
   border-radius: 10px;
   padding: 9px 8px;
-  box-shadow: 0 3px 10px rgba(245, 158, 11, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-gateway-diamond {
   width: 34px;
   height: 34px;
-  border: 2px solid #d97706;
+  border: 2px solid var(--c-warning);
   border-radius: 6px;
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  background: var(--c-warning-soft);
   transform: rotate(45deg);
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 7px;
-  box-shadow: 0 2px 5px rgba(217, 119, 6, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 .diamond-x {
   transform: rotate(-45deg);
   font-weight: 900;
   font-size: 15px;
-  color: #92400e;
+  color: var(--c-warning-strong);
 }
 
 .gw-card-title {
   font-size: 11.5px;
   font-weight: 800;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 3px;
 }
 
 .gw-spel-pill {
-  color: #b45309;
+  color: var(--c-warning);
   font-family: 'JetBrains Mono', Consolas, monospace;
   font-size: 10px;
-  background: #fffbeb;
-  border: 1px solid #fcd34d;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
   padding: 2px 5px;
   border-radius: 4px;
   text-align: center;
@@ -3385,8 +3385,8 @@ onUnmounted(() => {
 .bpmn-branch-card {
   border-radius: 10px;
   padding: 8px 11px;
-  background: #ffffff;
-  border: 2px solid #cbd5e1;
+  background: var(--c-surface);
+  border: 2px solid var(--c-border-strong);
   display: flex;
   flex-direction: column;
   gap: 5px;
@@ -3394,25 +3394,25 @@ onUnmounted(() => {
 }
 
 .branch-card-high {
-  border-color: #fca5a5;
-  background: linear-gradient(135deg, #fff5f5 0%, #ffffff 100%);
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-soft);
 }
 
 .branch-card-normal {
-  border-color: #93c5fd;
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+  border-color: var(--c-accent-border);
+  background: var(--c-accent-soft);
 }
 
 .bpmn-branch-card.is-active-high {
-  border-color: #dc2626;
-  background: linear-gradient(135deg, #fef2f2 0%, #fff1f2 100%);
-  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.16), 0 0 0 3px rgba(239, 68, 68, 0.12);
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-branch-card.is-active-normal {
-  border-color: #2563eb;
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.16), 0 0 0 3px rgba(59, 130, 246, 0.14);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-branch-card.is-standby-branch {
@@ -3439,11 +3439,11 @@ onUnmounted(() => {
 }
 
 .high-label {
-  color: #dc2626;
+  color: var(--c-danger);
 }
 
 .normal-label {
-  color: #2563eb;
+  color: var(--c-accent);
 }
 
 .branch-hit-badge {
@@ -3456,18 +3456,18 @@ onUnmounted(() => {
 }
 
 .badge-hit-high {
-  background: #dc2626;
+  background: var(--c-danger);
   color: #ffffff;
 }
 
 .badge-hit-normal {
-  background: #2563eb;
+  background: var(--c-accent);
   color: #ffffff;
 }
 
 .badge-standby {
-  background: #e2e8f0;
-  color: #64748b;
+  background: var(--c-border);
+  color: var(--c-text-3);
 }
 
 .branch-card-body {
@@ -3482,15 +3482,15 @@ onUnmounted(() => {
   gap: 9px;
   padding: 10px 12px;
   border-radius: 10px;
-  border: 2px solid #cbd5e1;
-  background: #ffffff;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  border: 2px solid var(--c-border-strong);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .task-service {
-  border-color: #10b981;
-  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
-  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.12);
+  border-color: var(--c-success);
+  background: var(--c-success-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .task-icon-col {
@@ -3504,18 +3504,18 @@ onUnmounted(() => {
 }
 
 .icon-box-dba {
-  background: #fee2e2;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  border: 1px solid var(--c-danger-border);
 }
 
 .icon-box-lead {
-  background: #dbeafe;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
 }
 
 .icon-box-service {
-  background: #dcfce7;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
 }
 
 .task-title-col {
@@ -3534,7 +3534,7 @@ onUnmounted(() => {
 .t-name {
   font-size: 12.5px;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .role-code-chip {
@@ -3546,18 +3546,18 @@ onUnmounted(() => {
 }
 
 .chip-dba {
-  background: #fee2e2;
-  color: #b91c1c;
+  background: var(--c-danger-soft);
+  color: var(--c-danger-strong);
 }
 
 .chip-lead {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
 }
 
 .t-role {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .bpmn-flow-dash-anim {
@@ -3586,18 +3586,18 @@ onUnmounted(() => {
 
 .title-icon {
   font-size: 18px;
-  color: #409EFF;
+  color: var(--c-accent);
 }
 
 .title-text {
   font-size: 15px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
 }
 
 .sub-text {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-left: 6px;
 }
 
@@ -3605,22 +3605,22 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 6px;
   padding: 8px 14px;
   margin-bottom: 12px;
   font-size: 12px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .workflow-routing-info-banner.is-pinned-banner {
-  background: #fffbeb;
-  border-color: #fde68a;
+  background: var(--c-warning-soft);
+  border-color: var(--c-warning-border);
 }
 
 .trigger-condition-text {
-  color: #64748b;
+  color: var(--c-text-3);
   margin-left: 6px;
 }
 
@@ -3651,7 +3651,7 @@ onUnmounted(() => {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #909399;
+  background: var(--c-text-3);
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -3670,14 +3670,14 @@ onUnmounted(() => {
   overflow-x: auto;
   padding: 8px 4px 16px 4px;
   scrollbar-width: thin;
-  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-color: var(--c-border-strong) transparent;
 }
 
 .flow-pipeline-container::-webkit-scrollbar {
   height: 5px;
 }
 .flow-pipeline-container::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--c-border-strong);
   border-radius: 3px;
 }
 
@@ -3697,15 +3697,15 @@ onUnmounted(() => {
 }
 
 .pipeline-node-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 12px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   flex: 1;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   border-left-width: 3px;
@@ -3724,45 +3724,45 @@ onUnmounted(() => {
 }
 
 .pipeline-node-card.node-state-completed::before {
-  background: linear-gradient(90deg, #16a34a, #86efac);
+  background: var(--c-success);
 }
 
 .pipeline-node-card.node-state-active::before {
-  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  background: var(--c-accent);
 }
 
 .pipeline-node-card.node-state-rejected::before {
-  background: linear-gradient(90deg, #dc2626, #fca5a5);
+  background: var(--c-danger);
 }
 
 .pipeline-node-card:hover {
   transform: translateY(-3px);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .pipeline-node-card.node-state-completed {
-  border-color: #86efac;
-  border-left-color: #16a34a;
-  background: linear-gradient(160deg, #f0fdf4 0%, #ffffff 100%);
+  border-color: var(--c-success-border);
+  border-left-color: var(--c-success);
+  background: var(--c-success-soft);
 }
 
 .pipeline-node-card.node-state-active {
-  border-color: #60a5fa;
-  border-left-color: #2563eb;
-  background: linear-gradient(160deg, #eff6ff 0%, #ffffff 100%);
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2), 0 4px 12px rgba(59, 130, 246, 0.12);
+  border-color: var(--c-accent);
+  border-left-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .pipeline-node-card.node-state-rejected {
-  border-color: #fca5a5;
-  border-left-color: #dc2626;
-  background: linear-gradient(160deg, #fef2f2 0%, #ffffff 100%);
+  border-color: var(--c-danger-border);
+  border-left-color: var(--c-danger);
+  background: var(--c-danger-soft);
 }
 
 .pipeline-node-card.node-state-pending {
-  border-color: #e2e8f0;
-  border-left-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--c-border);
+  border-left-color: var(--c-border-strong);
+  background: var(--c-muted-bg);
   opacity: 0.75;
 }
 
@@ -3782,7 +3782,7 @@ onUnmounted(() => {
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: #94a3b8;
+  background: var(--c-text-4);
   color: #ffffff;
   display: inline-flex;
   align-items: center;
@@ -3790,29 +3790,29 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: 800;
   flex-shrink: 0;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-state-completed .node-badge-circle {
-  background: linear-gradient(135deg, #16a34a, #22c55e);
-  box-shadow: 0 2px 6px rgba(22, 163, 74, 0.35);
+  background: var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-state-active .node-badge-circle {
-  background: linear-gradient(135deg, #2563eb, #60a5fa);
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.35);
+  background: var(--c-accent);
+  box-shadow: var(--shadow-sm);
   animation: pulse-glow 2s infinite;
 }
 
 .node-state-rejected .node-badge-circle {
-  background: linear-gradient(135deg, #dc2626, #ef4444);
-  box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3);
+  background: var(--c-danger);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-title-text {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   line-height: 1.3;
   flex: 1;
   min-width: 0;
@@ -3831,39 +3831,39 @@ onUnmounted(() => {
 }
 
 .role-dev {
-  background: #f1f5f9;
-  color: #334155;
-  border: 1px solid #cbd5e1;
+  background: var(--c-subtle);
+  color: var(--c-text-2);
+  border: 1px solid var(--c-border-strong);
 }
 
 .role-lead {
-  background: #eff6ff;
-  color: #1d4ed8;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
+  border: 1px solid var(--c-accent-border);
 }
 
 .role-dba {
-  background: #fef3c7;
-  color: #b45309;
-  border: 1px solid #fde68a;
+  background: var(--c-warning-soft);
+  color: var(--c-warning);
+  border: 1px solid var(--c-warning-border);
 }
 
 .role-auditor {
-  background: #ecfdf5;
-  color: #047857;
-  border: 1px solid #a7f3d0;
+  background: var(--c-success-soft);
+  color: var(--c-success);
+  border: 1px solid var(--c-success-border);
 }
 
 .role-admin {
-  background: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  color: var(--c-danger-strong);
+  border: 1px solid var(--c-danger-border);
 }
 
 .role-engine {
-  background: #f8fafc;
-  color: #059669;
-  border: 1px solid #86efac;
+  background: var(--c-muted-bg);
+  color: var(--c-success);
+  border: 1px solid var(--c-success-border);
 }
 
 .node-target-approver {
@@ -3871,19 +3871,19 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 2px;
   background: rgba(248, 250, 252, 0.8);
-  border: 1px solid #f1f5f9;
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 5px 9px;
 }
 
 .node-state-active .node-target-approver {
   background: rgba(239, 246, 255, 0.7);
-  border-color: #bfdbfe;
+  border-color: var(--c-accent-border);
 }
 
 .node-target-approver .lbl {
   font-size: 10px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.3px;
@@ -3918,23 +3918,23 @@ onUnmounted(() => {
   font-weight: 600;
   border-radius: 4px;
   padding: 4px 10px;
-  background: #fffbeb !important;
-  border-color: #fde68a !important;
-  color: #d97706 !important;
+  background: var(--c-warning-soft) !important;
+  border-color: var(--c-warning-border) !important;
+  color: var(--c-warning) !important;
   transition: all 0.2s ease;
 }
 
 .urge-btn:hover {
-  background: #fef3c7 !important;
-  border-color: #f59e0b !important;
-  color: #b45309 !important;
+  background: var(--c-warning-soft) !important;
+  border-color: var(--c-warning) !important;
+  color: var(--c-warning) !important;
   transform: translateY(-1px);
 }
 
 .node-target-approver .val-name {
   font-size: 12.5px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .node-record-details {
@@ -3942,18 +3942,18 @@ onUnmounted(() => {
   flex-direction: column;
   gap: 4px;
   padding-top: 6px;
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--c-border);
   font-size: 11px;
 }
 
 .detail-row {
   display: flex;
   justify-content: space-between;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .detail-lbl {
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .detail-val {
@@ -3963,11 +3963,11 @@ onUnmounted(() => {
 .detail-comment-row {
   display: flex;
   align-items: flex-start;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
   border-radius: 4px;
   padding: 4px 8px;
-  color: #15803d;
+  color: var(--c-success);
   font-size: 11px;
   margin-top: 2px;
 }
@@ -3982,7 +3982,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #94a3b8;
+  color: var(--c-text-4);
   flex-shrink: 0;
   gap: 2px;
 }
@@ -3993,21 +3993,21 @@ onUnmounted(() => {
 
 .pipeline-arrow {
   font-size: 20px;
-  color: #cbd5e1;
+  color: var(--c-text-4);
   font-weight: 400;
   line-height: 1;
 }
 
 .end-node-desc {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.4;
 }
 
 /* ==================== 2. 审批操作控制台 ==================== */
 .approval-action-card {
-  border: 1px solid #faecd8;
-  background: #fdf6ec;
+  border: 1px solid var(--c-warning-soft);
+  background: var(--c-warning-soft);
 }
 
 .approval-header {
@@ -4026,22 +4026,22 @@ onUnmounted(() => {
 .perm-title {
   font-size: 15px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
 }
 
 .perm-subtip {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 /* ==================== 现代化执行方式卡片单选网格 ==================== */
 .intermediate-stage-banner {
-  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 10px;
   padding: 14px 18px;
   margin-bottom: 16px;
-  box-shadow: 0 2px 6px rgba(37, 99, 235, 0.06);
+  box-shadow: var(--shadow-sm);
 }
 
 .stage-banner-header {
@@ -4057,8 +4057,8 @@ onUnmounted(() => {
   width: 36px;
   height: 36px;
   border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
   flex-shrink: 0;
 }
 
@@ -4069,7 +4069,7 @@ onUnmounted(() => {
 .stage-main-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1e3a8a;
+  color: var(--c-accent-hover);
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -4078,7 +4078,7 @@ onUnmounted(() => {
 
 .stage-sub-desc {
   font-size: 12px;
-  color: #3b82f6;
+  color: var(--c-accent);
   line-height: 1.6;
   margin-top: 4px;
 }
@@ -4096,8 +4096,8 @@ onUnmounted(() => {
   align-items: flex-start;
   gap: 10px;
   padding: 12px 14px;
-  background: #f8fafc;
-  border: 1.5px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1.5px solid var(--c-border);
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -4106,23 +4106,23 @@ onUnmounted(() => {
 }
 
 .exec-mode-card:hover {
-  background: #ffffff;
-  border-color: #93c5fd;
+  background: var(--c-surface);
+  border-color: var(--c-accent-border);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .exec-mode-card.is-selected {
-  background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-sm);
 }
 
 .card-radio-indicator {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  border: 1.5px solid #cbd5e1;
+  border: 1.5px solid var(--c-border-strong);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4132,15 +4132,15 @@ onUnmounted(() => {
 }
 
 .exec-mode-card.is-selected .card-radio-indicator {
-  border-color: #3b82f6;
-  background: #3b82f6;
+  border-color: var(--c-accent);
+  background: var(--c-accent);
 }
 
 .inner-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--c-surface);
   opacity: 0;
   transition: all 0.2s ease;
 }
@@ -4160,23 +4160,23 @@ onUnmounted(() => {
 }
 
 .icon-immediate {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .icon-scheduled {
-  background: #fffbeb;
-  color: #d97706;
+  background: var(--c-warning-soft);
+  color: var(--c-warning);
 }
 
 .icon-batch {
-  background: #f0fdf4;
-  color: #16a34a;
+  background: var(--c-success-soft);
+  color: var(--c-success);
 }
 
 .icon-dba {
-  background: #fdf2f8;
-  color: #db2777;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .card-text-col {
@@ -4188,7 +4188,7 @@ onUnmounted(() => {
 .card-title {
   font-size: 13.5px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4197,15 +4197,15 @@ onUnmounted(() => {
 .badge-tag {
   font-size: 10px;
   font-weight: 700;
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
   padding: 1px 5px;
   border-radius: 3px;
 }
 
 .card-desc {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.4;
 }
 
@@ -4221,13 +4221,13 @@ onUnmounted(() => {
 }
 
 .box-scheduled {
-  background: #fffbeb;
-  border: 1px solid #fde68a;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-border);
 }
 
 .box-batch {
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
 }
 
 .config-title-row {
@@ -4236,7 +4236,7 @@ onUnmounted(() => {
   gap: 6px;
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .config-control-row {
@@ -4255,12 +4255,12 @@ onUnmounted(() => {
 .ctrl-label {
   font-size: 12.5px;
   font-weight: 600;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .sub-hint {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 @keyframes fadeIn {
@@ -4269,21 +4269,21 @@ onUnmounted(() => {
 }
 
 .tip-immediate {
-  background: #ecf5ff;
-  border: 1px solid #d9ecff;
-  color: #409EFF;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  color: var(--c-accent);
 }
 
 .tip-scheduled {
-  background: #fdf6ec;
-  border: 1px solid #faecd8;
-  color: #E6A23C;
+  background: var(--c-warning-soft);
+  border: 1px solid var(--c-warning-soft);
+  color: var(--c-warning);
 }
 
 .tip-dba {
-  background: #f4f4f5;
-  border: 1px solid #e9e9eb;
-  color: #606266;
+  background: var(--c-subtle);
+  border: 1px solid var(--c-border);
+  color: var(--c-text-2);
 }
 
 .approval-btns-row {
@@ -4296,14 +4296,14 @@ onUnmounted(() => {
 .no-perm-tip {
   margin-top: 10px;
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   text-align: right;
 }
 
 /* ==================== 3. DBA 线下执行反馈面板 ==================== */
 .dba-feedback-card {
-  border: 1px solid #d9ecff;
-  background: #f4f8fc;
+  border: 1px solid var(--c-accent-border);
+  background: var(--c-accent-soft);
 }
 
 .dba-feedback-header {
@@ -4314,10 +4314,10 @@ onUnmounted(() => {
 }
 
 .dba-feedback-body {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px;
   border-radius: 4px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--c-border);
 }
 
 .dba-action-btns {
@@ -4329,8 +4329,8 @@ onUnmounted(() => {
 
 /* ==================== 4. 定时计划执行等待卡片 ==================== */
 .scheduled-wait-card {
-  border: 1px solid #faecd8;
-  background: #fdf6ec;
+  border: 1px solid var(--c-warning-soft);
+  background: var(--c-warning-soft);
 }
 
 .scheduled-box-flex {
@@ -4350,24 +4350,24 @@ onUnmounted(() => {
 
 .clock-icon {
   font-size: 32px;
-  color: #E6A23C;
+  color: var(--c-warning);
 }
 
 .scheduled-title {
   font-size: 15px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
   margin-bottom: 4px;
 }
 
 .scheduled-desc {
   font-size: 13px;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 /* ==================== 5. 执行结果与防篡改报告 ==================== */
 .exec-result-card {
-  border: 1px solid #e1f3d8;
+  border: 1px solid var(--c-success-soft);
   background: #fafdf8;
 }
 
@@ -4375,10 +4375,10 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 14px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px;
   border-radius: 4px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--c-border);
 }
 
 .result-metric-item {
@@ -4389,30 +4389,30 @@ onUnmounted(() => {
 
 .m-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .m-val {
   font-size: 20px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
   font-family: monospace;
 }
 
 .m-val.highlight {
-  color: #67C23A;
+  color: var(--c-success);
 }
 
 .m-val small {
   font-size: 13px;
   font-weight: normal;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .m-val-text {
   font-size: 14px;
   font-weight: 600;
-  color: #409EFF;
+  color: var(--c-accent);
 }
 
 /* ==================== 通用卡片与 SQL 清单 ==================== */
@@ -4426,15 +4426,15 @@ onUnmounted(() => {
   gap: 6px;
   font-size: 14px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
 }
 
 .execution-desc {
-  background-color: #f8f9fa;
+  background-color: var(--c-muted-bg);
   padding: 12px 16px;
   border-radius: 4px;
   min-height: 40px;
-  color: #606266;
+  color: var(--c-text-2);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -4459,7 +4459,7 @@ onUnmounted(() => {
   font-family: Consolas, 'Fira Code', Monaco, monospace;
   font-size: 12px;
   white-space: pre-wrap;
-  background: #f8f9fa;
+  background: var(--c-muted-bg);
   padding: 6px 8px;
   border-radius: 4px;
 }
@@ -4469,9 +4469,9 @@ onUnmounted(() => {
 }
 
 .rollback-snippet {
-  background: #f0fdf4;
-  border: 1px dashed #86efac;
-  color: #166534;
+  background: var(--c-success-soft);
+  border: 1px dashed var(--c-success-border);
+  color: var(--c-success-strong);
 }
 
 .rollback-file-box {
@@ -4480,8 +4480,8 @@ onUnmounted(() => {
 
 .gateway-decision-banner {
   margin: 0 16px 16px 16px;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
   border-radius: 6px;
   padding: 10px 14px;
   display: flex;
@@ -4492,8 +4492,8 @@ onUnmounted(() => {
 }
 
 .gateway-decision-banner.high-risk {
-  background: #fef2f2;
-  border-color: #fecaca;
+  background: var(--c-danger-soft);
+  border-color: var(--c-danger-border);
 }
 
 .banner-left {
@@ -4501,22 +4501,22 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #334155;
+  color: var(--c-text-2);
   flex-wrap: wrap;
 }
 
 .banner-icon {
   font-size: 16px;
-  color: #3b82f6;
+  color: var(--c-accent);
 }
 
 .banner-title {
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .banner-detail {
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .branch-highlight {
@@ -4524,21 +4524,21 @@ onUnmounted(() => {
 }
 
 .branch-highlight.red {
-  color: #dc2626;
+  color: var(--c-danger);
 }
 
 .branch-highlight.green {
-  color: #16a34a;
+  color: var(--c-success);
 }
 
 .custom-fields-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 16px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .cf-item {
@@ -4550,14 +4550,14 @@ onUnmounted(() => {
 .cf-label {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   white-space: nowrap;
 }
 
 .cf-val {
   font-size: 13px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .font-mono {
@@ -4572,9 +4572,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-left: 4px solid #f59e0b;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
+  border-left: 4px solid var(--c-warning);
   padding: 12px 14px;
   border-radius: 6px;
   margin-bottom: 16px;
@@ -4582,12 +4582,12 @@ onUnmounted(() => {
 
 .reschedule-tip-banner .el-icon {
   font-size: 24px;
-  color: #f59e0b;
+  color: var(--c-warning);
 }
 
 .quick-preset-section {
-  background: #fffbeb;
-  border: 1px dashed #fde68a;
+  background: var(--c-warning-soft);
+  border: 1px dashed var(--c-warning-border);
   padding: 12px 14px;
   border-radius: 6px;
   margin-bottom: 16px;
@@ -4596,7 +4596,7 @@ onUnmounted(() => {
 .quick-preset-title {
   font-size: 12px;
   font-weight: 600;
-  color: #92400e;
+  color: var(--c-warning-strong);
   margin-bottom: 8px;
 }
 
@@ -4607,9 +4607,9 @@ onUnmounted(() => {
 }
 
 .quick-time-chip {
-  background: #ffffff !important;
-  border-color: #fcd34d !important;
-  color: #78350f !important;
+  background: var(--c-surface) !important;
+  border-color: var(--c-warning-border) !important;
+  color: var(--c-warning-strong) !important;
   font-size: 11.5px !important;
   font-weight: 600 !important;
   border-radius: 4px !important;
@@ -4617,17 +4617,17 @@ onUnmounted(() => {
 }
 
 .quick-time-chip:hover {
-  background: #fef3c7 !important;
-  border-color: #f59e0b !important;
+  background: var(--c-warning-soft) !important;
+  border-color: var(--c-warning) !important;
   transform: translateY(-1px);
 }
 
 .time-remaining-badge {
   margin-top: 6px;
   font-size: 12px;
-  color: #0369a1;
-  background: #f0f9ff;
-  border: 1px solid #bae6fd;
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   padding: 4px 10px;
   border-radius: 4px;
   display: inline-block;
@@ -4637,7 +4637,7 @@ onUnmounted(() => {
 /* 回滚代码块长文本折叠容器 */
 .rollback-box-container {
   position: relative;
-  background: #1e293b;
+  background: var(--c-ink-bg);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -4652,10 +4652,10 @@ onUnmounted(() => {
 }
 
 .rollback-expand-bar {
-  background: linear-gradient(180deg, rgba(30, 41, 59, 0.7) 0%, #0f172a 100%);
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.7) 0%, var(--c-ink-bg) 100%);
   padding: 8px 12px;
   text-align: center;
-  border-top: 1px solid #334155;
+  border-top: 1px solid var(--c-ink-bg-2);
   cursor: pointer;
 }
 
@@ -4665,9 +4665,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   overflow-x: auto;
   flex-wrap: nowrap;
 }
@@ -4687,29 +4687,29 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   font-size: 15px;
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-strong);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-icon-badge.badge-primary {
-  border-color: #93c5fd;
-  background: #eff6ff;
+  border-color: var(--c-accent-border);
+  background: var(--c-accent-soft);
 }
 
 .node-icon-badge.badge-success {
-  border-color: #86efac;
-  background: #f0fdf4;
+  border-color: var(--c-success-border);
+  background: var(--c-success-soft);
 }
 
 .node-icon-badge.badge-warning {
   border-color: #fde047;
-  background: #fefce8;
+  background: var(--c-warning-soft);
 }
 
 .node-icon-badge.badge-danger {
-  border-color: #fca5a5;
-  background: #fef2f2;
+  border-color: var(--c-danger-border);
+  background: var(--c-danger-soft);
 }
 
 .node-summary-text {
@@ -4721,17 +4721,17 @@ onUnmounted(() => {
 .node-action-title {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .node-operator-sub {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .node-connector-arrow {
   font-size: 14px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   margin: 0 6px;
 }
 
@@ -4743,8 +4743,8 @@ onUnmounted(() => {
 .full-sql-viewer-dialog :deep(.el-dialog__header) {
   padding: 14px 20px;
   margin-right: 0;
-  border-bottom: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-muted-bg);
 }
 
 .full-sql-viewer-dialog :deep(.el-dialog__body) {
@@ -4752,7 +4752,7 @@ onUnmounted(() => {
   height: calc(100vh - 65px);
   display: flex;
   flex-direction: column;
-  background: #0f172a;
+  background: var(--c-ink-bg);
 }
 
 .sql-viewer-header-wrap {
@@ -4772,7 +4772,7 @@ onUnmounted(() => {
 .dialog-title-text {
   font-size: 16px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .sql-viewer-header-right {
@@ -4793,9 +4793,9 @@ onUnmounted(() => {
   align-items: center;
   gap: 20px;
   padding: 8px 18px;
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
-  color: #94a3b8;
+  background: var(--c-ink-bg);
+  border-bottom: 1px solid var(--c-ink-bg-2);
+  color: var(--c-text-4);
   font-size: 12px;
   font-family: monospace;
 }
@@ -4814,9 +4814,9 @@ onUnmounted(() => {
   padding: 14px 0;
   width: 55px;
   text-align: right;
-  background: #0f172a;
-  border-right: 1px solid #1e293b;
-  color: #475569;
+  background: var(--c-ink-bg);
+  border-right: 1px solid var(--c-ink-bg-2);
+  color: var(--c-text-2);
   user-select: none;
   flex-shrink: 0;
 }
@@ -4830,7 +4830,7 @@ onUnmounted(() => {
 .sql-code-lines {
   flex: 1;
   padding: 14px 18px;
-  color: #e2e8f0;
+  color: var(--c-ink-text);
   overflow-x: auto;
   white-space: pre;
 }
@@ -4842,7 +4842,7 @@ onUnmounted(() => {
 
 .sql-code-line.highlight-search {
   background: rgba(234, 179, 8, 0.25);
-  color: #fef08a;
+  color: var(--c-warning);
   border-radius: 2px;
   font-weight: 700;
 }

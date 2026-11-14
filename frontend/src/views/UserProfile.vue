@@ -53,7 +53,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#409EFF"><UserFilled /></el-icon>
+                <el-icon><UserFilled /></el-icon>
                 <span>常用联系方式与个人信息维护</span>
               </div>
               <el-tag size="small" type="info">自主维护 · 即时生效</el-tag>
@@ -142,7 +142,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#E6A23C"><Bell /></el-icon>
+                <el-icon><Bell /></el-icon>
                 <span>工单流转与安全告警通知偏好</span>
               </div>
             </div>
@@ -197,7 +197,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#67C23A"><Lock /></el-icon>
+                <el-icon><Lock /></el-icon>
                 <span>组织架构与数据权限视图</span>
               </div>
             </div>
@@ -228,7 +228,7 @@
                   {{ rg }}
                 </el-tag>
               </template>
-              <span v-else style="color: #94a3b8; font-size: 13px;">暂未分配业务资源组</span>
+              <span v-else style="color: var(--c-text-4); font-size: 13px;">暂未分配业务资源组</span>
             </div>
           </div>
 
@@ -254,7 +254,7 @@
           <template #header>
             <div class="card-title-row">
               <div class="card-title">
-                <el-icon color="#F56C6C"><Key /></el-icon>
+                <el-icon><Key /></el-icon>
                 <span>修改登录密码 (SM3 国密加密)</span>
               </div>
             </div>
@@ -502,8 +502,8 @@ onMounted(() => {
 
 .profile-hero-card {
   border-radius: 10px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
 }
 
 .hero-content {
@@ -517,11 +517,11 @@ onMounted(() => {
 }
 
 .hero-avatar {
-  background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+  background: var(--c-accent);
   color: #ffffff;
   font-size: 28px;
   font-weight: 700;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+  box-shadow: var(--shadow-sm);
 }
 
 .avatar-badge {
@@ -530,14 +530,14 @@ onMounted(() => {
   right: 0;
   width: 22px;
   height: 22px;
-  background: #10b981;
+  background: var(--c-success);
   color: #fff;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 12px;
-  border: 2px solid #fff;
+  border: 2px solid var(--c-surface);
 }
 
 .hero-info {
@@ -554,11 +554,11 @@ onMounted(() => {
   margin: 0;
   font-size: 22px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .hero-username {
-  color: #64748b;
+  color: var(--c-text-3);
   font-size: 14px;
 }
 
@@ -568,7 +568,7 @@ onMounted(() => {
   align-items: center;
   gap: 16px;
   margin-top: 8px;
-  color: #475569;
+  color: var(--c-text-2);
   font-size: 13px;
 }
 
@@ -580,7 +580,7 @@ onMounted(() => {
 
 .form-card {
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .card-title-row {
@@ -595,13 +595,13 @@ onMounted(() => {
   gap: 8px;
   font-weight: 700;
   font-size: 15px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .divider-title {
   font-size: 13px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .notification-pref-grid {
@@ -615,26 +615,26 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 14px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
 }
 
 .pref-name {
   font-weight: 600;
   font-size: 14px;
-  color: #1e293b;
+  color: var(--c-text);
   margin-bottom: 2px;
 }
 
 .pref-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .scope-info-box {
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 8px;
   padding: 14px;
   margin-bottom: 16px;
@@ -650,12 +650,12 @@ onMounted(() => {
 .scope-label {
   font-weight: 700;
   font-size: 13px;
-  color: #1e3a8a;
+  color: var(--c-accent-hover);
 }
 
 .scope-desc {
   font-size: 12px;
-  color: #3b82f6;
+  color: var(--c-accent);
   line-height: 1.5;
 }
 
@@ -666,7 +666,7 @@ onMounted(() => {
 .perm-title {
   font-size: 13px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   margin-bottom: 8px;
 }
 </style>

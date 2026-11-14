@@ -78,7 +78,7 @@
 
         <el-table-column prop="collation" label="排序规则 (Collation)" width="180" show-overflow-tooltip>
           <template #default="scope">
-            <span style="font-size: 12px; color: #606266;">{{ scope.row.collation || 'utf8mb4_0900_ai_ci' }}</span>
+            <span style="font-size: 12px; color: var(--c-text-2);">{{ scope.row.collation || 'utf8mb4_0900_ai_ci' }}</span>
           </template>
         </el-table-column>
 
@@ -97,7 +97,7 @@
 
         <el-table-column prop="dataSizeMB" label="数据占用大小" width="130" align="right">
           <template #default="scope">
-            <span style="font-weight: 600; color: #E6A23C;">{{ scope.row.dataSizeMB }} MB</span>
+            <span style="font-weight: 600; color: var(--c-warning);">{{ scope.row.dataSizeMB }} MB</span>
           </template>
         </el-table-column>
 
@@ -351,7 +351,7 @@ onMounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -365,38 +365,38 @@ onMounted(() => {
 }
 
 .metric-card {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 14px 18px;
   border-radius: 8px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--c-border);
   display: flex;
   flex-direction: column;
 }
 
 .metric-card .m-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .metric-card .m-value {
   font-size: 22px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
   margin-top: 6px;
 }
 
 .metric-card .m-value.highlight {
-  color: #409EFF;
+  color: var(--c-accent);
 }
 
 .metric-card .m-value small {
   font-size: 13px;
   font-weight: normal;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow-x: auto;
 }

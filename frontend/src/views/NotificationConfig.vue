@@ -228,8 +228,8 @@
 
             <div v-if="testResultMap.WECHAT" class="test-feedback-box" :class="{ 'is-ok': testResultMap.WECHAT.success, 'is-fail': !testResultMap.WECHAT.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.WECHAT.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResultMap.WECHAT.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
                 <span>{{ testResultMap.WECHAT.success ? '✅ 推送成功' : '❌ 推送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.WECHAT.latencyMs">耗时: {{ testResultMap.WECHAT.latencyMs }}ms</span>
               </div>
@@ -310,8 +310,8 @@
 
             <div v-if="testResultMap.DINGTALK" class="test-feedback-box" :class="{ 'is-ok': testResultMap.DINGTALK.success, 'is-fail': !testResultMap.DINGTALK.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.DINGTALK.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResultMap.DINGTALK.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
                 <span>{{ testResultMap.DINGTALK.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.DINGTALK.latencyMs">耗时: {{ testResultMap.DINGTALK.latencyMs }}ms</span>
               </div>
@@ -382,8 +382,8 @@
 
             <div v-if="testResultMap.FEISHU" class="test-feedback-box" :class="{ 'is-ok': testResultMap.FEISHU.success, 'is-fail': !testResultMap.FEISHU.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.FEISHU.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResultMap.FEISHU.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
                 <span>{{ testResultMap.FEISHU.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.FEISHU.latencyMs">耗时: {{ testResultMap.FEISHU.latencyMs }}ms</span>
               </div>
@@ -563,8 +563,8 @@
 
             <div v-if="testResultMap.SMS" class="test-feedback-box" :class="{ 'is-ok': testResultMap.SMS.success, 'is-fail': !testResultMap.SMS.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.SMS.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResultMap.SMS.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
                 <span>{{ testResultMap.SMS.success ? '✅ 短信下发成功' : '❌ 短信发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.SMS.latencyMs">耗时: {{ testResultMap.SMS.latencyMs }}ms</span>
               </div>
@@ -677,8 +677,8 @@
 
             <div v-if="testResultMap.VOICE_CALL" class="test-feedback-box" :class="{ 'is-ok': testResultMap.VOICE_CALL.success, 'is-fail': !testResultMap.VOICE_CALL.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.VOICE_CALL.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
+                <el-icon v-if="testResultMap.VOICE_CALL.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
                 <span>{{ testResultMap.VOICE_CALL.success ? '✅ 外呼握手成功' : '❌ 外呼失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.VOICE_CALL.latencyMs">耗时: {{ testResultMap.VOICE_CALL.latencyMs }}ms</span>
               </div>
@@ -1052,8 +1052,8 @@ onMounted(() => {
 }
 
 .category-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 14px 16px;
   cursor: pointer;
@@ -1064,15 +1064,15 @@ onMounted(() => {
 }
 
 .category-card:hover {
-  border-color: #3b82f6;
+  border-color: var(--c-accent);
   transform: translateY(-2px);
-  box-shadow: 0 8px 18px -4px rgba(59, 130, 246, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .category-card.is-active {
-  border-color: #2563eb;
-  background: #f8fafc;
-  box-shadow: 0 0 0 1.5px #2563eb;
+  border-color: var(--c-accent);
+  background: var(--c-muted-bg);
+  box-shadow: var(--shadow-sm);
 }
 
 .category-head {
@@ -1088,7 +1088,7 @@ onMounted(() => {
   gap: 6px;
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .badge-icon {
@@ -1097,7 +1097,7 @@ onMounted(() => {
 
 .category-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-bottom: 8px;
   line-height: 1.4;
 }
@@ -1113,43 +1113,43 @@ onMounted(() => {
 
 .sub-pill {
   font-size: 11.5px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--c-subtle);
+  color: var(--c-text-3);
   padding: 1px 6px;
   border-radius: 4px;
 }
 
 .sub-pill.on {
-  background: #ecfdf5;
-  color: #059669;
+  background: var(--c-success-soft);
+  color: var(--c-success);
   font-weight: 600;
 }
 
 .vendor-tag {
   font-size: 11.5px;
-  color: #334155;
-  background: #eff6ff;
+  color: var(--c-text-2);
+  background: var(--c-accent-soft);
   padding: 1px 6px;
   border-radius: 4px;
 }
 
 .sign-tag {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .category-footer {
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--c-border);
   padding-top: 6px;
   font-size: 11.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 /* 主配置 Tabs */
 .config-tabs {
   border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .tab-label {
@@ -1176,7 +1176,7 @@ onMounted(() => {
 
 .form-tip {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 4px;
   line-height: 1.4;
 }
@@ -1186,35 +1186,35 @@ onMounted(() => {
   border-radius: 8px;
   padding: 14px;
   margin-top: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .aliyun-box {
-  background: #fffbf5;
-  border-color: #fed7aa;
+  background: var(--c-warning-soft);
+  border-color: var(--c-warning-border);
 }
 
 .tencent-box {
-  background: #f0f9ff;
-  border-color: #bae6fd;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-border);
 }
 
 .custom-box {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: var(--c-muted-bg);
+  border-color: var(--c-border-strong);
 }
 
 .provider-box-title {
   font-size: 13.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 12px;
 }
 
 /* 在线测试诊断卡片 */
 .test-panel-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 18px 20px;
   display: flex;
@@ -1224,13 +1224,13 @@ onMounted(() => {
 .test-panel-title {
   font-size: 14.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 6px;
 }
 
 .test-panel-desc {
   font-size: 12.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-bottom: 16px;
   line-height: 1.5;
 }
@@ -1242,7 +1242,7 @@ onMounted(() => {
 .field-label {
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--c-text-2);
   margin-bottom: 6px;
 }
 
@@ -1254,18 +1254,18 @@ onMounted(() => {
   margin-top: 16px;
   border-radius: 6px;
   padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
 }
 
 .test-feedback-box.is-ok {
-  border-color: #67c23a;
-  background: #f0f9eb;
+  border-color: var(--c-success);
+  background: var(--c-success-soft);
 }
 
 .test-feedback-box.is-fail {
-  border-color: #f56c6c;
-  background: #fef0f0;
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
 }
 
 .feedback-status {
@@ -1280,25 +1280,25 @@ onMounted(() => {
 .latency-tag {
   margin-left: auto;
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: normal;
 }
 
 .feedback-msg {
   font-size: 12.5px;
-  color: #334155;
+  color: var(--c-text-2);
   line-height: 1.5;
 }
 
 .feedback-raw {
   margin-top: 10px;
-  border-top: 1px dashed #cbd5e1;
+  border-top: 1px dashed var(--c-border-strong);
   padding-top: 8px;
 }
 
 .raw-title {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 600;
 }
 
@@ -1306,8 +1306,8 @@ onMounted(() => {
   margin: 4px 0 0 0;
   font-family: monospace;
   font-size: 11px;
-  color: #475569;
-  background: #ffffff;
+  color: var(--c-text-2);
+  background: var(--c-surface);
   padding: 8px;
   border-radius: 4px;
   overflow-x: auto;
@@ -1318,7 +1318,7 @@ onMounted(() => {
 .matrix-title {
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 10px;
 }
 
@@ -1326,46 +1326,46 @@ onMounted(() => {
   width: 100%;
   border-collapse: collapse;
   margin-top: 8px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .policy-matrix-table th,
 .policy-matrix-table td {
   padding: 12px 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   font-size: 13px;
   text-align: left;
 }
 
 .policy-matrix-table th {
-  background: #f8fafc;
-  color: #475569;
+  background: var(--c-muted-bg);
+  color: var(--c-text-2);
   font-weight: 600;
 }
 
 .policy-matrix-table td {
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .highlight-p0-row {
-  background: #fff7ed;
+  background: var(--c-warning-soft);
 }
 
 .desc-cell {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .tag-subtle {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .tag-disabled {
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--c-text-4);
 }
 </style>
