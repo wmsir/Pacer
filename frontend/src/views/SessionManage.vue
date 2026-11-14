@@ -11,7 +11,7 @@
           v-model="selectedInstanceId"
           placeholder="请选择目标数据库实例"
           style="width: 280px; margin-right: 12px;"
-          @change="fetchSessions"
+          @change="fetchSessions()"
         >
           <el-option
             v-for="item in instanceList"
@@ -28,7 +28,7 @@
           @change="handleAutoRefreshChange"
         />
 
-        <el-button :icon="Refresh" :loading="loading" @click="fetchSessions">刷新</el-button>
+        <el-button :icon="Refresh" :loading="loading" @click="fetchSessions()">刷新</el-button>
       </div>
     </div>
 
@@ -210,9 +210,10 @@ const fetchInstances = async () => {
   }
 }
 
-const fetchSessions = async () => {
+// silent：自动刷新时静默拉取，不每 5 秒把表格罩一次
+const fetchSessions = async (silent = false) => {
   if (!selectedInstanceId.value) return
-  loading.value = true
+  if (!silent) loading.value = true
   try {
     const res: any = await request.get(`/v1/instance/${selectedInstanceId.value}/sessions`)
     sessions.value = Array.isArray(res.data) ? res.data : []
@@ -230,7 +231,7 @@ const handleAutoRefreshChange = (val: boolean) => {
   }
   if (val) {
     timer.value = setInterval(() => {
-      fetchSessions()
+      fetchSessions(true)
     }, 5000)
   }
 }

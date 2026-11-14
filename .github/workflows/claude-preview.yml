@@ -1,0 +1,32 @@
+# 临时工作流：仅用于 claude/pacer-preview 分支的界面预览构建，合并前会删除
+name: claude-preview
+on:
+  push:
+    branches: [ claude/pacer-preview ]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install
+        run: cd frontend && npm ci --no-audit --no-fund
+      - name: Type check
+        continue-on-error: true
+        run: cd frontend && npx vue-tsc -b 2>&1 | tee /tmp/tsc.txt; echo "TSC_EXIT=${PIPESTATUS[0]}"
+      - name: Vite build
+        run: cd frontend && npx vite build 2>&1 | tail -40
+      - name: Publish dist to throwaway branch
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          cp /tmp/tsc.txt frontend/dist/_tsc.txt || true
+          cd frontend/dist
+          git init -q -b dist && git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -q -m "dist for $SHA"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" dist:claude/pacer-preview-dist
