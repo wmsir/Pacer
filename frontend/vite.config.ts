@@ -25,6 +25,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          // 预加载辅助函数必须留在通用块里；否则会被打进 monaco 块，导致登录页也下载 4MB 的编辑器
+          if (id.includes('preload-helper') || id.includes('commonjsHelpers')) return 'vendor'
           if (id.includes('node_modules')) {
             if (id.includes('monaco-editor')) return 'monaco-editor'
             if (id.includes('element-plus')) return 'element-plus'
