@@ -1,4 +1,4 @@
-@import '../../../design/design-tokens.css';
+/* 原先从仓库外的 ../../../design/design-tokens.css 引入，CI 中不存在导致构建失败；本项目只用到等宽字体变量，直接在下方定义 */
 
 *,
 *::before,
@@ -7,6 +7,7 @@
 }
 
 :root {
+  --fwpt-font-mono: "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   /* 基础色彩系统 (基于 Slate / Indigo / Sky 顶级企业级 SaaS 配色) */
   --primary-color: #3b82f6;
   --primary-hover: #2563eb;
