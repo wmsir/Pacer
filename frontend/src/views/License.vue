@@ -2,7 +2,6 @@
   <div class="license-container page-container">
     <div class="license-hero">
       <div class="hero-left">
-        <div class="hero-icon">🛡️</div>
         <div>
           <div class="hero-title-row">
             <h2 class="hero-title">商业授权证书管理 (Enterprise License)</h2>
@@ -24,7 +23,7 @@
       <el-card shadow="never" class="cert-card">
         <template #header>
           <div class="card-hdr">
-            <span class="card-hdr-title">📜 授权证书核心凭证</span>
+            <span class="card-hdr-title">授权证书核心凭证</span>
             <span class="cert-serial">证书编号：{{ licenseData.serialNo }}</span>
           </div>
         </template>
@@ -39,7 +38,7 @@
           <el-descriptions-item label="被授权组织">{{ licenseData.organization }}</el-descriptions-item>
           <el-descriptions-item label="签发日期">{{ licenseData.issuedAt }}</el-descriptions-item>
           <el-descriptions-item label="授权到期时间">
-            <span style="font-weight: 700; color: #059669;">{{ licenseData.expiresAt }}</span>
+            <span style="font-weight: 700; color: var(--c-success);">{{ licenseData.expiresAt }}</span>
           </el-descriptions-item>
           <el-descriptions-item label="实例接入配额">
             <el-tag type="primary" size="small" effect="plain">{{ licenseData.maxInstances }}</el-tag>
@@ -57,7 +56,7 @@
       <el-card shadow="never" class="feature-card">
         <template #header>
           <div class="card-hdr">
-            <span class="card-hdr-title">⚡ 已激活企业级功能矩阵</span>
+            <span class="card-hdr-title">已激活企业级功能矩阵</span>
             <el-tag size="small" type="success" effect="plain">全模块已解锁</el-tag>
           </div>
         </template>
@@ -204,8 +203,8 @@ onMounted(() => {
   flex-wrap: wrap;
   gap: 14px;
   padding: 18px 22px;
-  background: linear-gradient(120deg, #ffffff 0%, #f5f9ff 60%, #eef4ff 100%);
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 12px;
 }
 
@@ -219,13 +218,13 @@ onMounted(() => {
   width: 44px;
   height: 44px;
   border-radius: 12px;
-  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  background: var(--c-accent);
   color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 22px;
-  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.22);
+  box-shadow: var(--shadow-sm);
 }
 
 .hero-title-row {
@@ -239,13 +238,13 @@ onMounted(() => {
   margin: 0;
   font-size: 19px;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .hero-sub {
   margin: 4px 0 0 0;
   font-size: 12.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .hero-actions {
@@ -268,7 +267,7 @@ onMounted(() => {
 .cert-card,
 .feature-card {
   border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .card-hdr {
@@ -280,13 +279,13 @@ onMounted(() => {
 .card-hdr-title {
   font-size: 14.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .cert-serial {
   font-size: 12px;
   font-family: monospace;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .machine-code-row {
@@ -297,11 +296,11 @@ onMounted(() => {
 }
 
 .machine-code-row code {
-  background: #f1f5f9;
+  background: var(--c-subtle);
   padding: 3px 8px;
   border-radius: 4px;
   font-size: 12px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .feature-list {
@@ -315,8 +314,8 @@ onMounted(() => {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
 }
 
@@ -324,7 +323,7 @@ onMounted(() => {
   width: 20px;
   height: 20px;
   border-radius: 50%;
-  background: #10b981;
+  background: var(--c-success);
   color: #ffffff;
   font-size: 12px;
   font-weight: 800;
@@ -338,12 +337,12 @@ onMounted(() => {
 .feat-name {
   font-size: 13px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .feat-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 </style>

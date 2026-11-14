@@ -101,7 +101,7 @@
             <el-table-column prop="columnName" label="字段名称" min-width="160">
               <template #default="scope">
                 <div style="display: flex; align-items: center; gap: 6px;">
-                  <span style="font-family: monospace; font-weight: 600; color: #303133;">{{ scope.row.columnName }}</span>
+                  <span style="font-family: monospace; font-weight: 600; color: var(--c-text);">{{ scope.row.columnName }}</span>
                   <el-tag v-if="scope.row.columnKey === 'PRI'" size="small" type="danger" effect="plain">主键 PK</el-tag>
                 </div>
               </template>
@@ -115,7 +115,7 @@
 
             <el-table-column prop="columnComment" label="字段注释与说明" min-width="150" show-overflow-tooltip>
               <template #default="scope">
-                <span style="color: #606266; font-size: 13px;">{{ scope.row.columnComment || '-' }}</span>
+                <span style="color: var(--c-text-2); font-size: 13px;">{{ scope.row.columnComment || '-' }}</span>
               </template>
             </el-table-column>
 
@@ -141,10 +141,10 @@
               <template #default="scope">
                 <div v-if="scope.row.ruleType && scope.row.ruleType !== 'NONE'" class="preview-box">
                   <span class="preview-raw">{{ getSampleOriginal(scope.row.ruleType) }}</span>
-                  <el-icon style="margin: 0 6px; color: #909399;"><Right /></el-icon>
+                  <el-icon style="margin: 0 6px; color: var(--c-text-3);"><Right /></el-icon>
                   <span class="preview-masked">{{ scope.row.previewVal || getSampleMasked(scope.row.ruleType) }}</span>
                 </div>
-                <span v-else style="color: #c0c4cc; font-size: 12px;">明文输出 (未脱敏)</span>
+                <span v-else style="color: var(--c-text-4); font-size: 12px;">明文输出 (未脱敏)</span>
               </template>
             </el-table-column>
 
@@ -624,20 +624,20 @@ onMounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
 .custom-tabs {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px;
   border-radius: 8px;
 }
 
 .filter-card {
   margin-bottom: 16px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
 }
 
 .cascade-selector-row {
@@ -655,7 +655,7 @@ onMounted(() => {
 .selector-label {
   font-weight: 500;
   font-size: 13px;
-  color: #475569;
+  color: var(--c-text-2);
   margin-right: 8px;
 }
 
@@ -670,25 +670,25 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  background: #f1f5f9;
+  background: var(--c-subtle);
   border-radius: 6px 6px 0 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
 .current-table-tag {
   font-size: 14px;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .col-count-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-left: 6px;
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   overflow-x: auto;
 }
 
@@ -700,14 +700,14 @@ onMounted(() => {
 }
 
 .preview-raw {
-  color: #94a3b8;
+  color: var(--c-text-4);
   text-decoration: line-through;
 }
 
 .preview-masked {
-  color: #0284c7;
+  color: var(--c-accent);
   font-weight: 600;
-  background: #e0f2fe;
+  background: var(--c-accent-soft);
   padding: 2px 6px;
   border-radius: 4px;
 }

@@ -4,12 +4,9 @@
     <el-aside :width="isCollapse ? '64px' : '240px'" class="layout-aside">
       <!-- 品牌 Logo 区域 -->
       <div class="brand-header" @click="router.push('/dashboard')">
-        <div class="brand-logo-icon">
-          <el-icon><Platform /></el-icon>
-        </div>
+        <div class="brand-logo-icon" aria-hidden="true">骥</div>
         <div class="brand-text-wrap" v-if="!isCollapse">
           <div class="brand-title">稳骥 PacerSQL</div>
-          <div class="brand-subtitle">高可用数据库变更自治平台</div>
         </div>
       </div>
 
@@ -17,7 +14,7 @@
       <el-scrollbar class="aside-menu-scrollbar">
         <el-menu
           :default-active="activeMenu"
-          :default-openeds="isCollapse ? [] : ['/instances', '/tickets', '/data', '/perms', '/system']"
+          :default-openeds="isCollapse ? [] : defaultOpenGroups"
           :collapse="isCollapse"
           class="el-menu-vertical"
           router
@@ -88,7 +85,6 @@
               <el-icon><Suitcase /></el-icon>
               <template #title>
                 <span>业务资源组</span>
-                <el-tag size="small" type="success" effect="plain" class="inner-menu-tag">业务线</el-tag>
               </template>
             </el-menu-item>
             <el-menu-item index="/instance-databases" v-if="userStore.hasPermission('/instance-databases')">
@@ -143,14 +139,12 @@
               <el-icon><Cpu /></el-icon>
               <template #title>
                 <span>AI 模型配置</span>
-                <el-tag size="small" type="primary" effect="plain" class="inner-menu-tag">LLM</el-tag>
               </template>
             </el-menu-item>
             <el-menu-item index="/notification-config" v-if="userStore.hasPermission('/notification-config') || userStore.hasPermission('/settings')">
               <el-icon><Bell /></el-icon>
               <template #title>
                 <span>消息通知与告警</span>
-                <el-tag size="small" type="success" effect="plain" class="inner-menu-tag">企微/钉钉/飞书</el-tag>
               </template>
             </el-menu-item>
             <el-menu-item index="/license" v-if="userStore.hasPermission('/license')">
@@ -171,7 +165,7 @@
           <Fold v-if="!isCollapse" />
           <Expand v-else />
         </el-icon>
-        <span class="collapse-text" v-if="!isCollapse">收起导航菜单</span>
+        <span class="collapse-text" v-if="!isCollapse">收起</span>
       </div>
     </el-aside>
 
@@ -181,16 +175,13 @@
       <el-header class="layout-header">
         <div class="header-left">
           <!-- 返回门户快捷入口 -->
-          <a href="/" class="portal-return-link" title="返回 FWPT 统一门户与系统矩阵">
-            <span class="portal-pill-badge">FWPT</span>
-            <span>返回门户</span>
+          <a href="/" class="portal-return-link" title="返回 FWPT 统一门户">
+            <el-icon><Back /></el-icon>
+            <span>门户</span>
           </a>
+          <span class="header-split" aria-hidden="true"></span>
           <!-- 面包屑导航 -->
           <el-breadcrumb separator="/" class="layout-breadcrumb">
-            <el-breadcrumb-item :to="{ path: '/dashboard' }">
-              <el-icon class="crumb-icon"><HomeFilled /></el-icon>
-              <span>控制台</span>
-            </el-breadcrumb-item>
             <el-breadcrumb-item v-if="currentModuleTitle">
               <span>{{ currentModuleTitle }}</span>
             </el-breadcrumb-item>
@@ -204,8 +195,8 @@
           <!-- 快捷全局功能导航搜索 -->
           <div class="quick-search-trigger" @click="handleOpenSearchDialog">
             <el-icon><Search /></el-icon>
-            <span>搜索功能与页面...</span>
-            <kbd class="shortcut-key">Ctrl K</kbd>
+            <span>搜索页面</span>
+            <kbd class="shortcut-key">{{ shortcutLabel }}</kbd>
           </div>
 
           <!-- 待办审批提醒通知中心 -->
@@ -229,11 +220,8 @@
             <div class="notification-card">
               <div class="n-header">
                 <div class="n-title">
-                  <el-icon color="#F56C6C" style="margin-right: 6px;"><BellFilled /></el-icon>
-                  <span>待办审批工单提醒</span>
-                  <el-tag size="small" type="danger" effect="dark" round style="margin-left: 8px;">
-                    {{ pendingApprovals.length }} 待处理
-                  </el-tag>
+                  <span>待我审批</span>
+                  <span class="n-count" v-if="pendingApprovals.length">{{ pendingApprovals.length }}</span>
                 </div>
                 <el-button link type="primary" size="small" :icon="Refresh" @click="fetchPendingApprovals">刷新</el-button>
               </div>
@@ -265,7 +253,7 @@
                 </div>
               </div>
 
-              <el-empty v-else description="暂无需要您审批的待办工单 🎉" :image-size="70" style="padding: 20px 0;" />
+              <el-empty v-else description="没有待你审批的工单" :image-size="64" style="padding: 20px 0;" />
 
               <div class="n-footer" v-if="pendingApprovals.length > 0">
                 <el-button type="primary" size="small" style="width: 100%;" @click="handleGoToAllTickets">
@@ -274,20 +262,6 @@
               </div>
             </div>
           </el-popover>
-
-          <!-- 语言切换 -->
-          <el-dropdown @command="handleLanguageChange" trigger="click">
-            <div class="header-tool-btn text-tool-btn">
-              <span>{{ locale === 'zh' ? '🇨🇳 中文' : '🇺🇸 English' }}</span>
-              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
-            </div>
-            <template #dropdown>
-              <el-dropdown-menu class="custom-dropdown-menu">
-                <el-dropdown-item command="zh" :class="{ 'is-active-lang': locale === 'zh' }">🇨🇳 简体中文</el-dropdown-item>
-                <el-dropdown-item command="en" :class="{ 'is-active-lang': locale === 'en' }">🇺🇸 English</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
 
           <!-- 分隔线 -->
           <div class="header-divider"></div>
@@ -303,9 +277,7 @@
               </div>
               <div class="user-text-info">
                 <span class="user-name">{{ userRealName }}</span>
-                <el-tag size="small" :type="getRoleTagType(userStore.userRole)" effect="light" class="role-pill">
-                  {{ formatRoleNameZh(userStore.userRole) }}
-                </el-tag>
+                <span class="role-pill">{{ formatRoleNameZh(userStore.userRole) }}</span>
               </div>
               <el-icon class="arrow-icon"><ArrowDown /></el-icon>
             </div>
@@ -349,20 +321,22 @@
     <!-- 全局快捷跳转搜索弹窗 (Ctrl + K) -->
     <el-dialog
       v-model="searchDialogVisible"
-      title="🚀 全局快捷功能检索"
+      title="跳转到页面"
       width="560px"
       :show-close="false"
       class="quick-search-dialog"
       align-center
+      @opened="searchInputRef?.focus()"
     >
       <el-input
         v-model="searchKeyword"
-        placeholder="输入功能名称或拼音进行快速跳转 (如 工单、资源组、AI、实例)..."
+        placeholder="输入页面名称，如 工单、实例、脱敏；回车打开第一项"
         :prefix-icon="Search"
         clearable
         size="large"
+        ref="searchInputRef"
         class="search-dialog-input"
-        autofocus
+        @keydown.enter.prevent="handleQuickNavigateFirst"
       />
       <div class="search-results-list">
         <div
@@ -371,14 +345,13 @@
           class="search-result-item"
           @click="handleQuickNavigate(item.path)"
         >
-          <div class="s-icon">{{ item.icon }}</div>
           <div class="s-meta">
             <div class="s-title">{{ item.name }}</div>
             <div class="s-desc">{{ item.desc }}</div>
           </div>
           <el-tag size="small" type="info" effect="plain">{{ item.category }}</el-tag>
         </div>
-        <el-empty v-if="filteredQuickNavItems.length === 0" description="未搜索到匹配功能，请尝试其他关键词" :image-size="60" />
+        <el-empty v-if="filteredQuickNavItems.length === 0" description="没有匹配的页面" :image-size="60" />
       </div>
     </el-dialog>
   </el-container>
@@ -388,11 +361,9 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useUserStore } from '../store/user'
-import { useI18n } from 'vue-i18n'
 import request from '../utils/request'
 import {
   ArrowDown,
-  Platform,
   Odometer,
   Document,
   Tickets,
@@ -415,17 +386,15 @@ import {
   Brush,
   Hide,
   Bell,
-  BellFilled,
   Refresh,
   SwitchButton,
   DataAnalysis,
   Cpu,
-  HomeFilled,
   Fold,
-  Expand
+  Expand,
+  Back
 } from '@element-plus/icons-vue'
 
-const { locale } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
@@ -433,28 +402,11 @@ const userStore = useUserStore()
 const isCollapse = ref(false)
 const searchDialogVisible = ref(false)
 const searchKeyword = ref('')
+const searchInputRef = ref<{ focus: () => void } | null>(null)
 
 const hasAnyPermission = (paths: string[]) => {
   if (userStore.isAdmin) return true
   return paths.some(p => userStore.hasPermission(p))
-}
-
-const getRoleTagType = (role: string) => {
-  switch (role?.toUpperCase()) {
-    case 'ADMIN':
-    case 'ROLE_ADMIN': return 'danger'
-    case 'DBA':
-    case 'ROLE_DBA': return 'warning'
-    case 'DEV_LEAD':
-    case 'LEAD': return 'primary'
-    case 'DEV':
-    case 'ROLE_DEV': return 'info'
-    case 'AUDITOR':
-    case 'ROLE_AUDITOR': return 'success'
-    case 'OPS':
-    case 'ROLE_OPS': return 'success'
-    default: return 'info'
-  }
 }
 
 const formatRoleNameZh = (role: string) => {
@@ -540,11 +492,14 @@ const quickNavItems = [
   { name: '消息通知与告警配置', desc: '企业微信工作消息、阿里钉钉机器人、电话语音外呼与频次策略', path: '/notification-config', icon: '🔔', category: '系统配置' },
   { name: '用户管理', desc: '系统人员账号维护与组织分配', path: '/user-list', icon: '👥', category: '用户与权限' },
   { name: '角色权限', desc: '系统角色定义与页签权限矩阵', path: '/role-list', icon: '🔐', category: '用户与权限' },
-  { name: '自定义主题与水印', desc: '系统外观风格、主色调与防泄密水印', path: '/settings', icon: '🎨', category: '系统配置' }
+  { name: '自定义主题与水印', desc: '系统外观风格、主色调与防泄密水印', path: '/settings', icon: '🎨', category: '系统配置' },
+  { name: '安全参数策略', desc: '实例级执行策略与安全阈值', path: '/instance-config', icon: '', category: '实例与资源' },
+  { name: '授权证书', desc: '查看与更新商业授权', path: '/license', icon: '', category: '系统配置' },
+  { name: '个人中心', desc: '个人资料、联系方式与修改密码', path: '/user-profile', icon: '', category: '个人' }
 ]
 
 const userAccessibleQuickNavItems = computed(() => {
-  return quickNavItems.filter(item => userStore.isAdmin || userStore.hasPermission(item.path))
+  return quickNavItems.filter(item => item.path === '/user-profile' || userStore.isAdmin || userStore.hasPermission(item.path))
 })
 
 const filteredQuickNavItems = computed(() => {
@@ -562,6 +517,27 @@ const handleOpenSearchDialog = () => {
   searchKeyword.value = ''
   searchDialogVisible.value = true
 }
+
+const handleQuickNavigateFirst = () => {
+  const first = filteredQuickNavItems.value[0]
+  if (first) handleQuickNavigate(first.path)
+}
+
+const shortcutLabel = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent) ? '⌘K' : 'Ctrl K'
+
+// 侧栏只展开当前页面所在的分组，菜单不再一眼望不到头
+const menuGroups: Record<string, string[]> = {
+  '/tickets': ['/ticket-list', '/ticket-create', '/ai-sql-review', '/ticket/'],
+  '/data': ['/data-query', '/data-masking', '/audit-dashboard'],
+  '/instances': ['/instance-list', '/resource-group-list', '/instance-databases', '/instance-accounts', '/instance-sessions', '/instance-params', '/instance-config', '/instance/'],
+  '/perms': ['/user-list', '/role-list'],
+  '/system': ['/workflow-designer', '/ai-config', '/notification-config', '/license', '/settings']
+}
+const defaultOpenGroups = computed(() => {
+  const path = route.path
+  const hit = Object.keys(menuGroups).find(key => menuGroups[key].some(p => (p.endsWith('/') ? path.startsWith(p) : path === p)))
+  return hit ? [hit] : ['/tickets']
+})
 
 const handleQuickNavigate = (path: string) => {
   searchDialogVisible.value = false
@@ -663,11 +639,6 @@ const handleUserCommand = (cmd: string) => {
   }
 }
 
-const handleLanguageChange = (lang: string) => {
-  locale.value = lang
-  localStorage.setItem('language', lang)
-}
-
 onMounted(() => {
   userStore.fetchUserInfo()
   handleResponsiveSidebar()
@@ -688,658 +659,373 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* ============ 框架：侧栏 + 顶栏 + 内容区（极简） ============ */
 .layout-container {
   height: 100vh;
-  width: 100vw;
-  display: flex;
-  flex-direction: row !important;
+  width: 100%;
   overflow: hidden;
-  background-color: #f1f5f9;
+  background: var(--c-bg);
 }
 
-/* ===================================================
-   1. 侧边栏：现代极简纯净、护眼明亮视觉系统
-   =================================================== */
+/* ---- 侧栏 ---- */
 .layout-aside {
-  background: #ffffff;
-  flex-shrink: 0;
-  height: 100%;
+  height: 100vh;
   display: flex;
   flex-direction: column;
-  box-shadow: 2px 0 12px rgba(15, 23, 42, 0.04);
-  transition: width 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-  z-index: 100;
-  border-right: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  transition: width 0.2s ease;
+  overflow: hidden;
 }
-
 .brand-header {
-  height: 64px;
+  height: 56px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 0 18px;
-  background: #ffffff;
-  border-bottom: 1px solid #f1f5f9;
   cursor: pointer;
-  transition: all 0.2s ease;
-  user-select: none;
 }
-
-.brand-header:hover {
-  background: #f8fafc;
-}
-
+.is-sidebar-collapsed .brand-header { justify-content: center; padding: 0; }
 .brand-logo-icon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, #2563eb 0%, #38bdf8 100%);
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  background: var(--c-text);
+  color: var(--c-surface);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #ffffff;
-  font-size: 20px;
-  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.25);
-  flex-shrink: 0;
-  transition: transform 0.25s ease;
-}
-
-.brand-header:hover .brand-logo-icon {
-  transform: scale(1.05);
-}
-
-.brand-text-wrap {
-  margin-left: 12px;
-  overflow: hidden;
-}
-
-.brand-title {
   font-size: 15px;
   font-weight: 700;
-  color: #0f172a;
-  letter-spacing: 0.3px;
-  line-height: 1.2;
+  line-height: 1;
 }
-
-.brand-subtitle {
-  font-size: 11px;
-  color: #64748b;
+.brand-text-wrap { min-width: 0; }
+.brand-title {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--c-text);
+  letter-spacing: -0.01em;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 3px;
-  font-weight: 400;
 }
 
-.aside-menu-scrollbar {
-  flex: 1;
-  overflow-x: hidden;
-}
-
+.aside-menu-scrollbar { flex: 1; min-height: 0; }
 .el-menu-vertical {
-  border-right: none !important;
-  background-color: transparent !important;
-  padding: 10px 0;
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--c-subtle);
+  --el-menu-text-color: var(--c-text-2);
+  --el-menu-active-color: var(--c-text);
+  --el-menu-item-height: 36px;
+  --el-menu-sub-item-height: 34px;
+  --el-menu-base-level-padding: 18px;
+  --el-menu-level-padding: 14px;
+  border-right: none;
+  padding: 4px 10px 16px;
 }
-
-/* 菜单项基础与悬浮效果：明亮护眼微圆角 */
+.el-menu-vertical:not(.el-menu--collapse) { width: 100%; }
 :deep(.el-menu-item),
 :deep(.el-sub-menu__title) {
-  height: 42px;
-  line-height: 42px;
-  margin: 3px 10px;
-  border-radius: 8px;
-  color: #475569 !important;
+  border-radius: var(--radius-sm);
   font-size: 13.5px;
+  margin-bottom: 1px;
+}
+:deep(.el-sub-menu__title) {
   font-weight: 500;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  color: var(--c-text-2);
 }
-
-:deep(.el-menu-item:hover),
-:deep(.el-sub-menu__title:hover) {
-  background: #f1f5f9 !important;
-  color: #0f172a !important;
-}
-
-:deep(.el-menu-item:hover .el-icon),
-:deep(.el-sub-menu__title:hover .el-icon) {
-  color: #2563eb !important;
-}
-
-/* 激活高亮：清爽天空蓝微润胶囊底色与左指示线 */
-:deep(.el-menu-item.is-active) {
-  background: #eff6ff !important;
-  color: #2563eb !important;
-  font-weight: 600;
-  position: relative;
-  box-shadow: inset 3px 0 0 0 #2563eb;
-}
-
-:deep(.el-menu-item.is-active .el-icon) {
-  color: #2563eb !important;
-}
-
-/* 二级菜单背景：淡雅暖灰收纳槽与平滑缩进 */
-:deep(.el-sub-menu .el-menu) {
-  background-color: #f8fafc !important;
-  padding: 4px 6px;
-  margin: 2px 8px;
-  border-radius: 8px;
-  border: 1px solid #f1f5f9;
-}
-
+:deep(.el-sub-menu__title:hover),
+:deep(.el-menu-item:hover) { background: var(--c-subtle); }
+:deep(.el-sub-menu .el-menu) { background: transparent; }
 :deep(.el-sub-menu .el-menu-item) {
-  padding-left: 38px !important;
-  height: 38px;
-  line-height: 38px;
-  font-size: 13px;
-  color: #64748b !important;
-  border-radius: 6px;
-  margin: 2px 0;
+  padding-left: 42px !important;
+  color: var(--c-text-3);
 }
-
-:deep(.el-sub-menu .el-menu-item:hover) {
-  background-color: #f1f5f9 !important;
-  color: #0f172a !important;
-}
-
-:deep(.el-sub-menu .el-menu-item.is-active) {
-  background-color: #e0f2fe !important;
-  color: #0284c7 !important;
+:deep(.el-menu-item.is-active) {
+  background: var(--c-subtle);
+  color: var(--c-text);
   font-weight: 600;
-  box-shadow: none;
 }
-
-.menu-icon {
-  font-size: 17px;
-  margin-right: 10px;
-  color: #64748b;
-  transition: color 0.2s;
-}
-
-.menu-badge {
-  margin-left: auto;
-  transform: scale(0.85);
-}
-
-.inner-menu-tag {
-  margin-left: auto;
-  font-size: 10px;
-  height: 18px;
-  padding: 0 5px;
-  line-height: 16px;
-  transform: scale(0.85);
-  border-radius: 4px;
-}
-
-/* 侧边栏底部折叠栏：纯白轻边界 */
-.aside-footer {
-  height: 46px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  color: #64748b;
-  font-size: 12.5px;
-  border-top: 1px solid #f1f5f9;
-  background: #ffffff;
-  cursor: pointer;
-  user-select: none;
-  transition: all 0.2s ease;
-}
-
-.aside-footer:hover {
-  background: #f8fafc;
-  color: #2563eb;
-}
-
-.collapse-icon {
+:deep(.el-menu-item .el-icon),
+:deep(.el-sub-menu__title .el-icon) {
+  color: var(--c-text-4);
   font-size: 16px;
 }
-
-/* ===================================================
-   2. 顶部 Header：现代高透毛玻璃卡片风格
-   =================================================== */
-.inner-container {
-  display: flex;
-  flex: 1;
-  flex-direction: column !important;
-  height: 100%;
-  overflow: hidden;
-  min-width: 0;
+:deep(.el-menu-item.is-active .el-icon) { color: var(--c-accent); }
+:deep(.el-sub-menu .el-menu-item .el-icon) { display: none; }
+:deep(.el-menu--collapse .el-sub-menu .el-menu-item .el-icon) { display: inline-flex; }
+.menu-icon { margin-right: 10px; }
+.menu-badge {
+  margin-left: auto;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--c-danger);
+  color: #fff;
+  border: none;
 }
 
-.layout-header {
-  height: 64px !important;
-  background-color: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid #e2e8f0;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 24px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+.aside-footer {
+  height: 44px;
   flex-shrink: 0;
-  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 22px;
+  border-top: 1px solid var(--c-border);
+  color: var(--c-text-3);
+  font-size: 13px;
+  cursor: pointer;
 }
+.is-sidebar-collapsed .aside-footer { justify-content: center; padding: 0; }
+.aside-footer:hover { color: var(--c-text); }
+.collapse-icon { font-size: 16px; }
 
+/* ---- 顶栏 ---- */
+.inner-container {
+  height: 100vh;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+.layout-header {
+  height: 56px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 24px;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
+}
 .header-left {
   display: flex;
   align-items: center;
   gap: 14px;
+  min-width: 0;
 }
-
 .portal-return-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: #3b82f6;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
-  padding: 3px 10px 3px 6px;
-  border-radius: 20px;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--c-text-3);
   text-decoration: none;
-  transition: all 0.2s ease;
+  white-space: nowrap;
 }
-
-.portal-return-link:hover {
-  background: #dbeafe;
-  border-color: #93c5fd;
-  transform: translateY(-1px);
+.portal-return-link:hover { color: var(--c-text); }
+.header-split {
+  width: 1px;
+  height: 16px;
+  background: var(--c-border);
 }
-
-.portal-pill-badge {
-  background: #2563eb;
-  color: #ffffff;
-  font-size: 9px;
-  font-weight: 800;
-  padding: 1px 5px;
-  border-radius: 10px;
-  letter-spacing: 0.5px;
-}
-
-.layout-breadcrumb {
-  font-size: 13.5px;
-}
-
-:deep(.layout-breadcrumb .el-breadcrumb__inner) {
-  display: flex;
-  align-items: center;
-  color: #64748b;
-  font-weight: 500;
-}
-
-:deep(.layout-breadcrumb .el-breadcrumb__inner:hover) {
-  color: #3b82f6;
-}
-
-.crumb-icon {
-  margin-right: 4px;
-  font-size: 14px;
-}
-
-.active-crumb {
-  color: #0f172a !important;
-  font-weight: 600;
-}
+.layout-breadcrumb { font-size: 13px; white-space: nowrap; }
+:deep(.layout-breadcrumb .el-breadcrumb__inner) { color: var(--c-text-3); font-weight: 400; }
+:deep(.layout-breadcrumb .el-breadcrumb__separator) { color: var(--c-text-4); margin: 0 8px; }
+.active-crumb { color: var(--c-text); font-weight: 600; }
 
 .header-right {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 8px;
+  flex-shrink: 0;
 }
-
-/* 全局搜索快捷触发条 */
 .quick-search-trigger {
+  height: 32px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 12px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 20px;
-  color: #64748b;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.quick-search-trigger:hover {
-  background: #e2e8f0;
-  border-color: #cbd5e1;
-  color: #1e293b;
-}
-
-.shortcut-key {
-  background: #ffffff;
-  border: 1px solid #cbd5e1;
-  border-radius: 4px;
-  padding: 1px 5px;
-  font-size: 11px;
-  font-family: monospace;
-  color: #64748b;
-  box-shadow: 0 1px 1px rgba(0,0,0,0.06);
-}
-
-.header-tool-btn {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-}
-
-.text-tool-btn {
-  padding: 6px 10px;
-  border-radius: 6px;
+  padding: 0 8px 0 10px;
+  min-width: 200px;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-sm);
+  background: var(--c-surface);
+  color: var(--c-text-4);
   font-size: 13px;
-  color: #475569;
-  font-weight: 500;
-  transition: all 0.2s;
+  cursor: pointer;
 }
-
-.text-tool-btn:hover {
-  background: #f1f5f9;
-  color: #3b82f6;
+.quick-search-trigger:hover { border-color: var(--c-border-strong); color: var(--c-text-3); }
+.shortcut-key {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--c-border);
+  color: var(--c-text-3);
+  background: var(--c-muted-bg);
 }
-
+.header-tool-btn { display: flex; align-items: center; }
 .bell-btn {
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  color: #64748b;
-  transition: all 0.2s;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--c-text-3);
 }
-
-.bell-btn:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  color: #3b82f6;
-}
-
+.bell-btn:hover { background: var(--c-subtle); color: var(--c-text); }
+:deep(.el-badge__content) { border: none; height: 16px; line-height: 16px; padding: 0 5px; font-size: 11px; }
 .header-divider {
   width: 1px;
-  height: 24px;
-  background: #e2e8f0;
+  height: 18px;
+  background: var(--c-border);
+  margin: 0 4px;
 }
-
-/* 用户头像胶囊 */
 .user-profile-badge {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 10px 4px 6px;
-  border-radius: 24px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  gap: 8px;
+  padding: 3px 6px 3px 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s ease;
 }
-
-.user-profile-badge:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
-}
-
-.avatar-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
+.user-profile-badge:hover { background: var(--c-subtle); }
+.avatar-box { position: relative; display: flex; }
 .custom-avatar {
-  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  --el-avatar-size: 28px;
+  background: var(--c-subtle);
+  color: var(--c-text);
   font-weight: 600;
-  color: #ffffff;
+  font-size: 13px;
 }
-
-.status-dot {
-  position: absolute;
-  bottom: 0;
-  right: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #10b981;
-  border: 1.5px solid #ffffff;
-}
-
+.status-dot { display: none; }
 .user-text-info {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  line-height: 1.25;
 }
+.user-name { font-size: 13px; font-weight: 600; color: var(--c-text); }
+.role-pill { font-size: 11.5px; color: var(--c-text-3); }
+.arrow-icon { color: var(--c-text-4); font-size: 12px; }
 
-.user-name {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
-.role-pill {
-  font-size: 11px;
-  height: 20px;
-  line-height: 18px;
-  padding: 0 6px;
-  border-radius: 10px;
-}
-
-.arrow-icon {
-  font-size: 12px;
-  color: #94a3b8;
-}
-
-.custom-dropdown-menu {
-  padding: 6px;
-  border-radius: 8px;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
-}
-
+.custom-dropdown-menu { min-width: 200px; }
 .user-dropdown-header {
-  padding: 8px 14px 12px 14px;
-  border-bottom: 1px solid #f1f5f9;
+  padding: 10px 16px 8px;
+  border-bottom: 1px solid var(--c-border);
   margin-bottom: 4px;
 }
+.u-name { font-size: 14px; font-weight: 600; color: var(--c-text); }
+.u-role { font-size: 12px; color: var(--c-text-3); margin-top: 2px; }
+.logout-item { color: var(--c-danger); }
 
-.u-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: #0f172a;
-}
-
-.u-role {
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 2px;
-}
-
-.logout-item {
-  color: #ef4444 !important;
-}
-
-/* ===================================================
-   3. 主内容区域与页面切换动效
-   =================================================== */
+/* ---- 内容区 ---- */
 .layout-main {
-  background-color: #f8fafc;
-  padding: 20px 24px;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
-  box-sizing: border-box;
-  min-width: 0;
-  width: 100%;
+  padding: 24px 28px 40px;
+  background: var(--c-bg);
 }
-
 .fade-transform-enter-active,
-.fade-transform-leave-active {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
+.fade-transform-leave-active { transition: opacity 0.15s ease; }
+.fade-transform-enter-from,
+.fade-transform-leave-to { opacity: 0; }
 
-.fade-transform-enter-from {
-  opacity: 0;
-  transform: translateY(6px);
-}
-
-.fade-transform-leave-to {
-  opacity: 0;
-  transform: translateY(-6px);
-}
-
-/* 通知中心列表 */
-.notification-card {
-  padding: 4px 0;
-}
-
+/* ---- 待办审批弹出层 ---- */
+.notification-card { margin: -4px; }
 .n-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding-bottom: 10px;
-  border-bottom: 1px solid #f1f5f9;
-  margin-bottom: 10px;
+  justify-content: space-between;
+  padding: 4px 4px 10px;
+  border-bottom: 1px solid var(--c-border);
 }
-
 .n-title {
   display: flex;
   align-items: center;
-  font-weight: 600;
-  font-size: 14px;
-  color: #0f172a;
-}
-
-.n-body {
-  max-height: 360px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
   gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text);
 }
-
+.n-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-danger);
+}
+.n-body { max-height: 380px; overflow-y: auto; }
 .n-item {
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  padding: 12px 4px;
+  border-bottom: 1px solid var(--c-border);
   cursor: pointer;
-  transition: all 0.2s ease;
 }
-
-.n-item:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.12);
-}
-
+.n-item:last-child { border-bottom: none; }
+.n-item:hover { background: var(--c-muted-bg); }
 .n-item-top {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-bottom: 4px;
+  gap: 6px;
+  font-size: 13px;
 }
-
-.n-item-type {
-  font-weight: 600;
-  color: #3b82f6;
-  font-size: 12px;
-}
-
+.n-item-type { color: var(--c-text-3); }
 .n-item-id {
-  font-family: monospace;
-  font-size: 12px;
-  color: #475569;
+  font-weight: 600;
+  color: var(--c-text);
   flex: 1;
-  margin: 0 6px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.n-item-meta {
-  font-size: 12px;
-  color: #334155;
-  margin-bottom: 4px;
-}
-
-.n-item-desc {
-  font-size: 12px;
-  color: #64748b;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-bottom: 6px;
-}
-
+.n-item-node { flex-shrink: 0; }
+.n-item-meta,
+.n-item-desc,
 .n-item-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  color: #94a3b8;
+  font-size: 12.5px;
+  color: var(--c-text-3);
+  margin-top: 4px;
 }
-
-.n-footer {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px solid #f1f5f9;
+.n-item-meta b { color: var(--c-text-2); font-weight: 500; }
+.n-item-desc {
+  color: var(--c-text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.n-item-footer { display: flex; justify-content: space-between; }
+.n-footer { padding-top: 10px; border-top: 1px solid var(--c-border); }
 
-/* 全局快捷搜索弹窗 */
-.quick-search-dialog :deep(.el-dialog__header) {
-  padding: 16px 20px 10px 20px;
-}
-
-.quick-search-dialog :deep(.el-dialog__body) {
-  padding: 10px 20px 20px 20px;
-}
-
-.search-dialog-input {
-  margin-bottom: 14px;
-}
-
+/* ---- 跳转搜索 ---- */
+.quick-search-dialog :deep(.el-dialog__header) { padding-bottom: 8px; }
+.quick-search-dialog :deep(.el-dialog__body) { padding-top: 4px; }
+.search-dialog-input { margin-bottom: 8px; }
 .search-results-list {
   max-height: 380px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  margin: 0 -8px;
 }
-
 .search-result-item {
   display: flex;
   align-items: center;
-  padding: 10px 12px;
-  border-radius: 6px;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s ease;
 }
-
-.search-result-item:hover {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  transform: translateX(3px);
-}
-
-.s-icon {
-  font-size: 20px;
-  margin-right: 12px;
-}
-
-.s-meta {
-  flex: 1;
-}
-
-.s-title {
-  font-size: 13.5px;
-  font-weight: 600;
-  color: #1e293b;
-}
-
+.search-result-item:hover,
+.search-result-item:first-child { background: var(--c-subtle); }
+.search-results-list:hover .search-result-item:first-child:not(:hover) { background: transparent; }
+.s-meta { flex: 1; min-width: 0; }
+.s-title { font-size: 14px; font-weight: 500; color: var(--c-text); }
 .s-desc {
-  font-size: 12px;
-  color: #64748b;
-  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .quick-search-trigger { min-width: 0; }
+  .quick-search-trigger > span { display: none; }
+  .user-text-info { display: none; }
+}
+@media (max-width: 760px) {
+  .layout-header { padding: 0 12px; }
+  .layout-main { padding: 16px 12px 32px; }
+  .layout-breadcrumb, .header-split { display: none; }
 }
 </style>

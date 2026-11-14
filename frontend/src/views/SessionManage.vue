@@ -110,10 +110,10 @@
 
         <el-table-column prop="info" label="正在执行的 SQL 语句 (Info)" min-width="260" show-overflow-tooltip>
           <template #default="scope">
-            <span v-if="scope.row.info" style="font-family: monospace; font-size: 12px; color: #409EFF;">
+            <span v-if="scope.row.info" style="font-family: monospace; font-size: 12px; color: var(--c-accent);">
               {{ scope.row.info }}
             </span>
-            <span v-else style="color: #c0c4cc; font-size: 12px;">(空闲)</span>
+            <span v-else style="color: var(--c-text-4); font-size: 12px;">(空闲)</span>
           </template>
         </el-table-column>
 
@@ -281,7 +281,7 @@ onUnmounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -295,42 +295,42 @@ onUnmounted(() => {
 }
 
 .metric-card {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 14px 18px;
   border-radius: 8px;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--c-border);
   display: flex;
   flex-direction: column;
 }
 
 .metric-card .m-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .metric-card .m-value {
   font-size: 22px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
   margin-top: 6px;
 }
 
 .metric-card .m-value.highlight {
-  color: #409EFF;
+  color: var(--c-accent);
 }
 
 .metric-card .m-value.danger {
-  color: #F56C6C;
+  color: var(--c-danger);
 }
 
 .metric-card .m-value small {
   font-size: 13px;
   font-weight: normal;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow-x: auto;
 }

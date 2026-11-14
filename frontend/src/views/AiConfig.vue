@@ -4,7 +4,6 @@
     <div class="header-action">
       <div class="title-area">
         <h2 class="page-title">
-          <span class="title-icon">🤖</span>
           AI 大模型集成与多提供商配置 (LLM Model Providers)
         </h2>
         <div class="page-subtitle">
@@ -37,7 +36,7 @@
                 effect="plain"
                 style="margin-left: 8px;"
               >
-                {{ currentActiveProvider?.hasApiKey || currentActiveProvider?.providerId === 'ollama' ? '✅ 已配置 API Key' : '⚠️ 尚未配置 API Key' }}
+                {{ currentActiveProvider?.hasApiKey || currentActiveProvider?.providerId === 'ollama' ? '已配置 API Key' : '尚未配置 API Key' }}
               </el-tag>
             </div>
             <div class="status-desc">
@@ -148,7 +147,7 @@
                     :underline="false"
                     style="margin-right: 12px; font-size: 13px;"
                   >
-                    🔑 获取 API Key
+                    获取 API Key
                   </el-link>
                   <el-link
                     v-if="editProvider.officialWebsite"
@@ -158,7 +157,7 @@
                     :underline="false"
                     style="font-size: 13px;"
                   >
-                    🌐 官方文档
+                    官方文档
                   </el-link>
                 </div>
               </div>
@@ -218,7 +217,7 @@
 
               <!-- 高级调节参数 -->
               <el-collapse class="advanced-collapse">
-                <el-collapse-item title="⚙️ 高级超参数设置 (Temperature / Max Tokens / Timeout)" name="1">
+                <el-collapse-item title="高级超参数设置 (Temperature / Max Tokens / Timeout)" name="1">
                   <el-row :gutter="16">
                     <el-col :span="12">
                       <el-form-item label="采样温度 Temperature (0.0 ~ 1.0)">
@@ -258,7 +257,7 @@
                       :step="5"
                       style="width: 200px;"
                     />
-                    <span style="margin-left: 8px; color: #909399; font-size: 13px;">秒 (建议 30 秒)</span>
+                    <span style="margin-left: 8px; color: var(--c-text-3); font-size: 13px;">秒 (建议 30 秒)</span>
                   </el-form-item>
                 </el-collapse-item>
               </el-collapse>
@@ -273,7 +272,7 @@
             <template #header>
               <div class="card-header-flex">
                 <span class="header-title">
-                  <el-icon color="#409EFF"><Connection /></el-icon>
+                  <el-icon><Connection /></el-icon>
                   连通性自检与健康探测
                 </span>
                 <el-button
@@ -294,7 +293,7 @@
 
               <!-- 测试进行中 -->
               <div v-if="testing" class="testing-state">
-                <el-icon class="is-loading" style="font-size: 28px; color: #409EFF;"><Loading /></el-icon>
+                <el-icon class="is-loading" style="font-size: 28px; color: var(--c-accent);"><Loading /></el-icon>
                 <div class="testing-text">正在向大模型端点发起测试握手，请稍候...</div>
               </div>
 
@@ -302,31 +301,31 @@
               <div v-else-if="testResult" class="test-result-box" :class="{ success: testResult.success, error: !testResult.success }">
                 <div class="result-header">
                   <span class="r-badge" :class="testResult.success ? 'r-success' : 'r-error'">
-                    {{ testResult.success ? '✅ 测试通过 (Connected)' : '❌ 连接失败 (Failed)' }}
+                    {{ testResult.success ? '测试通过 (Connected)' : '连接失败 (Failed)' }}
                   </span>
                   <span v-if="testResult.latencyMs" class="r-latency">
-                    ⏱️ 延迟: <b>{{ testResult.latencyMs }} ms</b>
+                    延迟: <b>{{ testResult.latencyMs }} ms</b>
                   </span>
                 </div>
 
                 <div class="result-message">{{ testResult.message }}</div>
 
                 <div v-if="testResult.responseText" class="result-response">
-                  <div class="response-label">🤖 模型实际响应内容：</div>
+                  <div class="response-label">模型实际响应内容：</div>
                   <div class="response-text">{{ testResult.responseText }}</div>
                 </div>
 
                 <div v-if="testResult.errorDetails" class="result-error-detail">
-                  <div class="error-label">📋 错误诊断详情：</div>
+                  <div class="error-label">错误诊断详情：</div>
                   <pre class="error-pre">{{ testResult.errorDetails }}</pre>
                 </div>
               </div>
 
               <!-- 未测试默认占位 -->
               <div v-else class="test-placeholder">
-                <el-icon style="font-size: 36px; color: #C0C4CC; margin-bottom: 8px;"><Cpu /></el-icon>
+                <el-icon style="font-size: 36px; color: var(--c-text-4); margin-bottom: 8px;"><Cpu /></el-icon>
                 <div>尚未发起连通性自检</div>
-                <small style="color: #909399;">点击右上角「测试连接」按钮开始检测</small>
+                <small style="color: var(--c-text-3);">点击右上角「测试连接」按钮开始检测</small>
               </div>
             </div>
           </el-card>
@@ -336,7 +335,7 @@
             <template #header>
               <div class="card-header-flex">
                 <span class="header-title">
-                  <el-icon color="#67C23A"><ChatDotRound /></el-icon>
+                  <el-icon><ChatDotRound /></el-icon>
                   AI 实时体验沙箱 (Quick Sandbox)
                 </span>
                 <el-button size="small" type="success" :loading="chatLoading" @click="handleSandboxChat">
@@ -353,7 +352,7 @@
                 placeholder="输入一条 SQL 诊断需求，例如：请为 SELECT * FROM t_policy_order WHERE user_id = 123 AND status = 'ACTIVE' 给出索引优化建议。"
               />
               <div v-if="sandboxReply" class="sandbox-reply">
-                <div class="reply-header">🤖 AI 诊断回复：</div>
+                <div class="reply-header">AI 诊断回复：</div>
                 <div class="reply-content markdown-body">{{ sandboxReply }}</div>
               </div>
             </div>
@@ -539,7 +538,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   margin: 0 0 6px 0;
 }
 
@@ -549,13 +548,13 @@ onMounted(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 /* 激活状态卡片 */
 .active-status-card {
-  background: linear-gradient(135deg, #f0f7ff 0%, #ffffff 100%);
-  border: 1px solid #d0e4ff;
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
   border-radius: 8px;
   margin-bottom: 24px;
 }
@@ -578,41 +577,41 @@ onMounted(() => {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background-color: #e6a23c;
-  box-shadow: 0 0 0 0 rgba(230, 162, 60, 0.7);
+  background-color: var(--c-warning);
+  box-shadow: var(--shadow-sm);
   animation: pulse 2s infinite;
 }
 
 .pulse-indicator.active {
-  background-color: #67c23a;
-  box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.7);
+  background-color: var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 @keyframes pulse {
   0% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0.7);
+    box-shadow: var(--shadow-sm);
   }
   70% {
     transform: scale(1);
-    box-shadow: 0 0 0 8px rgba(103, 194, 58, 0);
+    box-shadow: var(--shadow-sm);
   }
   100% {
     transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(103, 194, 58, 0);
+    box-shadow: var(--shadow-sm);
   }
 }
 
 .status-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   display: flex;
   align-items: center;
 }
 
 .active-name {
-  color: #409eff;
+  color: var(--c-accent);
   font-weight: 700;
   font-size: 16px;
   margin-left: 4px;
@@ -620,7 +619,7 @@ onMounted(() => {
 
 .status-desc {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
@@ -632,7 +631,7 @@ onMounted(() => {
 
 .switch-label {
   font-size: 13px;
-  color: #606266;
+  color: var(--c-text-2);
   font-weight: 500;
 }
 
@@ -644,7 +643,7 @@ onMounted(() => {
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   margin-bottom: 12px;
   display: flex;
   align-items: baseline;
@@ -653,7 +652,7 @@ onMounted(() => {
 
 .section-title small {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   font-weight: normal;
 }
 
@@ -666,8 +665,8 @@ onMounted(() => {
 }
 
 .provider-card {
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 14px;
   cursor: pointer;
@@ -679,19 +678,19 @@ onMounted(() => {
 }
 
 .provider-card:hover {
-  border-color: #409eff;
+  border-color: var(--c-accent);
   transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(64, 158, 255, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 
 .provider-card.selected {
-  border-color: #409eff;
-  background-color: #f5f9ff;
+  border-color: var(--c-accent);
+  background-color: var(--c-accent-soft);
 }
 
 .provider-card.is-active {
-  border-color: #67c23a;
-  box-shadow: 0 0 0 1px #67c23a;
+  border-color: var(--c-success);
+  box-shadow: var(--shadow-sm);
 }
 
 .card-top {
@@ -714,7 +713,7 @@ onMounted(() => {
 .p-name {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -723,12 +722,12 @@ onMounted(() => {
 .p-model {
   font-size: 12px;
   font-family: monospace;
-  color: #909399;
+  color: var(--c-text-3);
 }
 
 .card-desc {
   font-size: 12px;
-  color: #606266;
+  color: var(--c-text-2);
   line-height: 1.4;
   margin-bottom: 12px;
   flex: 1;
@@ -763,7 +762,7 @@ onMounted(() => {
 .header-title {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -771,14 +770,14 @@ onMounted(() => {
 
 .form-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--c-text-3);
   line-height: 1.4;
   margin-top: 4px;
 }
 
 .form-sub-hint {
   font-size: 11px;
-  color: #a8abb2;
+  color: var(--c-text-4);
   margin-top: 2px;
 }
 
@@ -790,20 +789,20 @@ onMounted(() => {
 .param-val {
   font-family: monospace;
   font-weight: 600;
-  color: #409eff;
+  color: var(--c-accent);
 }
 
 .advanced-collapse {
   margin-top: 16px;
   border-radius: 6px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--c-border);
 }
 
 :deep(.advanced-collapse .el-collapse-item__header) {
   padding-left: 12px;
   font-weight: 600;
   font-size: 13px;
-  background-color: #fafafa;
+  background-color: var(--c-muted-bg);
 }
 
 :deep(.advanced-collapse .el-collapse-item__content) {
@@ -813,7 +812,7 @@ onMounted(() => {
 /* 测试面板 */
 .test-intro {
   font-size: 13px;
-  color: #606266;
+  color: var(--c-text-2);
   line-height: 1.5;
   margin-bottom: 14px;
 }
@@ -828,7 +827,7 @@ onMounted(() => {
 
 .testing-text {
   font-size: 13px;
-  color: #409eff;
+  color: var(--c-accent);
 }
 
 .test-placeholder {
@@ -836,7 +835,7 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   padding: 30px 0;
-  color: #909399;
+  color: var(--c-text-3);
   font-size: 13px;
   gap: 4px;
 }
@@ -848,13 +847,13 @@ onMounted(() => {
 }
 
 .test-result-box.success {
-  background-color: #f0f9eb;
-  border: 1px solid #c2e7b0;
+  background-color: var(--c-success-soft);
+  border: 1px solid var(--c-success-border);
 }
 
 .test-result-box.error {
-  background-color: #fef0f0;
-  border: 1px solid #fbc4c4;
+  background-color: var(--c-danger-soft);
+  border: 1px solid var(--c-danger-border);
 }
 
 .result-header {
@@ -869,57 +868,57 @@ onMounted(() => {
 }
 
 .r-success {
-  color: #67c23a;
+  color: var(--c-success);
 }
 
 .r-error {
-  color: #f56c6c;
+  color: var(--c-danger);
 }
 
 .r-latency {
   font-size: 12px;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .result-message {
   font-weight: 500;
-  color: #303133;
+  color: var(--c-text);
   margin-bottom: 8px;
 }
 
 .result-response {
   margin-top: 10px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px;
   border-radius: 4px;
-  border: 1px solid #e1f3d8;
+  border: 1px solid var(--c-success-soft);
 }
 
 .response-label {
   font-size: 12px;
-  color: #67c23a;
+  color: var(--c-success);
   font-weight: 600;
   margin-bottom: 4px;
 }
 
 .response-text {
   font-size: 13px;
-  color: #303133;
+  color: var(--c-text);
   line-height: 1.5;
   white-space: pre-wrap;
 }
 
 .result-error-detail {
   margin-top: 10px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px;
   border-radius: 4px;
-  border: 1px solid #fde2e2;
+  border: 1px solid var(--c-danger-border);
 }
 
 .error-label {
   font-size: 12px;
-  color: #f56c6c;
+  color: var(--c-danger);
   font-weight: 600;
   margin-bottom: 4px;
 }
@@ -927,7 +926,7 @@ onMounted(() => {
 .error-pre {
   margin: 0;
   font-size: 11px;
-  color: #909399;
+  color: var(--c-text-3);
   white-space: pre-wrap;
   word-break: break-all;
   font-family: monospace;
@@ -941,8 +940,8 @@ onMounted(() => {
 }
 
 .sandbox-reply {
-  background-color: #fafafa;
-  border: 1px solid #ebeef5;
+  background-color: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 12px;
 }
@@ -950,13 +949,13 @@ onMounted(() => {
 .reply-header {
   font-size: 12px;
   font-weight: 600;
-  color: #409eff;
+  color: var(--c-accent);
   margin-bottom: 6px;
 }
 
 .reply-content {
   font-size: 13px;
-  color: #303133;
+  color: var(--c-text);
   line-height: 1.6;
   white-space: pre-wrap;
 }

@@ -4,7 +4,7 @@
     <div class="page-header-flex">
       <div>
         <h2 class="page-title">
-          <span>🔔 消息通知与告警通道配置中心</span>
+          <span>消息通知与告警通道配置中心</span>
         </h2>
         <div class="page-subtitle">
           构建协作即时通讯、移动短信服务、紧急语音电话三大梯队分类提醒体系，支持阿里巴巴与腾讯云多厂商配置及场景策略联动
@@ -32,7 +32,6 @@
           >
             <div class="category-head">
               <div class="category-badge im-badge">
-                <span class="badge-icon">💬</span>
                 <span class="badge-text">1. 协作即时通讯类 (IM)</span>
               </div>
               <el-tag size="small" type="success" effect="light">日常审批流转</el-tag>
@@ -64,7 +63,6 @@
           >
             <div class="category-head">
               <div class="category-badge sms-badge">
-                <span class="badge-icon">📱</span>
                 <span class="badge-text">2. 移动短信服务类 (SMS)</span>
               </div>
               <el-tag size="small" :type="form.sms?.enabled ? 'warning' : 'info'" effect="light">
@@ -91,7 +89,6 @@
           >
             <div class="category-head">
               <div class="category-badge voice-badge">
-                <span class="badge-icon">📞</span>
                 <span class="badge-text">3. 紧急电话语音类 (Voice)</span>
               </div>
               <el-tag size="small" :type="form.voiceCall?.enabled ? 'danger' : 'info'" effect="light">
@@ -116,7 +113,7 @@
       <!-- 1. 企业微信配置 -->
       <el-tab-pane name="wechat">
         <template #label>
-          <span class="tab-label">💬 🟢 企业微信工作通知 (WeChat Work)</span>
+          <span class="tab-label">企业微信工作通知 (WeChat Work)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -191,7 +188,7 @@
           <!-- 在线测试诊断控制台 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 企业微信通道在线联调测试</span>
+              <span>企业微信通道在线联调测试</span>
             </div>
             <div class="test-panel-desc">
               输入接收人的企业微信 ERP 账号或手机号，快速验证 WebService 连通性。
@@ -200,7 +197,7 @@
             <div class="test-field-group">
               <div class="field-label">测试接收人工号 / ERP：</div>
               <el-input v-model="wechatTestErp" placeholder="例如 zhangsan 或 102488" clearable>
-                <template #prepend>👤 接收人</template>
+                <template #prepend>接收人</template>
               </el-input>
             </div>
 
@@ -228,9 +225,9 @@
 
             <div v-if="testResultMap.WECHAT" class="test-feedback-box" :class="{ 'is-ok': testResultMap.WECHAT.success, 'is-fail': !testResultMap.WECHAT.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.WECHAT.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.WECHAT.success ? '✅ 推送成功' : '❌ 推送失败' }}</span>
+                <el-icon v-if="testResultMap.WECHAT.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
+                <span>{{ testResultMap.WECHAT.success ? '推送成功' : '推送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.WECHAT.latencyMs">耗时: {{ testResultMap.WECHAT.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.WECHAT.message }}</div>
@@ -242,7 +239,7 @@
       <!-- 2. 阿里钉钉群机器人配置 -->
       <el-tab-pane name="dingtalk">
         <template #label>
-          <span class="tab-label">💬 🔵 阿里钉钉群机器人 (DingTalk)</span>
+          <span class="tab-label">阿里钉钉群机器人 (DingTalk)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -287,7 +284,7 @@
 
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 钉钉机器人在线测试</span>
+              <span>钉钉机器人在线测试</span>
             </div>
             <div class="test-panel-desc">向钉钉群立即发送一条 Markdown 格式的数据库治理告警测试卡片。</div>
 
@@ -310,9 +307,9 @@
 
             <div v-if="testResultMap.DINGTALK" class="test-feedback-box" :class="{ 'is-ok': testResultMap.DINGTALK.success, 'is-fail': !testResultMap.DINGTALK.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.DINGTALK.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.DINGTALK.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
+                <el-icon v-if="testResultMap.DINGTALK.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
+                <span>{{ testResultMap.DINGTALK.success ? '发送成功' : '发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.DINGTALK.latencyMs">耗时: {{ testResultMap.DINGTALK.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.DINGTALK.message }}</div>
@@ -324,7 +321,7 @@
       <!-- 3. 字节跳动飞书 / Lark 配置 -->
       <el-tab-pane name="feishu">
         <template #label>
-          <span class="tab-label">💬 🟣 字节飞书 / Lark (Feishu)</span>
+          <span class="tab-label">字节飞书 / Lark (Feishu)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -359,7 +356,7 @@
 
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 飞书交互卡片在线测试</span>
+              <span>飞书交互卡片在线测试</span>
             </div>
             <div class="test-panel-desc">向飞书群下发一条彩色标题、带跳转按钮的 Interactive 流程卡片。</div>
 
@@ -382,9 +379,9 @@
 
             <div v-if="testResultMap.FEISHU" class="test-feedback-box" :class="{ 'is-ok': testResultMap.FEISHU.success, 'is-fail': !testResultMap.FEISHU.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.FEISHU.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.FEISHU.success ? '✅ 发送成功' : '❌ 发送失败' }}</span>
+                <el-icon v-if="testResultMap.FEISHU.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
+                <span>{{ testResultMap.FEISHU.success ? '发送成功' : '发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.FEISHU.latencyMs">耗时: {{ testResultMap.FEISHU.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.FEISHU.message }}</div>
@@ -396,7 +393,7 @@
       <!-- 4. 移动短信服务 (SMS) —— [阿里云/腾讯云等多厂商] -->
       <el-tab-pane name="sms">
         <template #label>
-          <span class="tab-label">📱 移动短信服务 (SMS Gateway)</span>
+          <span class="tab-label">移动短信服务 (SMS Gateway)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -417,16 +414,16 @@
               <el-form-item label="选择短信服务提供商">
                 <el-radio-group v-model="form.sms.provider" size="default">
                   <el-radio-button value="ALIYUN">
-                    <span style="font-weight: 600;">🟧 阿里巴巴 (阿里云短信 Dysmsapi)</span>
+                    <span style="font-weight: 600;">阿里巴巴 (阿里云短信 Dysmsapi)</span>
                   </el-radio-button>
                   <el-radio-button value="TENCENT">
-                    <span style="font-weight: 600;">🟦 腾讯云短信 (Tencent SMS)</span>
+                    <span style="font-weight: 600;">腾讯云短信 (Tencent SMS)</span>
                   </el-radio-button>
                   <el-radio-button value="HUAWEI">
-                    <span>🔴 华为云短信</span>
+                    <span>华为云短信</span>
                   </el-radio-button>
                   <el-radio-button value="CUSTOM_HTTP">
-                    <span>⚙️ 自建 HTTP 短信网关</span>
+                    <span>自建 HTTP 短信网关</span>
                   </el-radio-button>
                 </el-radio-group>
               </el-form-item>
@@ -448,7 +445,7 @@
 
               <!-- 阿里云短信专属参数配置 -->
               <div v-if="form.sms.provider === 'ALIYUN'" class="provider-config-box aliyun-box">
-                <div class="provider-box-title">🟧 阿里云短信服务参数设置 (Aliyun Dysmsapi)</div>
+                <div class="provider-box-title">阿里云短信服务参数设置 (Aliyun Dysmsapi)</div>
                 <el-row :gutter="16">
                   <el-col :span="12">
                     <el-form-item label="AccessKey ID">
@@ -468,7 +465,7 @@
 
               <!-- 腾讯云短信专属参数配置 -->
               <div v-else-if="form.sms.provider === 'TENCENT'" class="provider-config-box tencent-box">
-                <div class="provider-box-title">🟦 腾讯云短信服务参数设置 (Tencent Cloud SMS)</div>
+                <div class="provider-box-title">腾讯云短信服务参数设置 (Tencent Cloud SMS)</div>
                 <el-row :gutter="16">
                   <el-col :span="12">
                     <el-form-item label="SecretId">
@@ -497,7 +494,7 @@
 
               <!-- 华为云或自建网关 -->
               <div v-else class="provider-config-box custom-box">
-                <div class="provider-box-title">⚙️ 自建 HTTP / 华为云短信网关配置</div>
+                <div class="provider-box-title">自建 HTTP / 华为云短信网关配置</div>
                 <el-form-item label="网关 API 端点 URL">
                   <el-input v-model="form.sms.customApiEndpoint" placeholder="https://sms.yourdomain.com/v1/send" clearable />
                 </el-form-item>
@@ -526,7 +523,7 @@
           <!-- 在线短信测试控制台 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 移动短信通道在线下发测试 (Test SMS)</span>
+              <span>移动短信通道在线下发测试 (Test SMS)</span>
             </div>
             <div class="test-panel-desc">
               输入接收人手机号码，针对当前配置的服务商（阿里巴巴 / 腾讯云等）发起一条实时代发测试短信。
@@ -535,7 +532,7 @@
             <div class="test-field-group">
               <div class="field-label">测试目标手机号码：</div>
               <el-input v-model="smsTestPhone" placeholder="请输入 11 位测试手机号" clearable>
-                <template #prepend>📱 手机号</template>
+                <template #prepend>手机号</template>
               </el-input>
             </div>
 
@@ -563,9 +560,9 @@
 
             <div v-if="testResultMap.SMS" class="test-feedback-box" :class="{ 'is-ok': testResultMap.SMS.success, 'is-fail': !testResultMap.SMS.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.SMS.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.SMS.success ? '✅ 短信下发成功' : '❌ 短信发送失败' }}</span>
+                <el-icon v-if="testResultMap.SMS.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
+                <span>{{ testResultMap.SMS.success ? '短信下发成功' : '短信发送失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.SMS.latencyMs">耗时: {{ testResultMap.SMS.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.SMS.message }}</div>
@@ -581,7 +578,7 @@
       <!-- 5. 紧急电话语音外呼配置 -->
       <el-tab-pane name="voiceCall">
         <template #label>
-          <span class="tab-label">📞 紧急电话智能语音外呼 (Voice Call)</span>
+          <span class="tab-label">紧急电话智能语音外呼 (Voice Call)</span>
         </template>
 
         <div class="tab-content-grid">
@@ -646,7 +643,7 @@
           <!-- 在线测试语音外呼 -->
           <div class="test-panel-card">
             <div class="test-panel-title">
-              <span>🧪 电话语音外呼在线拨测 (Test Voice Call)</span>
+              <span>电话语音外呼在线拨测 (Test Voice Call)</span>
             </div>
             <div class="test-panel-desc">
               输入被叫手机号码，发起一次自动化告警语音呼叫握手测试。
@@ -659,7 +656,7 @@
                 placeholder="请输入 11 位手机号码 (如 13800138000)"
                 clearable
               >
-                <template #prepend>📱 手机号</template>
+                <template #prepend>手机号</template>
               </el-input>
             </div>
 
@@ -677,9 +674,9 @@
 
             <div v-if="testResultMap.VOICE_CALL" class="test-feedback-box" :class="{ 'is-ok': testResultMap.VOICE_CALL.success, 'is-fail': !testResultMap.VOICE_CALL.success }">
               <div class="feedback-status">
-                <el-icon v-if="testResultMap.VOICE_CALL.success" color="#67C23A"><CircleCheckFilled /></el-icon>
-                <el-icon v-else color="#F56C6C"><CircleCloseFilled /></el-icon>
-                <span>{{ testResultMap.VOICE_CALL.success ? '✅ 外呼握手成功' : '❌ 外呼失败' }}</span>
+                <el-icon v-if="testResultMap.VOICE_CALL.success"><CircleCheckFilled /></el-icon>
+                <el-icon v-else><CircleCloseFilled /></el-icon>
+                <span>{{ testResultMap.VOICE_CALL.success ? '外呼握手成功' : '外呼失败' }}</span>
                 <span class="latency-tag" v-if="testResultMap.VOICE_CALL.latencyMs">耗时: {{ testResultMap.VOICE_CALL.latencyMs }}ms</span>
               </div>
               <div class="feedback-msg">{{ testResultMap.VOICE_CALL.message }}</div>
@@ -691,7 +688,7 @@
       <!-- 6. 提醒方式分类使用与告警策略矩阵 (Policy & Usage Matrix) -->
       <el-tab-pane name="policy">
         <template #label>
-          <span class="tab-label">⚙️ 提醒方式分类使用与场景联动矩阵 (Policies)</span>
+          <span class="tab-label">提醒方式分类使用与场景联动矩阵 (Policies)</span>
         </template>
 
         <div style="max-width: 900px; padding: 12px 0;">
@@ -709,9 +706,9 @@
             <thead>
               <tr>
                 <th style="width: 240px;">业务事件 / 触发场景</th>
-                <th style="width: 160px;">💬 即时通讯类</th>
-                <th style="width: 160px;">📱 移动短信类</th>
-                <th style="width: 160px;">📞 电话语音类</th>
+                <th style="width: 160px;">即时通讯类</th>
+                <th style="width: 160px;">移动短信类</th>
+                <th style="width: 160px;">电话语音类</th>
                 <th>使用说明</th>
               </tr>
             </thead>
@@ -756,7 +753,7 @@
                 <td class="desc-cell">变更异常迅速告知申请人与审批主管</td>
               </tr>
               <tr class="highlight-p0-row">
-                <td><b>🚨 P0 核心故障 / 生产库宕机 / 恶意拦截</b></td>
+                <td><b>P0 核心故障 / 生产库宕机 / 恶意拦截</b></td>
                 <td>
                   <el-tag size="small" type="danger">紧急推送</el-tag>
                 </td>
@@ -1052,8 +1049,8 @@ onMounted(() => {
 }
 
 .category-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 14px 16px;
   cursor: pointer;
@@ -1064,15 +1061,15 @@ onMounted(() => {
 }
 
 .category-card:hover {
-  border-color: #3b82f6;
+  border-color: var(--c-accent);
   transform: translateY(-2px);
-  box-shadow: 0 8px 18px -4px rgba(59, 130, 246, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .category-card.is-active {
-  border-color: #2563eb;
-  background: #f8fafc;
-  box-shadow: 0 0 0 1.5px #2563eb;
+  border-color: var(--c-accent);
+  background: var(--c-muted-bg);
+  box-shadow: var(--shadow-sm);
 }
 
 .category-head {
@@ -1088,7 +1085,7 @@ onMounted(() => {
   gap: 6px;
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .badge-icon {
@@ -1097,7 +1094,7 @@ onMounted(() => {
 
 .category-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-bottom: 8px;
   line-height: 1.4;
 }
@@ -1113,43 +1110,43 @@ onMounted(() => {
 
 .sub-pill {
   font-size: 11.5px;
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--c-subtle);
+  color: var(--c-text-3);
   padding: 1px 6px;
   border-radius: 4px;
 }
 
 .sub-pill.on {
-  background: #ecfdf5;
-  color: #059669;
+  background: var(--c-success-soft);
+  color: var(--c-success);
   font-weight: 600;
 }
 
 .vendor-tag {
   font-size: 11.5px;
-  color: #334155;
-  background: #eff6ff;
+  color: var(--c-text-2);
+  background: var(--c-accent-soft);
   padding: 1px 6px;
   border-radius: 4px;
 }
 
 .sign-tag {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .category-footer {
-  border-top: 1px dashed #e2e8f0;
+  border-top: 1px dashed var(--c-border);
   padding-top: 6px;
   font-size: 11.5px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 /* 主配置 Tabs */
 .config-tabs {
   border-radius: 10px;
-  background: #ffffff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  background: var(--c-surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .tab-label {
@@ -1176,7 +1173,7 @@ onMounted(() => {
 
 .form-tip {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 4px;
   line-height: 1.4;
 }
@@ -1186,35 +1183,35 @@ onMounted(() => {
   border-radius: 8px;
   padding: 14px;
   margin-top: 12px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .aliyun-box {
-  background: #fffbf5;
-  border-color: #fed7aa;
+  background: var(--c-warning-soft);
+  border-color: var(--c-warning-border);
 }
 
 .tencent-box {
-  background: #f0f9ff;
-  border-color: #bae6fd;
+  background: var(--c-accent-soft);
+  border-color: var(--c-accent-border);
 }
 
 .custom-box {
-  background: #f8fafc;
-  border-color: #cbd5e1;
+  background: var(--c-muted-bg);
+  border-color: var(--c-border-strong);
 }
 
 .provider-box-title {
   font-size: 13.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 12px;
 }
 
 /* 在线测试诊断卡片 */
 .test-panel-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 10px;
   padding: 18px 20px;
   display: flex;
@@ -1224,13 +1221,13 @@ onMounted(() => {
 .test-panel-title {
   font-size: 14.5px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 6px;
 }
 
 .test-panel-desc {
   font-size: 12.5px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-bottom: 16px;
   line-height: 1.5;
 }
@@ -1242,7 +1239,7 @@ onMounted(() => {
 .field-label {
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--c-text-2);
   margin-bottom: 6px;
 }
 
@@ -1254,18 +1251,18 @@ onMounted(() => {
   margin-top: 16px;
   border-radius: 6px;
   padding: 12px 14px;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
 }
 
 .test-feedback-box.is-ok {
-  border-color: #67c23a;
-  background: #f0f9eb;
+  border-color: var(--c-success);
+  background: var(--c-success-soft);
 }
 
 .test-feedback-box.is-fail {
-  border-color: #f56c6c;
-  background: #fef0f0;
+  border-color: var(--c-danger);
+  background: var(--c-danger-soft);
 }
 
 .feedback-status {
@@ -1280,25 +1277,25 @@ onMounted(() => {
 .latency-tag {
   margin-left: auto;
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: normal;
 }
 
 .feedback-msg {
   font-size: 12.5px;
-  color: #334155;
+  color: var(--c-text-2);
   line-height: 1.5;
 }
 
 .feedback-raw {
   margin-top: 10px;
-  border-top: 1px dashed #cbd5e1;
+  border-top: 1px dashed var(--c-border-strong);
   padding-top: 8px;
 }
 
 .raw-title {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 600;
 }
 
@@ -1306,8 +1303,8 @@ onMounted(() => {
   margin: 4px 0 0 0;
   font-family: monospace;
   font-size: 11px;
-  color: #475569;
-  background: #ffffff;
+  color: var(--c-text-2);
+  background: var(--c-surface);
   padding: 8px;
   border-radius: 4px;
   overflow-x: auto;
@@ -1318,7 +1315,7 @@ onMounted(() => {
 .matrix-title {
   font-size: 14px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
   margin-bottom: 10px;
 }
 
@@ -1326,46 +1323,46 @@ onMounted(() => {
   width: 100%;
   border-collapse: collapse;
   margin-top: 8px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   overflow: hidden;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .policy-matrix-table th,
 .policy-matrix-table td {
   padding: 12px 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   font-size: 13px;
   text-align: left;
 }
 
 .policy-matrix-table th {
-  background: #f8fafc;
-  color: #475569;
+  background: var(--c-muted-bg);
+  color: var(--c-text-2);
   font-weight: 600;
 }
 
 .policy-matrix-table td {
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .highlight-p0-row {
-  background: #fff7ed;
+  background: var(--c-warning-soft);
 }
 
 .desc-cell {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .tag-subtle {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .tag-disabled {
   font-size: 12px;
-  color: #cbd5e1;
+  color: var(--c-text-4);
 }
 </style>

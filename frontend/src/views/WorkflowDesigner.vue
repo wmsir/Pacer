@@ -36,8 +36,8 @@
             <el-table-column prop="templateName" label="审批流模板名称" min-width="190">
               <template #default="scope">
                 <div style="display: flex; align-items: center; gap: 8px;">
-                  <el-icon color="#409EFF"><Share /></el-icon>
-                  <span style="font-weight: 600; color: #303133;">{{ scope.row.templateName }}</span>
+                  <el-icon><Share /></el-icon>
+                  <span style="font-weight: 600; color: var(--c-text);">{{ scope.row.templateName }}</span>
                 </div>
               </template>
             </el-table-column>
@@ -84,13 +84,13 @@
                       <span class="branch-tag red">
                         {{ scope.row.conditionDimension === 'CHANGE_TYPE' ? '含 DDL 结构变更' : (scope.row.conditionDimension === 'COMPOSITE' ? `&gt; ${scope.row.affectRowsThreshold || 1000}行 或 DDL` : `&gt; ${scope.row.affectRowsThreshold || 1000} 行`) }}
                       </span>
-                      ➔ {{ scope.row.highRiskRole === 'ADMIN' ? '超级管理员终审 (ADMIN)' : (scope.row.highRiskRole === 'AUDITOR' ? '安全审计核查 (AUDITOR)' : '核心DBA安全复核 (DBA)') }}
+                      → {{ scope.row.highRiskRole === 'ADMIN' ? '超级管理员终审 (ADMIN)' : (scope.row.highRiskRole === 'AUDITOR' ? '安全审计核查 (AUDITOR)' : '核心DBA安全复核 (DBA)') }}
                     </div>
                     <div class="branch-row">
                       <span class="branch-tag green">
                         {{ scope.row.conditionDimension === 'CHANGE_TYPE' ? '常规 DML 纯数据' : `≤ ${scope.row.affectRowsThreshold || 1000} 行` }}
                       </span>
-                      ➔ {{ scope.row.lowRiskRole === 'OPS' ? '业务运维初审 (OPS)' : '开发组长初审 (DEV_LEAD)' }}
+                      → {{ scope.row.lowRiskRole === 'OPS' ? '业务运维初审 (OPS)' : '开发组长初审 (DEV_LEAD)' }}
                     </div>
                   </div>
                 </div>
@@ -180,7 +180,7 @@
                 <span class="step-sub">左侧选择资源组与目标数据库</span>
               </div>
             </div>
-            <div class="wizard-arrow">➔</div>
+            <div class="wizard-arrow">→</div>
             <div class="wizard-step" :class="{ 'is-active': currentStepIndex === 2, 'is-finish': currentStepIndex > 2 }">
               <span class="step-badge">2</span>
               <div class="step-texts">
@@ -188,7 +188,7 @@
                 <span class="step-sub">拖拽/添加角色组或智能排他网关</span>
               </div>
             </div>
-            <div class="wizard-arrow">➔</div>
+            <div class="wizard-arrow">→</div>
             <div class="wizard-step" :class="{ 'is-active': currentStepIndex === 3, 'is-finish': currentDeployStatus.isDeployed }">
               <span class="step-badge">3</span>
               <div class="step-texts">
@@ -207,7 +207,7 @@
                 style="width: 360px;"
                 @change="handleBpmnPresetChange"
               >
-                <el-option-group label="📌 数据库已发布的审批流模板 (与配置实时同步)">
+                <el-option-group label="数据库已发布的审批流模板 (与配置实时同步)">
                   <el-option
                     v-for="t in templateList"
                     :key="'tpl_' + t.id"
@@ -215,12 +215,12 @@
                     :value="'tpl_' + t.id"
                   />
                 </el-option-group>
-                <el-option-group label="📐 BPMN 经典标准拓扑范式">
-                  <el-option label="🌟 DML 影响行数与SpEL智能条件分支 (排他网关)" value="dml_condition" />
-                  <el-option label="标准生产 SQL 变更审批拓扑 (开发组长 ➔ 核心DBA)" value="dml_standard" />
-                  <el-option label="高危 DDL 变更三级审批拓扑 (AI ➔ 资深DBA ➔ 安全)" value="ddl" />
-                  <el-option label="生产紧急抢修极速放行拓扑 (值班DBA ➔ 补录审计)" value="emergency" />
-                  <el-option label="敏感数据导出与脱敏审批拓扑 (业务主管 ➔ 数据安全官)" value="export" />
+                <el-option-group label="BPMN 经典标准拓扑范式">
+                  <el-option label="DML 影响行数与SpEL智能条件分支 (排他网关)" value="dml_condition" />
+                  <el-option label="标准生产 SQL 变更审批拓扑 (开发组长 → 核心DBA)" value="dml_standard" />
+                  <el-option label="高危 DDL 变更三级审批拓扑 (AI → 资深DBA → 安全)" value="ddl" />
+                  <el-option label="生产紧急抢修极速放行拓扑 (值班DBA → 补录审计)" value="emergency" />
+                  <el-option label="敏感数据导出与脱敏审批拓扑 (业务主管 → 数据安全官)" value="export" />
                 </el-option-group>
               </el-select>
 
@@ -286,7 +286,7 @@
               </el-button>
 
               <el-button :icon="Connection" type="success" plain @click="handleOpenQuickBindDialog">
-                🎯 绑定生效范围
+                绑定生效范围
               </el-button>
               <el-button :icon="CopyDocument" @click="handleCopyXml">复制 XML</el-button>
               <el-button :icon="Download" @click="handleExportXml">导出 BPMN</el-button>
@@ -317,14 +317,14 @@
           </div>
 
           <div class="bpmn-designer-body-layout">
-            <!-- 左侧：权限组与审批角色资产面板 (拖拽 ➕ 插入 BPMN 节点) -->
+            <!-- 左侧：权限组与审批角色资产面板 (拖拽 插入 BPMN 节点) -->
             <div class="bpmn-palette-panel">
               <div class="palette-panel-header">
                 <div class="p-title-row">
-                  <el-icon color="#409EFF"><UserFilled /></el-icon>
+                  <el-icon><UserFilled /></el-icon>
                   <span class="p-title">审批角色与引擎资产库</span>
                 </div>
-                <div class="p-sub-tip">拖拽 ➕ 插入 BPMN 流程节点</div>
+                <div class="p-sub-tip">拖拽 插入 BPMN 流程节点</div>
               </div>
 
               <!-- 搜索过滤 -->
@@ -342,7 +342,7 @@
                 <!-- 1. 系统审批角色权限组 (支持展示成员与编辑) -->
                 <div class="palette-group">
                   <div class="group-header">
-                    <el-icon color="#409EFF"><User /></el-icon>
+                    <el-icon><User /></el-icon>
                     <span>系统审批角色权限组</span>
                     <el-tag size="small" type="primary" effect="plain" class="count-tag">{{ filteredPaletteRoles.length }}</el-tag>
                   </div>
@@ -361,9 +361,9 @@
                         </div>
                         <div class="card-members-summary" style="display: flex; align-items: center; gap: 6px; margin-top: 2px;">
                           <el-tag size="small" type="info" effect="plain" style="font-size: 10px; height: 18px; padding: 0 4px;">
-                            👥 {{ getRoleMembers(r.key).length }} 人
+                            {{ getRoleMembers(r.key).length }} 人
                           </el-tag>
-                          <span class="member-names-preview" :title="getRoleMemberNames(r.key)" style="font-size: 11px; color: #64748b; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">
+                          <span class="member-names-preview" :title="getRoleMemberNames(r.key)" style="font-size: 11px; color: var(--c-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px;">
                             {{ getRoleMemberNames(r.key) || '暂无成员' }}
                           </span>
                         </div>
@@ -394,7 +394,7 @@
                 <!-- 3. BPMN 常用网关与服务节点 -->
                 <div class="palette-group">
                   <div class="group-header">
-                    <el-icon color="#67C23A"><Operation /></el-icon>
+                    <el-icon><Operation /></el-icon>
                     <span>条件网关与服务引擎</span>
                   </div>
                   <div class="group-items-list">
@@ -423,7 +423,7 @@
                       @dragstart="handleDragStart($event, { type: 'SERVICE', name: 'JDBC 安全流式执行', role: 'SERVICE' })"
                     >
                       <div class="card-info">
-                        <span class="card-name">⚙️ JDBC 安全流式执行</span>
+                        <span class="card-name">JDBC 安全流式执行</span>
                         <span class="card-sub">自动化流式引擎事务执行</span>
                       </div>
                       <el-button
@@ -523,8 +523,8 @@
         <el-form-item label="生效数据库范围">
           <div class="db-scope-wrapper" style="width: 100%;">
             <el-radio-group v-model="form.dbScopeMode" size="small" @change="handleDbScopeModeChange">
-              <el-radio-button value="ALL">🌐 整个资源组全部数据库通用 (默认)</el-radio-button>
-              <el-radio-button value="CUSTOM">🎯 细化指定具体目标数据库</el-radio-button>
+              <el-radio-button value="ALL">整个资源组全部数据库通用 (默认)</el-radio-button>
+              <el-radio-button value="CUSTOM">细化指定具体目标数据库</el-radio-button>
             </el-radio-group>
 
             <div v-if="form.dbScopeMode === 'CUSTOM'" class="custom-db-select-box" style="margin-top: 10px;">
@@ -551,8 +551,8 @@
                   />
                 </el-option-group>
               </el-select>
-              <div class="field-hint" style="margin-top: 4px; font-size: 12px; color: #64748b;">
-                💡 仅当申请工单选择上述指定数据库时才触发匹配此审批流程
+              <div class="field-hint" style="margin-top: 4px; font-size: 12px; color: var(--c-text-3);">
+                仅当申请工单选择上述指定数据库时才触发匹配此审批流程
               </div>
             </div>
           </div>
@@ -602,13 +602,13 @@
             </div>
 
             <!-- 3. SpEL 表达式配置区 (现成预设与自由编辑) -->
-            <div class="gateway-spel-section" style="margin-top: 10px; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
+            <div class="gateway-spel-section" style="margin-top: 10px; padding: 10px 12px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 6px;">
               <div class="spel-header-row" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <div style="display: flex; align-items: center; gap: 6px;">
-                  <span class="cfg-sub-label" style="font-weight: 600; color: #334155; font-size: 13px;">📌 SpEL 条件表达式：</span>
+                  <span class="cfg-sub-label" style="font-weight: 600; color: var(--c-text-2); font-size: 13px;">SpEL 条件表达式：</span>
                   <el-tag size="small" type="warning" effect="dark">BPMN 2.0 / Spring Expression Language</el-tag>
                 </div>
-                <span style="font-size: 12px; color: #64748b;">支持动态同步至可视化流程图网关与分支链路</span>
+                <span style="font-size: 12px; color: var(--c-text-3);">支持动态同步至可视化流程图网关与分支链路</span>
               </div>
 
               <!-- 现成预设选择 -->
@@ -637,17 +637,17 @@
                   <template #prepend>当前生效 SpEL</template>
                 </el-input>
                 <el-button type="warning" size="small" :icon="Aim" @click="handleOpenSpelSandbox">
-                  🧪 沙箱在线求值
+                  沙箱在线求值
                 </el-button>
               </div>
             </div>
 
             <!-- 4. 左右分支规则与审批流向明确配置 -->
             <div class="branch-split-box" style="margin-top: 10px;">
-              <!-- 🔥 左分支：高危管控 (满足 SpEL = true) -->
+              <!-- 左分支：高危管控 (满足 SpEL = true) -->
               <div class="branch-config-item red-branch">
                 <div class="branch-header">
-                  <el-tag type="danger" effect="dark" size="small">🔥 左分支 · 高危大事务/DDL管控 (满足 SpEL = true)</el-tag>
+                  <el-tag type="danger" effect="dark" size="small">左分支 · 高危大事务/DDL管控 (满足 SpEL = true)</el-tag>
                   <span class="branch-cond-desc">
                     判定规则：<b>当工单评估匹配 SpEL <code>{{ form.spelExpression || '#{affectRows > 1000}' }}</code> 时自动进入此分支</b>
                   </span>
@@ -665,10 +665,10 @@
                 </div>
               </div>
 
-              <!-- ⚡ 右分支：常规放行 (不满足 SpEL / Default 默认流) -->
+              <!-- 右分支：常规放行 (不满足 SpEL / Default 默认流) -->
               <div class="branch-config-item green-branch" style="margin-top: 8px;">
                 <div class="branch-header">
-                  <el-tag type="success" effect="dark" size="small">⚡ 右分支 · 常规低危快速放行 (默认流 / SpEL = false)</el-tag>
+                  <el-tag type="success" effect="dark" size="small">右分支 · 常规低危快速放行 (默认流 / SpEL = false)</el-tag>
                   <span class="branch-cond-desc">
                     判定规则：<b>当不满足高危 SpEL（常规安全放行）时由默认流快速审批</b>
                   </span>
@@ -794,18 +794,18 @@
 
     <!-- 绑定当前 BPMN 审批流程生效范围（工单类型 + 业务资源组 + 全部/细化具体数据库） -->
     <el-dialog
-      title="🎯 绑定当前 BPMN 审批流程生效范围"
+      title="绑定当前 BPMN 审批流程生效范围"
       v-model="quickBindDialogVisible"
       width="680px"
       destroy-on-close
       append-to-body
     >
-      <div style="margin-bottom: 12px; font-size: 13px; color: #606266; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 10px 14px;">
-        <div style="font-weight: 600; color: #166534; margin-bottom: 4px;">
+      <div style="margin-bottom: 12px; font-size: 13px; color: var(--c-text-2); background: var(--c-success-soft); border: 1px solid var(--c-success-border); border-radius: 6px; padding: 10px 14px;">
+        <div style="font-weight: 600; color: var(--c-success-strong); margin-bottom: 4px;">
           当前流程：{{ getPresetTitle(selectedBpmnPreset) }}
         </div>
-        <div style="font-size: 12px; color: #15803d; line-height: 1.5;">
-          💡 <b>生效范围说明</b>：系统将根据此流程绑定的【工单类型】、【业务资源组】与【目标数据库】进行精确匹配，在创建工单时将直接展示对应的审批链路！
+        <div style="font-size: 12px; color: var(--c-success); line-height: 1.5;">
+          <b>生效范围说明</b>：系统将根据此流程绑定的【工单类型】、【业务资源组】与【目标数据库】进行精确匹配，在创建工单时将直接展示对应的审批链路！
         </div>
       </div>
 
@@ -814,7 +814,7 @@
         <el-form-item label="生效工单类型">
           <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; width: 100%;">
             <el-button size="small" type="primary" plain :icon="Select" @click="handleSelectAllQuickBindTicketTypes">
-              🌐 一键全选所有类型 (全部通用)
+              一键全选所有类型 (全部通用)
             </el-button>
             <el-button size="small" type="info" plain @click="quickBindTicketTypes = ['SQL_AUDIT', 'DML_CHANGE', 'DDL_CHANGE']">
               仅全量 SQL 变更
@@ -839,11 +839,11 @@
             </el-button>
           </div>
 
-          <div style="width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; background: #fafbfc;">
+          <div style="width: 100%; border: 1px solid var(--c-border); border-radius: 8px; padding: 12px; background: var(--c-muted-bg);">
             <!-- 大类 1：SQL 变更审核 (含全量与细化分支) -->
             <div style="margin-bottom: 12px;">
-              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🛠️ 1. SQL 变更审核 (支持全量通用与 DML/DDL 细化定制)：</span>
+              <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                <span>1. SQL 变更审核 (支持全量通用与 DML/DDL 细化定制)：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="SQL_AUDIT">
@@ -859,9 +859,9 @@
             </div>
 
             <!-- 大类 2：敏感数据导出 -->
-            <div style="margin-bottom: 12px; border-top: 1px dashed #e2e8f0; padding-top: 8px;">
-              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>📤 2. 敏感数据导出申请：</span>
+            <div style="margin-bottom: 12px; border-top: 1px dashed var(--c-border); padding-top: 8px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                <span>2. 敏感数据导出申请：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="DATA_EXPORT">
@@ -871,9 +871,9 @@
             </div>
 
             <!-- 大类 3：权限与账号申请 -->
-            <div style="margin-bottom: 12px; border-top: 1px dashed #e2e8f0; padding-top: 8px;">
-              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🔑 3. 权限与账号申请：</span>
+            <div style="margin-bottom: 12px; border-top: 1px dashed var(--c-border); padding-top: 8px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                <span>3. 权限与账号申请：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="PERMISSION">
@@ -883,13 +883,13 @@
             </div>
 
             <!-- 大类 4：应急数据修复与恢复 -->
-            <div style="border-top: 1px dashed #e2e8f0; padding-top: 8px;">
-              <div style="font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-                <span>🚨 4. 应急数据修复与恢复：</span>
+            <div style="border-top: 1px dashed var(--c-border); padding-top: 8px;">
+              <div style="font-size: 12px; font-weight: 700; color: var(--c-text); margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+                <span>4. 应急数据修复与恢复：</span>
               </div>
               <el-checkbox-group v-model="quickBindTicketTypes" style="display: flex; flex-wrap: wrap; gap: 10px; margin-left: 8px;">
                 <el-checkbox value="DATA_RECOVERY">
-                  <el-tag size="small" type="danger" effect="plain" style="color: #b91c1c; border-color: #f87171; font-weight: 600;">DATA_RECOVERY：生产应急数据修复与故障恢复</el-tag>
+                  <el-tag size="small" type="danger" effect="plain" style="color: var(--c-danger-strong); border-color: var(--c-danger); font-weight: 600;">DATA_RECOVERY：生产应急数据修复与故障恢复</el-tag>
                 </el-checkbox>
               </el-checkbox-group>
             </div>
@@ -927,17 +927,17 @@
 
         <el-form-item label="生效数据库范围">
           <el-radio-group v-model="quickBindDbScopeMode" @change="handleQuickBindDbScopeChange">
-            <el-radio value="ALL">🌐 整个资源组全部数据库通用 (默认)</el-radio>
-            <el-radio value="CUSTOM">🎯 细化定制指定具体数据库 (个性化生效)</el-radio>
+            <el-radio value="ALL">整个资源组全部数据库通用 (默认)</el-radio>
+            <el-radio value="CUSTOM">细化定制指定具体数据库 (个性化生效)</el-radio>
           </el-radio-group>
 
           <!-- 模式一：整个资源组通用时，自动联动展示这些资源组所包含的全部数据库预览 -->
           <div
             v-if="quickBindDbScopeMode === 'ALL'"
-            style="margin-top: 10px; width: 100%; padding: 10px 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;"
+            style="margin-top: 10px; width: 100%; padding: 10px 12px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 6px;"
           >
-            <div style="font-size: 12px; font-weight: 600; color: #475569; margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
-              <span>📦 所选资源组当前包含的全部数据库 (共 {{ quickBindCurrentGroupDatabases.length }} 个库)：</span>
+            <div style="font-size: 12px; font-weight: 600; color: var(--c-text-2); margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between;">
+              <span>所选资源组当前包含的全部数据库 (共 {{ quickBindCurrentGroupDatabases.length }} 个库)：</span>
               <el-tag size="small" type="success" effect="plain">全部通用生效</el-tag>
             </div>
             <div v-if="quickBindCurrentGroupDatabases.length > 0" style="display: flex; flex-wrap: wrap; gap: 6px; max-height: 120px; overflow-y: auto;">
@@ -951,7 +951,7 @@
                 {{ db }}
               </el-tag>
             </div>
-            <div v-else style="font-size: 12px; color: #94a3b8;">
+            <div v-else style="font-size: 12px; color: var(--c-text-4);">
               暂未勾选任何业务资源组，请先在上方选择资源组
             </div>
           </div>
@@ -989,7 +989,7 @@
               </div>
             </el-option>
           </el-select>
-          <div style="font-size: 11px; color: #94a3b8; margin-top: 4px;">
+          <div style="font-size: 11px; color: var(--c-text-4); margin-top: 4px;">
             已提供全系统已接入的数据库实例与业务库供个性化绑定（共 {{ allDatabaseFlatOptions.length }} 个可用库）
           </div>
         </el-form-item>
@@ -1004,7 +1004,7 @@
 
     <!-- SpEL 沙箱在线测试弹窗 -->
     <el-dialog
-      title="🧪 SpEL 智能条件表达式沙箱测试"
+      title="SpEL 智能条件表达式沙箱测试"
       v-model="sandboxVisible"
       width="580px"
       append-to-body
@@ -1029,17 +1029,17 @@
           </el-form-item>
         </div>
 
-        <div v-if="sandboxResult" style="margin-top: 14px; padding: 12px; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0;">
+        <div v-if="sandboxResult" style="margin-top: 14px; padding: 12px; border-radius: 6px; background: var(--c-muted-bg); border: 1px solid var(--c-border);">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 6px;">
             <span style="font-weight: 600;">求值结果：</span>
             <el-tag :type="sandboxResult.matched ? 'danger' : 'success'" effect="dark">
-              {{ sandboxResult.matched ? '🔥 命中高危分支 (true)' : '⚡ 命中常规低危分支 (false)' }}
+              {{ sandboxResult.matched ? '命中高危分支 (true)' : '命中常规低危分支 (false)' }}
             </el-tag>
             <el-tag v-if="sandboxResult.syntaxValid" type="success" size="small">语法合法</el-tag>
             <el-tag v-else type="danger" size="small">语法错误</el-tag>
           </div>
-          <div style="font-size: 13px; color: #475569;">{{ sandboxResult.explanation }}</div>
-          <div v-if="sandboxResult.errorMessage" style="color: #ef4444; font-size: 12px; margin-top: 4px;">{{ sandboxResult.errorMessage }}</div>
+          <div style="font-size: 13px; color: var(--c-text-2);">{{ sandboxResult.explanation }}</div>
+          <div v-if="sandboxResult.errorMessage" style="color: var(--c-danger); font-size: 12px; margin-top: 4px;">{{ sandboxResult.errorMessage }}</div>
         </div>
       </el-form>
       <template #footer>
@@ -1052,13 +1052,13 @@
 
     <!-- 角色权限组成员维护与编辑弹窗 -->
     <el-dialog
-      :title="`👥 维护【${currentEditingRole?.label}】角色权限组成员`"
+      :title="`维护【${currentEditingRole?.label}】角色权限组成员`"
       v-model="roleMemberModalVisible"
       width="640px"
       destroy-on-close
       append-to-body
     >
-      <div style="margin-bottom: 12px; font-size: 13px; color: #64748b;">
+      <div style="margin-bottom: 12px; font-size: 13px; color: var(--c-text-3);">
         勾选系统人员将其分配至 <b>{{ currentEditingRole?.label }}</b> 角色组（支持按姓名/账号/部门实时搜索）：
       </div>
       <el-input
@@ -1069,19 +1069,19 @@
         :prefix-icon="Search"
         style="margin-bottom: 10px;"
       />
-      <div class="user-check-list-box" style="max-height: 340px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px; background: #fafafa;">
+      <div class="user-check-list-box" style="max-height: 340px; overflow-y: auto; border: 1px solid var(--c-border); border-radius: 6px; padding: 10px; background: var(--c-muted-bg);">
         <el-checkbox-group v-model="selectedRoleUserIds">
           <div
             v-for="user in filteredAllUsers"
             :key="user.id"
-            style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px dashed #e2e8f0; background: #ffffff; margin-bottom: 4px; border-radius: 4px;"
+            style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; border-bottom: 1px dashed var(--c-border); background: var(--c-surface); margin-bottom: 4px; border-radius: 4px;"
           >
             <el-checkbox :value="user.id">
-              <span style="font-weight: 600; color: #1e293b;">{{ user.realName || user.username }}</span>
-              <span style="color: #64748b; font-size: 12px; margin-left: 6px;">({{ user.department || '未分配部门' }})</span>
+              <span style="font-weight: 600; color: var(--c-text);">{{ user.realName || user.username }}</span>
+              <span style="color: var(--c-text-3); font-size: 12px; margin-left: 6px;">({{ user.department || '未分配部门' }})</span>
             </el-checkbox>
             <div style="display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 11px; color: #94a3b8;">账号: {{ user.username }}</span>
+              <span style="font-size: 11px; color: var(--c-text-4);">账号: {{ user.username }}</span>
               <el-tag size="small" :type="user.role === currentEditingRole?.key ? 'success' : 'info'" effect="light">
                 {{ user.role === currentEditingRole?.key ? '本组成员' : `当前: ${user.role}` }}
               </el-tag>
@@ -1092,7 +1092,7 @@
       <template #footer>
         <div style="display: flex; justify-content: space-between; align-items: center; width: 100%;">
           <el-button size="small" type="warning" plain @click="router.push('/roles')">
-            ⚙️ 前往「系统角色与权限管理」大盘
+            前往「系统角色与权限管理」大盘
           </el-button>
           <div>
             <el-button @click="roleMemberModalVisible = false">取消</el-button>
@@ -2687,15 +2687,15 @@ onBeforeUnmount(() => {
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
 }
 
 .custom-tabs {
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px 24px 20px;
   border-radius: 8px;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
   flex: 1;
 }
 
@@ -2703,12 +2703,12 @@ onBeforeUnmount(() => {
   position: sticky;
   top: 0px;
   z-index: 100;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 8px 12px 0 12px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   margin-bottom: 16px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .template-header-bar {
@@ -2721,7 +2721,7 @@ onBeforeUnmount(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   overflow-x: auto;
   margin-bottom: 12px;
 }
@@ -2747,39 +2747,39 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   font-size: 12px;
-  background: #f1f5f9;
+  background: var(--c-subtle);
   padding: 2px 6px;
   border-radius: 4px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .step-num {
   font-weight: 700;
-  color: #409eff;
+  color: var(--c-accent);
   margin-right: 4px;
 }
 
 .step-name {
-  color: #1e293b;
+  color: var(--c-text);
   font-weight: 500;
 }
 
 .step-role {
-  color: #64748b;
+  color: var(--c-text-3);
   font-size: 11px;
   margin-left: 2px;
 }
 
 .step-arrow {
   margin-left: 6px;
-  color: #94a3b8;
+  color: var(--c-text-4);
 }
 
 .node-editor-box {
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 12px;
   border-radius: 6px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   width: 100%;
 }
 
@@ -2791,7 +2791,7 @@ onBeforeUnmount(() => {
 
 .node-seq {
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   width: 60px;
   font-size: 13px;
 }
@@ -2831,10 +2831,10 @@ onBeforeUnmount(() => {
 }
 
 .strategy-card {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 10px 12px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   cursor: pointer;
   transition: all 0.2s ease;
   display: flex;
@@ -2843,14 +2843,14 @@ onBeforeUnmount(() => {
 }
 
 .strategy-card:hover {
-  border-color: #93c5fd;
-  background: #f0fdf4;
+  border-color: var(--c-accent-border);
+  background: var(--c-success-soft);
 }
 
 .strategy-card.selected {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.12);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .card-top-row {
@@ -2866,7 +2866,7 @@ onBeforeUnmount(() => {
 .card-title {
   font-weight: 600;
   font-size: 13px;
-  color: #1e293b;
+  color: var(--c-text);
   flex: 1;
 }
 
@@ -2879,7 +2879,7 @@ onBeforeUnmount(() => {
 
 .card-desc {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.4;
   padding-left: 24px;
 }
@@ -2898,7 +2898,7 @@ onBeforeUnmount(() => {
   width: 100vw;
   height: 100vh;
   z-index: 1200;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   padding: 16px 20px;
   box-sizing: border-box;
   margin: 0;
@@ -2910,11 +2910,11 @@ onBeforeUnmount(() => {
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 12px 16px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .toolbar-left {
@@ -2939,12 +2939,12 @@ onBeforeUnmount(() => {
 .canvas-wrapper {
   height: 600px;
   min-height: 500px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
-  background-color: #ffffff;
+  background-color: var(--c-surface);
   overflow: hidden;
   position: relative;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .bpmn-designer-panel.is-fullscreen .canvas-wrapper {
@@ -2976,7 +2976,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 3px;
   font-size: 11px;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .branch-row {
@@ -2993,15 +2993,15 @@ onBeforeUnmount(() => {
 }
 
 .branch-tag.red {
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  border: 1px solid var(--c-danger-border);
 }
 
 .branch-tag.green {
-  background: #f0fdf4;
-  color: #16a34a;
-  border: 1px solid #bbf7d0;
+  background: var(--c-success-soft);
+  color: var(--c-success);
+  border: 1px solid var(--c-success-border);
 }
 
 .dialog-scroll-form {
@@ -3012,8 +3012,8 @@ onBeforeUnmount(() => {
 
 .gateway-config-card {
   width: 100%;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 14px;
   display: flex;
@@ -3032,13 +3032,13 @@ onBeforeUnmount(() => {
 .cfg-sub-label {
   font-size: 12px;
   font-weight: 600;
-  color: #475569;
+  color: var(--c-text-2);
   min-width: 115px;
 }
 
 .unit-text {
   font-size: 13px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 500;
 }
 
@@ -3056,9 +3056,9 @@ onBeforeUnmount(() => {
 }
 
 .preset-chip:hover {
-  background-color: #ecf5ff;
-  border-color: #409eff;
-  color: #409eff;
+  background-color: var(--c-accent-soft);
+  border-color: var(--c-accent);
+  color: var(--c-accent);
 }
 
 .branch-config-item {
@@ -3070,19 +3070,19 @@ onBeforeUnmount(() => {
 }
 
 .branch-config-item.red-branch {
-  background: #fff5f5;
-  border-left: 4px solid #ef4444;
-  border-top: 1px solid #fee2e2;
-  border-right: 1px solid #fee2e2;
-  border-bottom: 1px solid #fee2e2;
+  background: var(--c-danger-soft);
+  border-left: 4px solid var(--c-danger);
+  border-top: 1px solid var(--c-danger-soft);
+  border-right: 1px solid var(--c-danger-soft);
+  border-bottom: 1px solid var(--c-danger-soft);
 }
 
 .branch-config-item.green-branch {
-  background: #f0fdf4;
-  border-left: 4px solid #22c55e;
-  border-top: 1px solid #dcfce7;
-  border-right: 1px solid #dcfce7;
-  border-bottom: 1px solid #dcfce7;
+  background: var(--c-success-soft);
+  border-left: 4px solid var(--c-success);
+  border-top: 1px solid var(--c-success-soft);
+  border-right: 1px solid var(--c-success-soft);
+  border-bottom: 1px solid var(--c-success-soft);
 }
 
 .branch-header {
@@ -3094,16 +3094,16 @@ onBeforeUnmount(() => {
 
 .branch-cond-desc {
   font-size: 12px;
-  color: #475569;
+  color: var(--c-text-2);
 }
 
 .branch-cond-desc b {
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 .branch-route-detail {
   font-size: 12px;
-  color: #1e293b;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -3112,12 +3112,12 @@ onBeforeUnmount(() => {
 
 .route-role-label {
   font-weight: 500;
-  color: #334155;
+  color: var(--c-text-2);
 }
 
 .route-target {
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 /* ==================== BPMN 权限组资产库与设计器双栏布局 ==================== */
@@ -3131,18 +3131,18 @@ onBeforeUnmount(() => {
 .bpmn-palette-panel {
   width: 280px;
   flex-shrink: 0;
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--shadow-sm);
 }
 
 .palette-panel-header {
   padding: 12px 14px;
-  background: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
   border-top-left-radius: 8px;
   border-top-right-radius: 8px;
 }
@@ -3156,19 +3156,19 @@ onBeforeUnmount(() => {
 .p-title {
   font-size: 14px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .p-sub-tip {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 
 .palette-search-box {
   padding: 8px 12px;
-  background: #ffffff;
-  border-bottom: 1px solid #f1f5f9;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
 }
 
 .palette-scroll-content {
@@ -3181,8 +3181,8 @@ onBeforeUnmount(() => {
 }
 
 .palette-group {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 8px;
 }
@@ -3193,7 +3193,7 @@ onBeforeUnmount(() => {
   gap: 6px;
   font-size: 12px;
   font-weight: 700;
-  color: #334155;
+  color: var(--c-text-2);
   margin-bottom: 8px;
 }
 
@@ -3213,8 +3213,8 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  background: #f8fafc;
-  border: 1px solid #cbd5e1;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border-strong);
   border-radius: 6px;
   cursor: grab;
   transition: all 0.2s ease;
@@ -3222,10 +3222,10 @@ onBeforeUnmount(() => {
 }
 
 .palette-card:hover {
-  border-color: #3b82f6;
-  background: #eff6ff;
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
   transform: translateY(-1px);
-  box-shadow: 0 2px 5px rgba(59, 130, 246, 0.15);
+  box-shadow: var(--shadow-sm);
 }
 
 .palette-card:active {
@@ -3233,37 +3233,37 @@ onBeforeUnmount(() => {
 }
 
 .palette-card-rg {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--c-warning);
 }
 
 .palette-card-dev_lead {
-  border-left: 3px solid #3b82f6;
+  border-left: 3px solid var(--c-accent);
 }
 
 .palette-card-dba {
-  border-left: 3px solid #ef4444;
+  border-left: 3px solid var(--c-danger);
 }
 
 .palette-card-auditor {
-  border-left: 3px solid #8b5cf6;
+  border-left: 3px solid var(--c-accent);
 }
 
 .palette-card-admin {
-  border-left: 3px solid #f59e0b;
+  border-left: 3px solid var(--c-warning);
 }
 
 .palette-card-ops {
-  border-left: 3px solid #10b981;
+  border-left: 3px solid var(--c-success);
 }
 
 .palette-card-gateway {
-  border-left: 3px solid #d97706;
-  background: #fffbeb;
+  border-left: 3px solid var(--c-warning);
+  background: var(--c-warning-soft);
 }
 
 .palette-card-service {
-  border-left: 3px solid #10b981;
-  background: #f0fdf4;
+  border-left: 3px solid var(--c-success);
+  background: var(--c-success-soft);
 }
 
 .card-info {
@@ -3276,7 +3276,7 @@ onBeforeUnmount(() => {
 .card-name {
   font-size: 12px;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--c-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3284,7 +3284,7 @@ onBeforeUnmount(() => {
 
 .card-sub {
   font-size: 10px;
-  color: #64748b;
+  color: var(--c-text-3);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3295,8 +3295,8 @@ onBeforeUnmount(() => {
   height: 600px;
   min-height: 520px;
   position: relative;
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -3311,11 +3311,11 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .wizard-step {
@@ -3338,8 +3338,8 @@ onBeforeUnmount(() => {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: #e2e8f0;
-  color: #475569;
+  background: var(--c-border);
+  color: var(--c-text-2);
   font-weight: 700;
   font-size: 12px;
   display: flex;
@@ -3348,13 +3348,13 @@ onBeforeUnmount(() => {
 }
 
 .wizard-step.is-active .step-badge {
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  box-shadow: var(--shadow-sm);
 }
 
 .wizard-step.is-finish .step-badge {
-  background: #10b981;
+  background: var(--c-success);
   color: #ffffff;
 }
 
@@ -3366,26 +3366,26 @@ onBeforeUnmount(() => {
 .step-main {
   font-size: 13px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-sub {
   font-size: 11px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .wizard-arrow {
-  color: #cbd5e1;
+  color: var(--c-text-4);
   font-weight: 700;
   font-size: 14px;
 }
 
 /* 资源组卡片选中高亮 */
 .palette-card-rg.is-selected-rg {
-  background: #eff6ff !important;
-  border-color: #93c5fd !important;
+  background: var(--c-accent-soft) !important;
+  border-color: var(--c-accent-border) !important;
   border-left-width: 4px !important;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.12) !important;
+  box-shadow: var(--shadow-sm);
 }
 
 /* 浮动实时生效上下文仪表盘 (全屏及普通模式) */
@@ -3401,17 +3401,17 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 10px;
-  background: rgba(255, 255, 255, 0.96);
+  background: color-mix(in srgb, var(--c-surface) 96%, transparent);
   backdrop-filter: blur(8px);
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   padding: 8px 14px;
   border-radius: 30px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  box-shadow: var(--shadow-sm);
   transition: all 0.3s;
 }
 
 .context-pill.is-db-mode {
-  border-color: #86efac;
+  border-color: var(--c-success-border);
   background: rgba(240, 253, 244, 0.96);
 }
 
@@ -3426,7 +3426,7 @@ onBeforeUnmount(() => {
 
 .context-title {
   font-size: 10px;
-  color: #64748b;
+  color: var(--c-text-3);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -3434,7 +3434,7 @@ onBeforeUnmount(() => {
 .context-val {
   font-size: 12px;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--c-text);
 }
 
 /* 数据库选择药丸标签样式 */
@@ -3446,7 +3446,7 @@ onBeforeUnmount(() => {
 
 .db-select-pill:hover {
   transform: translateY(-1px);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .db-select-pill.all-pill {
@@ -3455,6 +3455,6 @@ onBeforeUnmount(() => {
 
 .db-select-pill.is-active-db {
   font-weight: 600;
-  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.25);
+  box-shadow: var(--shadow-sm);
 }
 </style>

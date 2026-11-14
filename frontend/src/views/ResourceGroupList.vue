@@ -12,7 +12,7 @@
       <el-tab-pane name="list" :closable="false">
         <template #label>
           <div class="tab-label-item">
-            <el-icon color="#409EFF"><Suitcase /></el-icon>
+            <el-icon><Suitcase /></el-icon>
             <span>业务资源组管理 (Resource Groups)</span>
           </div>
         </template>
@@ -47,7 +47,7 @@
               <el-table-column prop="groupName" label="资源组名称" min-width="180">
                 <template #default="scope">
                   <div style="display: flex; align-items: center; gap: 8px;">
-                    <el-icon color="#E6A23C"><FolderOpened /></el-icon>
+                    <el-icon><FolderOpened /></el-icon>
                     <el-link type="primary" :underline="false" style="font-weight: 600;" @click="handleOpenEditTab(scope.row)">
                       {{ scope.row.groupName }}
                     </el-link>
@@ -175,7 +175,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">1</span>
-                  <el-icon color="#409EFF"><FolderOpened /></el-icon>
+                  <el-icon><FolderOpened /></el-icon>
                   <span>资源组基础属性与负责人 (Basic Attributes)</span>
                 </div>
               </template>
@@ -237,7 +237,7 @@
               <template #header>
                 <div class="card-header-title">
                   <span class="step-num-badge">2</span>
-                  <el-icon color="#E6A23C"><Lock /></el-icon>
+                  <el-icon><Lock /></el-icon>
                   <span>工单提单步骤与预检安全策略配置 (Safety & Step Policies)</span>
                 </div>
               </template>
@@ -248,7 +248,7 @@
                   <el-col :xs="24" :md="12">
                     <div class="policy-card">
                       <div class="policy-title">
-                        <span style="color: #f59e0b; font-weight: 700;">⚡ 预检执行策略</span>
+                        <span style="color: var(--c-warning); font-weight: 700;">预检执行策略</span>
                         <el-tooltip content="配置申请人在提单时是否必须点击并通过事务级预执行校验" placement="top">
                           <el-icon><InfoFilled /></el-icon>
                         </el-tooltip>
@@ -264,7 +264,7 @@
                           <el-radio :value="true" v-model="tab.rgPolicyConfig.enforceDryRun" class="custom-card-radio">
                             <div class="radio-content-block">
                               <div class="radio-title-text danger-text">
-                                🛡️ 强制预执行校验 (必须通过)
+                                强制预执行校验 (必须通过)
                               </div>
                               <div class="radio-desc-text">
                                 必须在目标库点击预执行且比对影响行数一致通过后，才允许提交工单
@@ -282,7 +282,7 @@
                           <el-radio :value="false" v-model="tab.rgPolicyConfig.enforceDryRun" class="custom-card-radio">
                             <div class="radio-content-block">
                               <div class="radio-title-text success-text">
-                                💡 推荐预执行校验 (允许跳过)
+                                推荐预执行校验 (允许跳过)
                               </div>
                               <div class="radio-desc-text">
                                 提供预执行校验工具辅助审查，未执行或校验异常时允许继续提单
@@ -298,7 +298,7 @@
                   <el-col :xs="24" :md="12">
                     <div class="policy-card">
                       <div class="policy-title">
-                        <span style="color: #3b82f6; font-weight: 700;">📑 工单提单步骤启用开关</span>
+                        <span style="color: var(--c-accent); font-weight: 700;">工单提单步骤启用开关</span>
                         <el-tooltip content="控制新建 SQL 变更工单中心是否显示回滚方案与预执行校验步骤" placement="top">
                           <el-icon><InfoFilled /></el-icon>
                         </el-tooltip>
@@ -338,7 +338,7 @@
                 <div class="card-header-title" style="justify-content: space-between; width: 100%;">
                   <div style="display: flex; align-items: center; gap: 8px;">
                     <span class="step-num-badge">3</span>
-                    <el-icon color="#67C23A"><Coin /></el-icon>
+                    <el-icon><Coin /></el-icon>
                     <span>授权数据库实例、具体业务库与审批流对应关系矩阵 (共 {{ tab.rgDbMatrixList.length }} 个库)</span>
                   </div>
                   <div style="display: flex; align-items: center; gap: 10px;">
@@ -349,7 +349,7 @@
                       :icon="Share"
                       @click="handleOpenWorkflowDesignerTab"
                     >
-                      📐 新建/设计审批流程 (打开独立页签)
+                      新建/设计审批流程 (打开独立页签)
                     </el-button>
                     <el-button
                       size="small"
@@ -368,8 +368,8 @@
                 <!-- 快捷引导直达条 -->
                 <div class="matrix-jump-guide-bar">
                   <div class="guide-left">
-                    <el-icon color="#059669"><InfoFilled /></el-icon>
-                    <span>💡 如果没有符合当前业务需要的审批流程，可点击右侧按钮直接打开新页签新建/配置 BPMN 流程：</span>
+                    <el-icon><InfoFilled /></el-icon>
+                    <span>如果没有符合当前业务需要的审批流程，可点击右侧按钮直接打开新页签新建/配置 BPMN 流程：</span>
                   </div>
                   <el-button
                     type="success"
@@ -387,7 +387,7 @@
                       <template #default="{ row }">
                         <div style="display: flex; align-items: center; gap: 6px;">
                           <el-tag size="small" type="info">{{ row.dbType || 'mysql' }}</el-tag>
-                          <span style="font-weight: 600; color: #1e293b;">{{ row.instanceName }}</span>
+                          <span style="font-weight: 600; color: var(--c-text);">{{ row.instanceName }}</span>
                         </div>
                       </template>
                     </el-table-column>
@@ -395,7 +395,7 @@
                     <el-table-column prop="dbName" label="目标数据库" min-width="160">
                       <template #default="{ row }">
                         <el-tag size="small" type="success" effect="light" style="font-weight: 600;">
-                          🗃️ {{ row.dbName }}
+                          {{ row.dbName }}
                         </el-tag>
                       </template>
                     </el-table-column>
@@ -409,11 +409,11 @@
                             style="flex: 1;"
                             size="small"
                           >
-                            <el-option label="⚡ 跟随资源组通用/默认流程" value="DEFAULT" />
+                            <el-option label="跟随资源组通用/默认流程" value="DEFAULT" />
                             <el-option
                               v-for="tpl in availableWorkflowTemplates"
                               :key="tpl.id"
-                              :label="`🎯 ${tpl.templateName} (${tpl.flowType})`"
+                              :label="`${tpl.templateName} (${tpl.flowType})`"
                               :value="tpl.templateName"
                             />
                           </el-select>
@@ -441,7 +441,7 @@
                           :icon="Setting"
                           @click="handleJumpToInstanceConfig(row)"
                         >
-                          ⚙️ 参数配置
+                          参数配置
                         </el-button>
                       </template>
                     </el-table-column>
@@ -484,8 +484,8 @@
       >
         <template #label>
           <div class="tab-label-item">
-            <el-icon color="#8B5CF6"><Share /></el-icon>
-            <span>📐 审批流设计与模板中心 (Workflow Designer)</span>
+            <el-icon><Share /></el-icon>
+            <span>审批流设计与模板中心 (Workflow Designer)</span>
           </div>
         </template>
 
@@ -1031,10 +1031,10 @@ onMounted(() => {
   top: 0px;
   z-index: 100;
   margin-bottom: 0px;
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px 8px 0 0;
   padding: 8px 14px 0 14px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
@@ -1042,17 +1042,17 @@ onMounted(() => {
   font-weight: 600;
   font-size: 13px;
   transition: all 0.2s ease;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   margin-right: 4px;
   border-radius: 6px 6px 0 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-bottom: none;
 }
 
 .rg-workbench-tabs :deep(.el-tabs__item.is-active) {
-  background: #ffffff;
-  color: #3b82f6;
-  border-color: #cbd5e1;
+  background: var(--c-surface);
+  color: var(--c-accent);
+  border-color: var(--c-border-strong);
 }
 
 .tab-label-item {
@@ -1071,22 +1071,22 @@ onMounted(() => {
   align-items: center;
   margin-top: 14px;
   margin-bottom: 16px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 .page-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
   margin: 0 0 4px 0;
 }
 
 .page-subtitle {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 .action-area {
@@ -1095,10 +1095,10 @@ onMounted(() => {
 }
 
 .table-wrapper {
-  background: #ffffff;
+  background: var(--c-surface);
   border-radius: 8px;
   padding: 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
 }
 
 /* ==================== 编辑页签特有样式 (一体化极简吸顶导航) ==================== */
@@ -1115,12 +1115,12 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 10px 16px;
   border-radius: 0 0 8px 8px;
-  border: 1px solid #e2e8f0;
-  border-top: 1px solid #f1f5f9;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  border: 1px solid var(--c-border);
+  border-top: 1px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
   margin-bottom: 4px;
 }
 
@@ -1138,12 +1138,12 @@ onMounted(() => {
 .nav-main-title {
   font-size: 17px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .nav-sub-desc {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   margin-top: 2px;
 }
 
@@ -1155,8 +1155,8 @@ onMounted(() => {
 
 .config-card {
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #ffffff;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
 }
 
 .mb-20 {
@@ -1169,7 +1169,7 @@ onMounted(() => {
   gap: 8px;
   font-size: 15px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .step-num-badge {
@@ -1178,7 +1178,7 @@ onMounted(() => {
   justify-content: center;
   width: 22px;
   height: 22px;
-  background: #3b82f6;
+  background: var(--c-accent);
   color: #ffffff;
   border-radius: 50%;
   font-size: 12px;
@@ -1191,10 +1191,10 @@ onMounted(() => {
 }
 
 .policy-card {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   border-radius: 8px;
   padding: 16px 18px;
-  background: #f8fafc;
+  background: var(--c-muted-bg);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -1217,25 +1217,25 @@ onMounted(() => {
 }
 
 .policy-radio-item-card {
-  border: 1.5px solid #e2e8f0;
+  border: 1.5px solid var(--c-border);
   border-radius: 8px;
   padding: 12px 14px;
-  background: #ffffff;
+  background: var(--c-surface);
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .policy-radio-item-card:hover {
-  border-color: #93c5fd;
-  background: #f0f9ff;
+  border-color: var(--c-accent-border);
+  background: var(--c-accent-soft);
   transform: translateY(-1px);
 }
 
 .policy-radio-item-card.is-active {
-  border-color: #3b82f6;
-  background: #eff6ff;
-  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.12);
+  border-color: var(--c-accent);
+  background: var(--c-accent-soft);
+  box-shadow: var(--shadow-sm);
 }
 
 .custom-card-radio {
@@ -1267,16 +1267,16 @@ onMounted(() => {
 }
 
 .danger-text {
-  color: #dc2626;
+  color: var(--c-danger);
 }
 
 .success-text {
-  color: #16a34a;
+  color: var(--c-success);
 }
 
 .radio-desc-text {
   font-size: 12px;
-  color: #64748b;
+  color: var(--c-text-3);
   line-height: 1.4;
 }
 
@@ -1290,11 +1290,11 @@ onMounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 12px 14px;
   border-radius: 8px;
-  border: 1.5px solid #e2e8f0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border: 1.5px solid var(--c-border);
+  box-shadow: var(--shadow-sm);
 }
 
 .switch-left {
@@ -1306,8 +1306,8 @@ onMounted(() => {
 .step-badge-tag {
   font-size: 11px;
   font-weight: 800;
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--c-accent-soft);
+  color: var(--c-accent-hover);
   padding: 3px 8px;
   border-radius: 4px;
   white-space: nowrap;
@@ -1322,12 +1322,12 @@ onMounted(() => {
 .switch-title {
   font-size: 13px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--c-text);
 }
 
 .switch-desc {
   font-size: 11.5px;
-  color: #64748b;
+  color: var(--c-text-3);
 }
 
 /* ==================== 矩阵与引导样式 ==================== */
@@ -1339,8 +1339,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #f0fdf4;
-  border: 1px dashed #86efac;
+  background: var(--c-success-soft);
+  border: 1px dashed var(--c-success-border);
   padding: 10px 14px;
   border-radius: 6px;
   margin-bottom: 14px;
@@ -1352,17 +1352,17 @@ onMounted(() => {
   gap: 8px;
   font-size: 13px;
   font-weight: 500;
-  color: #166534;
+  color: var(--c-success-strong);
 }
 
 .tab-bottom-action-bar {
   display: flex;
   justify-content: flex-end;
   gap: 14px;
-  background: #ffffff;
+  background: var(--c-surface);
   padding: 16px 20px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--c-border);
   margin-top: 10px;
 }
 

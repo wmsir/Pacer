@@ -10,7 +10,7 @@
       </div>
       <div class="header-right">
         <el-tag effect="plain" type="danger" style="font-weight: 600; margin-right: 8px;">
-          🔒 严格只读模式 (Read-Only)
+          严格只读模式 (Read-Only)
         </el-tag>
         <el-button :icon="CopyDocument" @click="openInNewWindow">在新窗口打开</el-button>
       </div>
@@ -35,7 +35,7 @@
               :value="inst.id"
             >
               <div style="display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-weight: 600; color: #1e293b;">{{ inst.name }}</span>
+                <span style="font-weight: 600; color: var(--c-text);">{{ inst.name }}</span>
                 <div style="display: flex; gap: 6px; align-items: center;">
                   <el-tag size="small" :type="inst.env === 'PROD' ? 'danger' : 'info'">{{ inst.env || 'PROD' }}</el-tag>
                   <el-tag size="small" :type="dbTypeTagType(inst.dbType)" effect="dark">{{ inst.dbType || 'mysql' }}</el-tag>
@@ -106,10 +106,10 @@
             :disabled="!isQuerySupported"
             @click="handleExecuteExplain"
           >
-            ⚡ 执行计划 (EXPLAIN)
+            执行计划 (EXPLAIN)
           </el-button>
           <el-button type="warning" plain :icon="Hide" @click="() => handleGoToMasking()">
-            🛡️ 脱敏配置
+            脱敏配置
           </el-button>
           <el-tooltip
             :disabled="isQueryExportSupported"
@@ -174,7 +174,7 @@
         </div>
 
         <div v-else class="sidebar-collapsed-rail" @click="isTableSidebarCollapsed = false" title="点击展开数据表列表">
-          <el-icon :size="16" color="#2563eb"><Expand /></el-icon>
+          <el-icon :size="16"><Expand /></el-icon>
           <span class="collapsed-vertical-text">展开库表目录 ({{ filteredTables.length }})</span>
         </div>
 
@@ -294,7 +294,7 @@
                         style="margin-left: 8px; font-weight: 500;"
                         :title="currentTab.result.routeDescription"
                       >
-                        {{ currentTab.result.routeNode === 'SLAVE' ? '🟢 只读从库 (Slave)' : '🟡 核心主库 (Master)' }}
+                        {{ currentTab.result.routeNode === 'SLAVE' ? '只读从库 (Slave)' : '核心主库 (Master)' }}
                       </el-tag>
                     </span>
                     <span v-else class="meta-text">
@@ -352,7 +352,7 @@
                             effect="light"
                             style="font-size: 10px; padding: 0 4px; height: 18px; line-height: 16px; border-radius: 3px;"
                           >
-                            🛡️ {{ getMaskRuleForCol(col) }}
+                            {{ getMaskRuleForCol(col) }}
                           </el-tag>
                         </div>
                       </template>
@@ -363,7 +363,7 @@
                           </span>
                           <el-tooltip
                             v-if="getMaskRuleForCol(col) && row[col] !== 'NULL'"
-                            :content="`🔒 该字段已生效【${getMaskRuleForCol(col)}】动态脱敏保护`"
+                            :content="`该字段已生效【${getMaskRuleForCol(col)}】动态脱敏保护`"
                             placement="top"
                           >
                             <el-tag size="small" type="danger" effect="plain" style="font-size: 10px; height: 16px; line-height: 14px; padding: 0 3px; margin-left: 4px;">
@@ -399,7 +399,7 @@
             <el-tab-pane label="表结构元数据 (Schema)" name="schema">
               <div class="schema-card">
                 <div class="schema-header">
-                  <span>当前数据表：<b style="color: #409EFF; font-family: monospace;">{{ currentActiveTable || '未选择' }}</b></span>
+                  <span>当前数据表：<b style="color: var(--c-accent); font-family: monospace;">{{ currentActiveTable || '未选择' }}</b></span>
                   <el-button size="small" link :icon="Refresh" @click="loadTableColumns(currentActiveTable)" :disabled="!currentActiveTable">
                     刷新字段元数据
                   </el-button>
@@ -415,7 +415,7 @@
                   </el-table-column>
                   <el-table-column prop="columnType" label="字段类型" min-width="140">
                     <template #default="{ row }">
-                      <span style="font-family: monospace; font-size: 12px; color: #475569;">{{ row.columnType }}</span>
+                      <span style="font-family: monospace; font-size: 12px; color: var(--c-text-2);">{{ row.columnType }}</span>
                     </template>
                   </el-table-column>
                   <el-table-column prop="isNullable" label="允许为空" width="90" align="center">
@@ -427,7 +427,7 @@
                   </el-table-column>
                   <el-table-column prop="columnDefault" label="默认值" min-width="120" show-overflow-tooltip>
                     <template #default="{ row }">
-                      <span style="color: #909399; font-family: monospace;">{{ row.columnDefault !== null ? row.columnDefault : 'NULL' }}</span>
+                      <span style="color: var(--c-text-3); font-family: monospace;">{{ row.columnDefault !== null ? row.columnDefault : 'NULL' }}</span>
                     </template>
                   </el-table-column>
                   <el-table-column prop="columnComment" label="字段注释" min-width="180" show-overflow-tooltip />
@@ -441,7 +441,7 @@
 
     <!-- SQL 执行计划 (EXPLAIN) 深度分析弹窗 -->
     <el-dialog
-      title="⚡ SQL 执行计划深度分析 (EXPLAIN Analysis)"
+      title="SQL 执行计划深度分析 (EXPLAIN Analysis)"
       v-model="explainDialogVisible"
       width="920px"
       append-to-body
@@ -449,17 +449,17 @@
     >
       <div v-if="explainResult" class="explain-container">
         <!-- 待测 SQL 预览 -->
-        <div style="margin-bottom: 12px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px;">
-          <div style="font-size: 11px; font-weight: 600; color: #64748b; margin-bottom: 4px;">待分析 SQL 语句：</div>
-          <code style="font-size: 13px; color: #0f172a; word-break: break-all;">{{ explainResult.sql }}</code>
+        <div style="margin-bottom: 12px; background: var(--c-muted-bg); border: 1px solid var(--c-border); border-radius: 6px; padding: 10px 14px;">
+          <div style="font-size: 11px; font-weight: 600; color: var(--c-text-3); margin-bottom: 4px;">待分析 SQL 语句：</div>
+          <code style="font-size: 13px; color: var(--c-text); word-break: break-all;">{{ explainResult.sql }}</code>
         </div>
 
         <!-- 智能诊断建议卡片 -->
-        <div style="margin-bottom: 14px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px; padding: 12px 16px;">
-          <div style="font-weight: 700; color: #166534; font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
-            <span>💡 性能与索引命中智能诊断建议：</span>
+        <div style="margin-bottom: 14px; background: var(--c-success-soft); border: 1px solid var(--c-success-border); border-radius: 6px; padding: 12px 16px;">
+          <div style="font-weight: 700; color: var(--c-success-strong); font-size: 13px; margin-bottom: 6px; display: flex; align-items: center; gap: 6px;">
+            <span>性能与索引命中智能诊断建议：</span>
           </div>
-          <div style="font-size: 12px; color: #15803d; line-height: 1.6;">
+          <div style="font-size: 12px; color: var(--c-success); line-height: 1.6;">
             <div v-for="(tip, idx) in explainDiagnostics" :key="idx" style="margin-bottom: 3px;">
               • {{ tip }}
             </div>
@@ -1051,13 +1051,13 @@ onMounted(() => {
 .header-titles .main-title {
   font-size: 18px;
   font-weight: 700;
-  color: #1f2d3d;
+  color: var(--c-text);
   margin: 0;
 }
 
 .header-titles .sub-title {
   font-size: 13px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 4px;
   display: block;
 }
@@ -1068,12 +1068,12 @@ onMounted(() => {
 }
 
 .query-top-toolbar {
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   padding: 12px 16px;
   margin-bottom: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .toolbar-items {
@@ -1092,7 +1092,7 @@ onMounted(() => {
 .item-label {
   font-size: 13px;
   font-weight: 600;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .toolbar-actions {
@@ -1111,12 +1111,12 @@ onMounted(() => {
 
 .left-table-sidebar {
   width: 270px;
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
   flex-shrink: 0;
   transition: width 0.22s ease;
 }
@@ -1133,14 +1133,14 @@ onMounted(() => {
   gap: 10px;
   cursor: pointer;
   height: 100%;
-  color: #475569;
+  color: var(--c-text-2);
   user-select: none;
   transition: background 0.2s;
 }
 
 .sidebar-collapsed-rail:hover {
-  background: #eff6ff;
-  color: #2563eb;
+  background: var(--c-accent-soft);
+  color: var(--c-accent);
 }
 
 .collapsed-vertical-text {
@@ -1152,14 +1152,14 @@ onMounted(() => {
 
 .sidebar-header {
   padding: 12px;
-  border-bottom: 1px solid #ebeef5;
-  background: #f8f9fb;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-muted-bg);
 }
 
 .sidebar-title {
   font-size: 13px;
   font-weight: 700;
-  color: #303133;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1180,12 +1180,12 @@ onMounted(() => {
 }
 
 .table-list-item:hover {
-  background-color: #ecf5ff;
+  background-color: var(--c-accent-soft);
 }
 
 .table-list-item.active {
-  background-color: #d9ecff;
-  border-left: 3px solid #409EFF;
+  background-color: var(--c-accent-border);
+  border-left: 3px solid var(--c-accent);
 }
 
 .tbl-item-top {
@@ -1195,14 +1195,14 @@ onMounted(() => {
 }
 
 .tbl-icon {
-  color: #409EFF;
+  color: var(--c-accent);
   font-size: 14px;
 }
 
 .tbl-name {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1210,7 +1210,7 @@ onMounted(() => {
 
 .tbl-item-desc {
   font-size: 11px;
-  color: #909399;
+  color: var(--c-text-3);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -1219,7 +1219,7 @@ onMounted(() => {
 
 .empty-tables-tip {
   text-align: center;
-  color: #909399;
+  color: var(--c-text-3);
   font-size: 12px;
   padding: 30px 10px;
 }
@@ -1234,20 +1234,20 @@ onMounted(() => {
 }
 
 .editor-box {
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
 }
 
 .editor-tools {
-  background: #f5f7fa;
+  background: var(--c-subtle);
   padding: 8px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #e4e7ed;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .tools-left {
@@ -1260,7 +1260,7 @@ onMounted(() => {
 .editor-label {
   font-size: 13px;
   font-weight: 600;
-  color: #303133;
+  color: var(--c-text);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1273,9 +1273,9 @@ onMounted(() => {
 }
 
 .quick-sql-tag:hover {
-  border-color: #409EFF;
-  color: #409EFF;
-  background: #ecf5ff;
+  border-color: var(--c-accent);
+  color: var(--c-accent);
+  background: var(--c-accent-soft);
 }
 
 .ide-code-textarea :deep(textarea) {
@@ -1289,10 +1289,10 @@ onMounted(() => {
 
 .result-tabs-container {
   flex: 1;
-  background: #ffffff;
-  border: 1px solid #e4e7ed;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
   border-radius: 6px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -1300,7 +1300,7 @@ onMounted(() => {
 
 .custom-result-tabs :deep(.el-tabs__header) {
   margin: 0;
-  background: #fafbfc;
+  background: var(--c-muted-bg);
   padding: 0 12px;
 }
 
@@ -1310,12 +1310,12 @@ onMounted(() => {
 }
 
 .grid-status-bar {
-  background: #f8f9fa;
+  background: var(--c-muted-bg);
   padding: 8px 14px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--c-border);
 }
 
 .status-tag {
@@ -1323,26 +1323,26 @@ onMounted(() => {
   font-weight: bold;
   padding: 2px 8px;
   border-radius: 4px;
-  background: #909399;
+  background: var(--c-text-3);
   color: #ffffff;
   margin-right: 10px;
 }
 
 .status-tag.success {
-  background: #67C23A;
+  background: var(--c-success);
 }
 
 .status-tag.error {
-  background: #F56C6C;
+  background: var(--c-danger);
 }
 
 .meta-text {
   font-size: 12px;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 .meta-text b {
-  color: #303133;
+  color: var(--c-text);
 }
 
 .table-render-wrap {
@@ -1350,7 +1350,7 @@ onMounted(() => {
 }
 
 .null-val {
-  color: #c0c4cc;
+  color: var(--c-text-4);
   font-style: italic;
 }
 
@@ -1368,13 +1368,13 @@ onMounted(() => {
   align-items: center;
   padding: 6px 4px 12px 4px;
   font-size: 13px;
-  color: #606266;
+  color: var(--c-text-2);
 }
 
 /* ==================== 多查询窗口标签栏样式 ==================== */
 .query-tabs-header-bar {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--c-muted-bg);
+  border: 1px solid var(--c-border);
   border-bottom: none;
   border-top-left-radius: 6px;
   border-top-right-radius: 6px;
@@ -1388,7 +1388,7 @@ onMounted(() => {
 
 .multi-query-tabs :deep(.el-tabs__nav) {
   border-radius: 4px 4px 0 0;
-  border-color: #cbd5e1;
+  border-color: var(--c-border-strong);
 }
 
 .multi-query-tabs :deep(.el-tabs__item) {
@@ -1397,17 +1397,17 @@ onMounted(() => {
   height: 34px;
   line-height: 34px;
   padding: 0 14px !important;
-  color: #64748b;
-  border-color: #cbd5e1;
-  background: #f1f5f9;
+  color: var(--c-text-3);
+  border-color: var(--c-border-strong);
+  background: var(--c-subtle);
   transition: all 0.2s ease;
 }
 
 .multi-query-tabs :deep(.el-tabs__item.is-active) {
-  color: #2563eb;
-  background: #ffffff;
+  color: var(--c-accent);
+  background: var(--c-surface);
   font-weight: 600;
-  border-bottom-color: #ffffff;
+  border-bottom-color: var(--c-surface);
 }
 
 .tab-pill-label {
@@ -1426,9 +1426,9 @@ onMounted(() => {
 
 .tab-rows-tag {
   font-size: 10.5px;
-  background: #ecfdf5;
-  color: #059669;
-  border: 1px solid #a7f3d0;
+  background: var(--c-success-soft);
+  color: var(--c-success);
+  border: 1px solid var(--c-success-border);
   border-radius: 10px;
   padding: 0 5px;
   line-height: 16px;
@@ -1437,9 +1437,9 @@ onMounted(() => {
 
 .tab-err-tag {
   font-size: 10.5px;
-  background: #fef2f2;
-  color: #dc2626;
-  border: 1px solid #fecaca;
+  background: var(--c-danger-soft);
+  color: var(--c-danger);
+  border: 1px solid var(--c-danger-border);
   border-radius: 10px;
   padding: 0 5px;
   line-height: 16px;
@@ -1449,7 +1449,7 @@ onMounted(() => {
 .tab-edit-icon {
   margin-left: 2px;
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--c-text-4);
   opacity: 0;
   transition: opacity 0.2s;
 }
