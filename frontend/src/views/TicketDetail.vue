@@ -89,9 +89,9 @@
             <span class="title-text">审批流转与执行进度</span>
             <el-tag
               :type="ticketDetail?.workflowTemplateInfo?.isPinned ? 'warning' : 'info'"
-              effect="dark"
+              effect="plain"
               size="small"
-              style="margin-left: 8px; background: color-mix(in srgb, var(--c-surface) 15%, transparent); border-color: rgba(255,255,255,0.3); color: var(--c-accent-hover);"
+              style="margin-left: 8px;"
             >
               {{ ticketDetail?.workflowTemplateInfo?.isPinned ? '专属固定审批流：' : '流程模板：' }}{{ ticketDetail?.workflowTemplateInfo?.templateName || ticketDetail?.ticket?.workflowTemplateName || '标准生产 SQL 变更审批流' }}
             </el-tag>
@@ -106,7 +106,6 @@
               :loading="urgeLoading"
               :disabled="urgeCooldown > 0"
               @click="handleOpenUrgeDialog()"
-              style="font-weight: 600; background: rgba(239, 68, 68, 0.9); border-color: var(--c-danger); color: #fff;"
             >
               {{ urgeCooldown > 0 ? `已催办 (${urgeCooldown}s)` : '加急催办' }}
             </el-button>
@@ -116,7 +115,6 @@
               :icon="Refresh"
               @click="handleManualRefresh"
               :loading="refreshLoading"
-              style="background: color-mix(in srgb, var(--c-surface) 15%, transparent); border-color: rgba(255,255,255,0.35); color: var(--c-accent-hover);"
             >
               刷新状态
             </el-button>
@@ -3110,25 +3108,8 @@ onUnmounted(() => {
 }
 
 /* ==================== 1. 审批流全景追踪卡片 ==================== */
-.workflow-card {
-  border-radius: 8px;
-  border: none;
-  background: var(--c-accent-soft);
-  box-shadow: var(--shadow-sm);
-}
-
 .workflow-card :deep(.el-card__header) {
-  background: var(--c-accent-hover);
-  border-radius: 8px 8px 0 0;
   padding: 12px 18px;
-}
-
-.workflow-card :deep(.el-card__header) .title-text {
-  color: #ffffff;
-}
-
-.workflow-card :deep(.el-card__header) .title-icon {
-  color: var(--c-accent);
 }
 
 .workflow-card :deep(.el-card__header) .card-header-flex {

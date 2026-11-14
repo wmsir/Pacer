@@ -29,7 +29,7 @@
       <div class="metric-card card-green">
         <div class="card-icon-wrap"><el-icon><Check /></el-icon></div>
         <div class="card-info">
-          <div class="card-num">{{ stats.successRate || '100' }}%</div>
+          <div class="card-num">{{ stats.successRate ?? '—' }}<span v-if="stats.successRate != null">%</span></div>
           <div class="card-title">执行成功率</div>
         </div>
       </div>
@@ -45,7 +45,7 @@
       <div class="metric-card card-purple">
         <div class="card-icon-wrap"><el-icon><Stamp /></el-icon></div>
         <div class="card-info">
-          <div class="card-num">{{ stats.complianceScore || 98 }}<span style="font-size: 14px; font-weight: normal;"> / 100</span></div>
+          <div class="card-num">{{ stats.complianceScore ?? '—' }}<span style="font-size: 14px; font-weight: normal; color: var(--c-text-4);"> / 100</span></div>
           <div class="card-title">安全合规综合评分</div>
         </div>
       </div>
@@ -833,41 +833,44 @@ onBeforeUnmount(() => {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--c-border);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
   margin-bottom: 20px;
 }
 
 .metric-card {
+  padding: 16px 18px;
+  background: var(--c-surface);
+}
+.card-info {
   display: flex;
-  align-items: center;
-  padding: 18px 20px;
-  border-radius: 10px;
-  color: #fff;
-  box-shadow: var(--shadow-sm);
+  flex-direction: column-reverse;
+  gap: 4px;
 }
 
-.card-blue { background: var(--c-accent); }
-.card-green { background: var(--c-success); }
-.card-orange { background: var(--c-warning); }
-.card-purple { background: var(--c-accent); }
-
-.card-icon-wrap {
-  font-size: 32px;
-  margin-right: 16px;
-  opacity: 0.9;
-}
+.card-icon-wrap { display: none; }
 
 .card-num {
   font-size: 26px;
-  font-weight: 700;
-  line-height: 1.1;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text);
 }
+.card-orange .card-num { color: var(--c-warning-strong); }
 
 .card-title {
-  font-size: 13px;
-  opacity: 0.85;
-  margin-top: 4px;
+  font-size: 12.5px;
+  color: var(--c-text-3);
+}
+
+@media (max-width: 900px) {
+  .metrics-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 .charts-row {

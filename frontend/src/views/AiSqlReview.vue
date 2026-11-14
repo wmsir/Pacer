@@ -38,10 +38,10 @@
             ></el-input>
             <div class="action-buttons">
               <el-button type="primary" :loading="loading" @click="handleAction('explain')">SQL 解释</el-button>
-              <el-button type="success" :loading="loading" @click="handleAction('optimize')">SQL 优化</el-button>
-              <el-button type="warning" :loading="loading" @click="handleAction('rewrite')">SQL 重写</el-button>
-              <el-button type="danger" :loading="loading" @click="handleAction('risk')">风险分析</el-button>
-              <el-button type="info" :loading="loading" @click="handleAction('explain-plan')">解析执行计划</el-button>
+              <el-button :loading="loading" @click="handleAction('optimize')">SQL 优化</el-button>
+              <el-button :loading="loading" @click="handleAction('rewrite')">SQL 重写</el-button>
+              <el-button :loading="loading" @click="handleAction('risk')">风险分析</el-button>
+              <el-button :loading="loading" @click="handleAction('explain-plan')">解析执行计划</el-button>
             </div>
           </div>
         </el-card>

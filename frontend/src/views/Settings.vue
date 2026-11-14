@@ -16,7 +16,7 @@
         </template>
 
         <el-form label-position="left" label-width="140px">
-          <el-form-item label="系统主色调 (Primary)">
+          <el-form-item label="主色调">
             <div class="color-picker-row">
               <el-color-picker v-model="primaryColor" @change="handleColorChange" />
               <div class="color-presets">
