@@ -1032,14 +1032,15 @@ onBeforeUnmount(() => {
 .metric-strip {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--c-border);
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   margin-bottom: 16px;
   overflow: hidden;
 }
 .metric-cell {
+  /* 只画右、下两条分隔线，越界部分被外框裁掉；末行空位不会出现灰块 */
+  box-shadow: 1px 1px 0 0 var(--c-border);
   display: flex;
   flex-direction: column;
   align-items: flex-start;

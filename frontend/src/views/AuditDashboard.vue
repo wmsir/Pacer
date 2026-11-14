@@ -834,8 +834,7 @@ onBeforeUnmount(() => {
 .metrics-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--c-border);
+  background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   overflow: hidden;
@@ -843,6 +842,8 @@ onBeforeUnmount(() => {
 }
 
 .metric-card {
+  /* 只画右、下两条分隔线，越界部分被外框裁掉；末行空位不会出现灰块 */
+  box-shadow: 1px 1px 0 0 var(--c-border);
   padding: 16px 18px;
   background: var(--c-surface);
 }
