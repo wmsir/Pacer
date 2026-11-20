@@ -1,0 +1,10 @@
+[package]
+name = "pacer-sql-ast"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pacer-core = { path = "../pacer-core" }
+serde.workspace = true
+sqlparser.workspace = true

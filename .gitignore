@@ -4,6 +4,7 @@ node_modules/
 # Build Outputs & Caches
 target/
 dist/
+dist-win/
 dist-ssr/
 build/
 .dart_tool/
