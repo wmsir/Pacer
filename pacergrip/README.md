@@ -65,4 +65,8 @@ cargo check -p pacergrip-app --features pacer-extension
 ### 获取编译产物
 
 1. **每次推送 / 手动触发**：打开 GitHub 仓库的 **Actions → Build PacerGrip Windows Executable → 最新一次运行 → Artifacts**，下载 `PacerGrip-windows-x64` 压缩包即可直接运行 `.exe`。
-2. **发布 GitHub Release**：在 GitHub Releases 页面发布新 Release 时，会自动触发打包并将上述安装包与便携版挂载到 Release Assets。
+2. **发布正式 GitHub Release**：推送 `pacergrip-v*` 标签（由 [`../.github/workflows/release-pacergrip.yml`](../.github/workflows/release-pacergrip.yml) 自动编译并创建 Release）：
+   ```bash
+   git tag -a pacergrip-v0.1.0 -m "PacerGrip v0.1.0"
+   git push origin pacergrip-v0.1.0
+   ```

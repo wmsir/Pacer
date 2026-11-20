@@ -1,0 +1,114 @@
+name: Release PacerGrip Windows
+
+on:
+  push:
+    tags:
+      - 'pacergrip-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build & Publish PacerGrip Release (Windows x64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: pacergrip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: pacergrip/ui/package-lock.json
+
+      - name: Setup Rust toolchain (MSVC)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'pacergrip -> target'
+          shared-key: pacergrip-win
+
+      - name: Install UI dependencies
+        working-directory: pacergrip/ui
+        run: npm ci
+
+      - name: Build UI bundle
+        working-directory: pacergrip/ui
+        run: npm run build
+
+      - name: Run Rust unit and SQLite integration tests
+        run: cargo test --workspace --exclude pacergrip-app
+
+      - name: Run Clippy static checks
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build Windows portable EXE & NSIS installer
+        run: .\ui\node_modules\.bin\tauri.cmd build --bundles nsis
+
+      - name: Collect Windows executables & SHA256 checksums
+        run: |
+          New-Item -ItemType Directory -Force -Path dist-win | Out-Null
+          $portable = "target/release/PacerGrip.exe"
+          if (-not (Test-Path $portable)) {
+            throw "Expected portable executable not found at $portable"
+          }
+          Copy-Item $portable "dist-win/PacerGrip-windows-x64-portable.exe"
+
+          $nsisFiles = Get-ChildItem "target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue
+          if (-not $nsisFiles) {
+            throw "No NSIS setup executable produced under target/release/bundle/nsis/"
+          }
+          Copy-Item $nsisFiles.FullName "dist-win/"
+
+          Get-ChildItem "dist-win/*.exe" | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Path "dist-win/SHA256SUMS.txt" -Encoding UTF8
+
+          Get-ChildItem dist-win
+
+      - name: Upload Release build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PacerGrip-${{ github.ref_name }}-windows-x64
+          path: pacergrip/dist-win/*
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "PacerGrip ${{ github.ref_name }} (Windows x64)"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          body: |
+            ## PacerGrip `${{ github.ref_name }}` — Standalone DataGrip-Compatible Desktop IDE (Windows x64)
+
+            ### Downloads
+            - **`PacerGrip-windows-x64-portable.exe`**: Standalone portable executable (zero installation required).
+            - **`PacerGrip_*_x64-setup.exe`**: Windows NSIS installer (Simplified Chinese / English wizard, current-user install, automatic WebView2 bootstrapper).
+            - **`SHA256SUMS.txt`**: SHA-256 verification checksums.
+
+            ### Highlights
+            - **Native Async SQL Drivers (`sqlx`)**: SQLite (with one-click Demo SQLite Store), MySQL / MariaDB / TiDB / OceanBase, PostgreSQL / openGauss / KingbaseES.
+            - **DataGrip Compatibility**: Import connections via Clipboard XML, `.idea/dataSources.xml` + `dataSources.local.xml` + `sshConfigs.xml`, or JetBrains Settings `.zip`; export clean credential-free XML.
+            - **Desktop SQL Workbench**: Multi-tab SQL consoles, Database Explorer (Schemas / Tables / Columns), Table DDL viewer, `EXPLAIN`, CSV/JSON result export, query history, and `pacer-sql-ast` risk analysis.
+            - **Extension Hooks Preserved**: `GovernanceExtension` (`before_execute` / `report_audit`), `AiSqlExtension`, and optional `pacer-client` (`pacer-extension` Cargo feature).
+
+            **System Requirement**: Windows 10 / 11 (x64).
+          files: pacergrip/dist-win/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
