@@ -70,6 +70,7 @@ import {
   getEngineDisplayName,
   getExplainModesForEngine,
   isWriteOrDdlStatement,
+  matchesFilterPattern,
   parseMarkdownSegments,
   quoteIdentifier,
   transformSqlTextCase,
@@ -348,6 +349,7 @@ function saveFileDbBinding(
 }
 
 const connections = ref<ConnectionProfile[]>([]);
+const rawDatabasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
 const databasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
 const tablesByKey = reactive<Record<string, TableMeta[]>>({});
 const columnsByKey = reactive<Record<string, ColumnMeta[]>>({});
@@ -954,10 +956,15 @@ async function handleMoveProfileProject(profile: ConnectionProfile, targetProjec
 
 async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFirst = false) {
   try {
-    const dbs = await listDatabases(profile.id);
+    const rawDbs = await listDatabases(profile.id);
+    rawDatabasesByProfile[profile.id] = rawDbs;
+    const cfg = (profile.mode?.config ?? {}) as Partial<DirectConfig>;
+    const preferredDb = (cfg.database ?? profile.fingerprint.database ?? '').trim();
+    const dbs = cfg.schemaPattern?.trim()
+      ? rawDbs.filter((d) => matchesFilterPattern(d.name, cfg.schemaPattern, preferredDb))
+      : rawDbs;
     databasesByProfile[profile.id] = dbs;
     expandedProfiles[profile.id] = true;
-    const preferredDb = profile.fingerprint.database?.trim();
     const defaultDb =
       (preferredDb ? dbs.find((d) => d.name === preferredDb)?.name : undefined) ??
       dbs.find((d) => !d.isSystem)?.name ??
@@ -999,7 +1006,11 @@ async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFir
 async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
   const key = `${profile.id}:${dbName}`;
   try {
-    const tables = await listTables(profile.id, dbName);
+    const rawTables = await listTables(profile.id, dbName);
+    const cfg = (profile.mode?.config ?? {}) as Partial<DirectConfig>;
+    const tables = cfg.objectFilter?.trim()
+      ? rawTables.filter((t) => matchesFilterPattern(t.name, cfg.objectFilter))
+      : rawTables;
     tablesByKey[key] = tables;
     expandedDatabases[key] = true;
     // Prefetch first few tables' columns silently for instant SQL autocomplete
@@ -1209,9 +1220,14 @@ async function handleSaveConnection(
       level: 'success',
       summary: '已保存数据源配置',
     });
+    for (const k of Object.keys(tablesByKey)) {
+      if (k.startsWith(`${saved.id}:`)) {
+        delete tablesByKey[k];
+      }
+    }
+    void loadDatabasesForProfile(saved, closeAfter);
     if (closeAfter) {
       activeModal.value = 'none';
-      void loadDatabasesForProfile(saved, true);
     }
   } catch (err) {
     const msg = String(err);
@@ -5176,6 +5192,7 @@ onBeforeUnmount(() => {
       :active-project-id="activeProjectId"
       :editing-project="editingProject"
       :editing-profile="editingProfile"
+      :editing-profile-databases="editingProfile ? (rawDatabasesByProfile[editingProfile.id] ?? []) : []"
       :grid-sql-context="gridSqlContext"
       :encoding-context="encodingModalContext"
       :danger-context="dangerContext"

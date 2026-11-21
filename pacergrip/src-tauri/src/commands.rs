@@ -13,10 +13,10 @@ use uuid::Uuid;
 
 use pacer_core::{
     AuditEvent, CapabilityFlags, ColumnMeta, ConnectionFingerprint, ConnectionMode,
-    ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType, DbeaverDiscoveryItem,
-    DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry, FileStatsDto,
-    IndexMeta, MarkdownSqlBlock, OpenedFileDto, PingMetrics, PreExecuteDecision, QueryChunk,
-    QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig, SslConfig, TableMeta,
+    ConnectionOptionsConfig, ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType,
+    DbeaverDiscoveryItem, DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry,
+    FileStatsDto, IndexMeta, MarkdownSqlBlock, OpenedFileDto, PingMetrics, PreExecuteDecision,
+    QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig, SslConfig, TableMeta,
     WorkspaceFileEntry, WorkspaceProject,
 };
 use pacer_dbeaver_io::{
@@ -416,8 +416,11 @@ pub struct ConnectionDraft {
     pub socket_path: Option<String>,
     pub driver_properties: Option<BTreeMap<String, String>>,
     pub ssl_mode: Option<String>,
+    pub ssl: Option<SslConfig>,
     pub ssh: Option<SshTunnelConfig>,
     pub schema_pattern: Option<String>,
+    pub object_filter: Option<String>,
+    pub options: Option<ConnectionOptionsConfig>,
 }
 
 /// Resolves a `DirectConfig` + optional URL-embedded password from a `ConnectionDraft`.
@@ -477,16 +480,29 @@ fn resolve_direct_from_draft(
         ),
     };
 
-    let ssl = draft
-        .ssl_mode
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|mode| SslConfig {
-            enabled: !mode.eq_ignore_ascii_case("disabled") && !mode.eq_ignore_ascii_case("disable"),
-            mode: Some(mode.to_string()),
-            ..Default::default()
-        });
+    let ssl = if let Some(mut s) = draft.ssl.clone() {
+        if s.mode.as_deref().map(str::trim).filter(|v| !v.is_empty()).is_none() {
+            s.mode = draft
+                .ssl_mode
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+                .map(ToString::to_string);
+        }
+        Some(s)
+    } else {
+        draft
+            .ssl_mode
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|mode| SslConfig {
+                enabled: !mode.eq_ignore_ascii_case("disabled")
+                    && !mode.eq_ignore_ascii_case("disable"),
+                mode: Some(mode.to_string()),
+                ..Default::default()
+            })
+    };
 
     let direct = DirectConfig {
         db_type: db_type.clone(),
@@ -502,6 +518,8 @@ fn resolve_direct_from_draft(
         ssl,
         read_only,
         schema_pattern: draft.schema_pattern.clone().filter(|s| !s.trim().is_empty()),
+        object_filter: draft.object_filter.clone().filter(|s| !s.trim().is_empty()),
+        options: draft.options.clone(),
         connection_type: draft
             .connection_type
             .clone()
@@ -741,6 +759,29 @@ pub async fn save_connection(
     Ok(profile)
 }
 
+fn resolve_draft_password(
+    state: &State<'_, AppState>,
+    draft_id: Option<&str>,
+    auth_type: Option<&str>,
+    input_password: Option<String>,
+) -> Result<Option<String>, String> {
+    if auth_type == Some("noAuth") {
+        return Ok(None);
+    }
+    if input_password.is_some() {
+        return Ok(input_password);
+    }
+    if let Some(existing_id) = draft_id {
+        return Ok(state
+            .passwords
+            .read()
+            .map_err(|e| e.to_string())?
+            .get(existing_id)
+            .cloned());
+    }
+    Ok(None)
+}
+
 #[tauri::command]
 pub async fn test_connection_draft_cmd(
     state: State<'_, AppState>,
@@ -748,25 +789,37 @@ pub async fn test_connection_draft_cmd(
     password: Option<String>,
 ) -> Result<PingMetrics, String> {
     let (_, direct, url_password) = resolve_direct_from_draft(&draft);
-    let effective_pwd = if direct.auth_type.as_deref() == Some("noAuth") {
-        None
-    } else if let Some(p) = password.or(url_password) {
-        Some(p)
-    } else if let Some(ref existing_id) = draft.id {
-        state
-            .passwords
-            .read()
-            .map_err(|e| e.to_string())?
-            .get(existing_id)
-            .cloned()
-    } else {
-        None
-    };
+    let effective_pwd = resolve_draft_password(
+        &state,
+        draft.id.as_deref(),
+        direct.auth_type.as_deref(),
+        password.or(url_password),
+    )?;
 
     let backend = connect_direct(&direct, effective_pwd.as_deref())
         .await
         .map_err(map_err)?;
     backend.test_connection().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_databases_draft_cmd(
+    state: State<'_, AppState>,
+    draft: ConnectionDraft,
+    password: Option<String>,
+) -> Result<Vec<DatabaseMeta>, String> {
+    let (_, direct, url_password) = resolve_direct_from_draft(&draft);
+    let effective_pwd = resolve_draft_password(
+        &state,
+        draft.id.as_deref(),
+        direct.auth_type.as_deref(),
+        password.or(url_password),
+    )?;
+
+    let backend = connect_direct(&direct, effective_pwd.as_deref())
+        .await
+        .map_err(map_err)?;
+    backend.list_databases().await.map_err(map_err)
 }
 
 #[tauri::command]
@@ -828,6 +881,8 @@ pub async fn create_demo_sqlite_connection(
         ssl: None,
         read_only: false,
         schema_pattern: None,
+        object_filter: None,
+        options: None,
         connection_type: Some("default".to_string()),
         auth_type: Some("noAuth".to_string()),
         password_save_mode: Some("session".to_string()),

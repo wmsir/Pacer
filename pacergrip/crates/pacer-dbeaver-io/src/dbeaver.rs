@@ -513,6 +513,8 @@ pub fn parse_dbeaver_json(
             ssl,
             read_only,
             schema_pattern: None,
+            object_filter: None,
+            options: None,
             connection_type,
             auth_type: Some("userPassword".to_string()),
             password_save_mode,
@@ -682,6 +684,8 @@ pub fn parse_dbeaver_xml(xml_text: &str) -> CoreResult<Vec<ImportedDbeaverConnec
                         ssl: None,
                         read_only: cur_ro,
                         schema_pattern: None,
+                        object_filter: None,
+                        options: None,
                         connection_type: Some("default".to_string()),
                         auth_type: Some("userPassword".to_string()),
                         password_save_mode: Some(if cur_save_pwd {
@@ -997,11 +1001,13 @@ fn extract_dbeaver_ssh(cfg: &Map<String, Value>) -> Option<SshTunnelConfig> {
 
     Some(SshTunnelConfig {
         id: None,
+        config_name: None,
         host,
         port,
         username,
         auth_type,
         key_file,
+        local_port: None,
         enabled,
     })
 }
@@ -1026,6 +1032,7 @@ fn extract_dbeaver_ssl(
             client_cert: None,
             client_key: None,
             mode,
+            ..Default::default()
         });
     }
 

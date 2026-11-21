@@ -3,12 +3,61 @@ pub mod postgres;
 pub mod sqlite;
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use pacer_core::{CoreError, CoreResult, DbBackend, DbEngineType, DirectConfig};
+use pacer_core::{
+    ConnectionOptionsConfig, CoreError, CoreResult, DbBackend, DbEngineType, DirectConfig,
+};
 
 pub use mysql::MySqlBackend;
 pub use postgres::PostgresBackend;
 pub use sqlite::{create_demo_sqlite_db, SqliteBackend};
+
+pub(crate) fn resolve_pool_limits(
+    options: Option<&ConnectionOptionsConfig>,
+) -> (u32, Option<Duration>, bool) {
+    let Some(opts) = options else {
+        return (4, None, false);
+    };
+    let max_conns = if opts.single_session_mode { 1 } else { 4 };
+    let idle_timeout = if opts.auto_disconnect_enabled {
+        Some(Duration::from_secs(u64::from(
+            opts.auto_disconnect_sec.unwrap_or(300).max(10),
+        )))
+    } else {
+        None
+    };
+    (max_conns, idle_timeout, opts.keep_alive_enabled)
+}
+
+pub(crate) fn build_connection_init_stmts(
+    options: Option<&ConnectionOptionsConfig>,
+    tz_prefix: Option<&str>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(opts) = options else {
+        return out;
+    };
+    if let (Some(prefix), Some(tz)) = (
+        tz_prefix,
+        opts.time_zone
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty()),
+    ) {
+        out.push(format!("{prefix}'{}'", tz.replace('\'', "''")));
+    }
+    if let Some(script) = opts.startup_script.as_deref() {
+        for raw in script.split(';') {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
 
 /// Connects directly to a supported database engine using native Rust async drivers.
 pub async fn connect_direct(
@@ -59,6 +108,8 @@ mod tests {
             ssl: None,
             read_only,
             schema_pattern: None,
+            object_filter: None,
+            options: None,
             connection_type: Some("default".to_string()),
             auth_type: Some("noAuth".to_string()),
             password_save_mode: Some("session".to_string()),
@@ -263,6 +314,8 @@ mod tests {
             ssl: None,
             read_only: false,
             schema_pattern: None,
+            object_filter: None,
+            options: None,
             connection_type: Some("default".to_string()),
             auth_type: Some("userPassword".to_string()),
             password_save_mode: Some("session".to_string()),
@@ -355,6 +408,44 @@ mod tests {
         let chunk2 = rx2.recv().await.expect("expected metadata chunk for zero rows");
         assert!(chunk2.rows.is_empty());
         assert_eq!(chunk2.columns, vec!["activity_id", "title"]);
+
+        drop(backend);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_connection_options_startup_script_and_single_session() {
+        let tmp = std::env::temp_dir().join(format!("pacergrip_opts_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        create_demo_sqlite_db(&tmp).await.unwrap();
+
+        let mut cfg = sqlite_config(&tmp, false);
+        cfg.options = Some(ConnectionOptionsConfig {
+            single_session_mode: true,
+            auto_disconnect_enabled: true,
+            auto_disconnect_sec: Some(120),
+            keep_alive_enabled: true,
+            keep_alive_sec: Some(60),
+            startup_script: Some("PRAGMA foreign_keys = ON;".to_string()),
+            ..Default::default()
+        });
+
+        let backend = connect_direct(&cfg, None).await.unwrap();
+        let (tx, mut rx) = mpsc::channel(4);
+        let sum = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT * FROM pragma_foreign_keys;".to_string(),
+                    limit: None,
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+        assert!(sum.success);
+        let chunk = rx.recv().await.expect("expected PRAGMA foreign_keys row");
+        assert_eq!(chunk.rows[0]["foreign_keys"], serde_json::json!(1));
 
         drop(backend);
         let _ = std::fs::remove_file(&tmp);

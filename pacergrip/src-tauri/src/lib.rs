@@ -248,6 +248,7 @@ pub fn run() {
             commands::import_dbeaver_text_cmd,
             commands::export_dbeaver_json_cmd,
             commands::list_databases_cmd,
+            commands::list_databases_draft_cmd,
             commands::list_tables_cmd,
             commands::list_columns_cmd,
             commands::list_indexes_cmd,

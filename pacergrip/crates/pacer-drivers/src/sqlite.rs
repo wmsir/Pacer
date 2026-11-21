@@ -16,6 +16,8 @@ use pacer_core::{
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
+use crate::{build_connection_init_stmts, resolve_pool_limits};
+
 const STREAM_CHUNK_SIZE: usize = 500;
 
 /// Native SQLite backend powered by `sqlx`.
@@ -40,8 +42,29 @@ impl SqliteBackend {
             opts = opts.read_only(true);
         }
 
-        let pool = SqlitePoolOptions::new()
-            .max_connections(4)
+        let (max_conns, idle_timeout, test_before_acquire) =
+            resolve_pool_limits(config.options.as_ref());
+        let init_stmts = build_connection_init_stmts(config.options.as_ref(), None);
+        let mut pool_opts = SqlitePoolOptions::new()
+            .max_connections(max_conns)
+            .test_before_acquire(test_before_acquire);
+        if let Some(idle) = idle_timeout {
+            pool_opts = pool_opts.idle_timeout(Some(idle));
+        }
+        if !init_stmts.is_empty() {
+            let stmts = init_stmts.clone();
+            pool_opts = pool_opts.after_connect(move |conn, _meta| {
+                let stmts = stmts.clone();
+                Box::pin(async move {
+                    for stmt in &stmts {
+                        let _ = conn.execute(stmt.as_str()).await;
+                    }
+                    Ok(())
+                })
+            });
+        }
+
+        let pool = pool_opts
             .connect_with(opts)
             .await
             .map_err(|e| CoreError::Transport(format!("SQLite connection failed ({db_path}): {e}")))?;

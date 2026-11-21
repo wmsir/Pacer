@@ -1833,6 +1833,138 @@ table.dg-grid td.empty-data-cell {
   color: var(--text-secondary);
 }
 
+.conn-section-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.conn-section-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.conn-inline-check-num {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  flex-wrap: wrap;
+}
+
+.conn-num-input {
+  width: 78px !important;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+.conn-section-dim {
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.conn-file-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.conn-file-input-wrap .field {
+  flex: 1;
+  font-family: var(--font-mono);
+}
+
+.schemas-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.schemas-checklist-box {
+  max-height: 195px;
+  min-height: 110px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: var(--bg-editor);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.schema-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.schema-check-row:hover {
+  background: var(--bg-hover);
+}
+
+.conn-banner {
+  padding: 7px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-stripe);
+  font-size: 12px;
+}
+
+.conn-banner.err {
+  background: var(--prod-bg);
+  color: var(--prod);
+}
+
+.conn-banner.ok {
+  background: var(--dev-bg);
+  color: var(--dev);
+}
+
+.conn-banner.muted {
+  color: var(--text-secondary);
+}
+
+.conn-banner-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conn-banner-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.conn-banner-detail {
+  margin: 6px 0 0;
+  padding: 7px 9px;
+  border-radius: 4px;
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  max-height: 110px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .dbeaver-card {
   display: flex;
   align-items: center;

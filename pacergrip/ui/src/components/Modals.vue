@@ -3,23 +3,31 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useI18n } from '../i18n';
 import {
   discoverDbeaver,
+  listDatabasesDraft,
+  pickCertificateOrKeyFile,
   pickDbeaverFolder,
   pickDbeaverImportFile,
   pickDirectoryToMount,
   testConnectionDraft,
   type ConnectionDraft,
+  type ConnectionOptionsConfig,
   type ConnectionProfile,
+  type DatabaseMeta,
   type DbeaverDiscoveryItem,
   type DirectConfig,
   type EnvLevel,
   type ProjectDraft,
   type RiskLevel,
+  type SshTunnelConfig,
+  type SslConfig,
   type WorkspaceProject,
 } from '../api/ipc';
 import type { GridMutationPreviewPayload } from './ResultGrid.vue';
 import IdeIcon from './IdeIcon.vue';
 import {
+  buildSshTunnelCommand,
   formatBytes,
+  matchesFilterPattern,
   substituteSqlParameters,
   type SqlParamToken,
   type SqlParamValueSpec,
@@ -113,6 +121,7 @@ const props = defineProps<{
   activeProjectId: string;
   editingProject: WorkspaceProject | null;
   editingProfile: ConnectionProfile | null;
+  editingProfileDatabases?: DatabaseMeta[];
   gridSqlContext: GridMutationPreviewPayload | null;
   encodingContext: EncodingModalContext | null;
   dangerContext: DangerModalContext | null;
@@ -186,11 +195,41 @@ const ENCODING_OPTIONS = [
 // ==================== 1. Connection Settings Dialog State ====================
 const connTab = ref<'general' | 'options' | 'ssh' | 'schemas' | 'advanced'>('general');
 const showCommentBox = ref(false);
+const commentExpanded = ref(false);
 const showPasswordPlain = ref(false);
+const showSslKeyPasswordPlain = ref(false);
 const urlExpanded = ref(false);
+const startupExpanded = ref(false);
+const schemaPatternExpanded = ref(false);
+const objectFilterExpanded = ref(false);
 const testingDraft = ref(false);
 const testResult = ref<{ ok: boolean; text: string } | null>(null);
+const bannerExpanded = ref(false);
+const fetchedSchemas = ref<DatabaseMeta[]>([]);
+const loadingSchemas = ref(false);
+const schemaSearchText = ref('');
 const templates = ref<SavedConnTemplate[]>(loadTemplates());
+
+interface SavedSshConfigProfile {
+  name: string;
+  host: string;
+  port: string;
+  username: string;
+  authType: 'PASSWORD' | 'KEY_PAIR' | 'AGENT';
+  keyFile: string;
+  localPort: string;
+}
+
+function loadSavedSshProfiles(): SavedSshConfigProfile[] {
+  try {
+    const raw = localStorage.getItem('pacer.sshConfigs.v1');
+    return raw ? (JSON.parse(raw) as SavedSshConfigProfile[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+const savedSshProfiles = ref<SavedSshConfigProfile[]>(loadSavedSshProfiles());
 
 function loadTemplates(): SavedConnTemplate[] {
   try {
@@ -221,13 +260,40 @@ const connForm = reactive<{
   jdbcUrl: string;
   env: EnvLevel;
   readOnly: boolean;
-  sslMode: string;
+  // Options
+  transactionControl: 'auto' | 'manual';
+  switchSchema: 'automatic' | 'manual';
+  timeZone: string;
+  singleSessionMode: boolean;
+  keepAliveEnabled: boolean;
+  keepAliveSec: string;
+  autoDisconnectEnabled: boolean;
+  autoDisconnectSec: string;
+  startupScript: string;
+  autoSync: boolean;
+  introspectionLevel: 'auto' | 'level1' | 'level2' | 'level3';
+  // SSH
   sshEnabled: boolean;
+  sshConfigName: string;
   sshHost: string;
   sshPort: string;
   sshUser: string;
+  sshAuthType: 'PASSWORD' | 'KEY_PAIR' | 'AGENT';
   sshKeyFile: string;
+  sshLocalPort: string;
+  // SSL
+  sslEnabled: boolean;
+  sslMode: string;
+  sslCaCert: string;
+  sslUseIdeTruststore: boolean;
+  sslUseSystemTruststore: boolean;
+  sslClientCert: string;
+  sslClientKey: string;
+  sslClientKeyPassword: string;
+  sslClientKeyPwdSaveMode: 'forever' | 'session' | 'never';
+  // Schemas
   schemaPattern: string;
+  objectFilter: string;
   advancedProps: Array<{ key: string; value: string }>;
 }>({
   id: null,
@@ -249,13 +315,36 @@ const connForm = reactive<{
   jdbcUrl: 'jdbc:mysql://127.0.0.1:4000',
   env: 'DEV',
   readOnly: false,
-  sslMode: '',
+  transactionControl: 'auto',
+  switchSchema: 'automatic',
+  timeZone: '',
+  singleSessionMode: false,
+  keepAliveEnabled: false,
+  keepAliveSec: '60',
+  autoDisconnectEnabled: false,
+  autoDisconnectSec: '300',
+  startupScript: '',
+  autoSync: true,
+  introspectionLevel: 'auto',
   sshEnabled: false,
+  sshConfigName: '',
   sshHost: '',
   sshPort: '22',
   sshUser: '',
+  sshAuthType: 'PASSWORD',
   sshKeyFile: '',
+  sshLocalPort: '',
+  sslEnabled: false,
+  sslMode: 'preferred',
+  sslCaCert: '',
+  sslUseIdeTruststore: true,
+  sslUseSystemTruststore: true,
+  sslClientCert: '',
+  sslClientKey: '',
+  sslClientKeyPassword: '',
+  sslClientKeyPwdSaveMode: 'forever',
   schemaPattern: '',
+  objectFilter: '',
   advancedProps: [],
 });
 
@@ -510,6 +599,45 @@ function buildDraftPayload(): ConnectionDraft {
     if (k) propsMap[k] = kv.value.trim();
   }
 
+  const sslConfig: SslConfig = {
+    enabled: connForm.sslEnabled && connForm.sslMode !== 'disabled',
+    mode: connForm.sslEnabled ? connForm.sslMode || 'preferred' : 'disabled',
+    caCert: connForm.sslCaCert.trim() || null,
+    clientCert: connForm.sslClientCert.trim() || null,
+    clientKey: connForm.sslClientKey.trim() || null,
+    useIdeTruststore: connForm.sslUseIdeTruststore,
+    useSystemTruststore: connForm.sslUseSystemTruststore,
+    clientKeyPasswordSaveMode: connForm.sslClientKeyPwdSaveMode,
+  };
+
+  const optionsConfig: ConnectionOptionsConfig = {
+    transactionControl: connForm.transactionControl,
+    switchSchema: connForm.switchSchema,
+    timeZone: connForm.timeZone.trim() || null,
+    singleSessionMode: connForm.singleSessionMode,
+    keepAliveEnabled: connForm.keepAliveEnabled,
+    keepAliveSec: Math.max(5, Number(connForm.keepAliveSec) || 60),
+    autoDisconnectEnabled: connForm.autoDisconnectEnabled,
+    autoDisconnectSec: Math.max(10, Number(connForm.autoDisconnectSec) || 300),
+    startupScript: connForm.startupScript.trim() || null,
+    autoSync: connForm.autoSync,
+    introspectionLevel: connForm.introspectionLevel,
+  };
+
+  const sshConfig: SshTunnelConfig | null =
+    connForm.sshEnabled && connForm.sshHost.trim()
+      ? {
+          configName: connForm.sshConfigName.trim() || null,
+          enabled: true,
+          host: connForm.sshHost.trim(),
+          port: Number(connForm.sshPort) || 22,
+          username: connForm.sshUser.trim(),
+          authType: connForm.sshAuthType,
+          keyFile: connForm.sshKeyFile.trim() || null,
+          localPort: connForm.sshLocalPort.trim() ? Number(connForm.sshLocalPort) || null : null,
+        }
+      : null;
+
   return {
     id: connForm.id,
     projectId: connForm.projectId || props.activeProjectId || null,
@@ -532,19 +660,212 @@ function buildDraftPayload(): ConnectionDraft {
     passwordSaveMode: connForm.passwordSaveMode,
     socketPath: connForm.connectionType === 'socket' ? connForm.socketPath.trim() || null : null,
     driverProperties: propsMap,
-    sslMode: connForm.sslMode || null,
-    ssh: connForm.sshEnabled && connForm.sshHost.trim()
-      ? {
-          enabled: true,
-          host: connForm.sshHost.trim(),
-          port: Number(connForm.sshPort) || 22,
-          username: connForm.sshUser.trim(),
-          authType: connForm.sshKeyFile.trim() ? 'KEY_PAIR' : 'PASSWORD',
-          keyFile: connForm.sshKeyFile.trim() || null,
-        }
-      : null,
+    sslMode: connForm.sslEnabled ? connForm.sslMode || 'preferred' : connForm.sslMode === 'disabled' ? 'disabled' : null,
+    ssl: connForm.sslEnabled || connForm.sslCaCert.trim() || connForm.sslClientCert.trim() || connForm.sslMode === 'disabled' ? sslConfig : null,
+    ssh: sshConfig,
     schemaPattern: connForm.schemaPattern.trim() || null,
+    objectFilter: connForm.objectFilter.trim() || null,
+    options: optionsConfig,
   };
+}
+
+const activeEngineMetaLabel = computed(
+  () => ENGINE_OPTIONS.find((o) => o.value === connForm.dbType)?.label ?? connForm.dbType,
+);
+
+function selectSavedSshProfile(name: string) {
+  if (!name) {
+    connForm.sshConfigName = '';
+    return;
+  }
+  const found = savedSshProfiles.value.find((p) => p.name === name);
+  if (!found) return;
+  connForm.sshConfigName = found.name;
+  connForm.sshHost = found.host;
+  connForm.sshPort = found.port;
+  connForm.sshUser = found.username;
+  connForm.sshAuthType = found.authType;
+  connForm.sshKeyFile = found.keyFile;
+  connForm.sshLocalPort = found.localPort;
+}
+
+function saveCurrentSshProfile() {
+  const host = connForm.sshHost.trim();
+  if (!host) {
+    emit('notify', '请先填写 SSH 跳板机主机地址');
+    return;
+  }
+  const name = (connForm.sshConfigName.trim() || `${connForm.sshUser.trim() || 'ops'}@${host}`).slice(0, 48);
+  const entry: SavedSshConfigProfile = {
+    name,
+    host,
+    port: connForm.sshPort || '22',
+    username: connForm.sshUser.trim(),
+    authType: connForm.sshAuthType,
+    keyFile: connForm.sshKeyFile.trim(),
+    localPort: connForm.sshLocalPort.trim(),
+  };
+  const next = [entry, ...savedSshProfiles.value.filter((p) => p.name !== name)].slice(0, 30);
+  savedSshProfiles.value = next;
+  connForm.sshConfigName = name;
+  localStorage.setItem('pacer.sshConfigs.v1', JSON.stringify(next));
+  emit('notify', `已保存 SSH 档案「${name}」`);
+}
+
+function duplicateSshProfile() {
+  const base = (connForm.sshConfigName.trim() || connForm.sshHost.trim() || 'ssh-profile').replace(/\s+\(副本\)$/, '');
+  connForm.sshConfigName = `${base} (副本)`;
+  saveCurrentSshProfile();
+}
+
+async function copyGeneratedSshCommand() {
+  if (!connForm.sshHost.trim()) {
+    emit('notify', '请先填写 SSH 主机地址');
+    return;
+  }
+  const cmd = buildSshTunnelCommand(
+    {
+      host: connForm.sshHost,
+      port: connForm.sshPort,
+      username: connForm.sshUser,
+      keyFile: connForm.sshAuthType === 'KEY_PAIR' ? connForm.sshKeyFile : '',
+      localPort: connForm.sshLocalPort,
+    },
+    connForm.host || '127.0.0.1',
+    connForm.port || 3306,
+  );
+  try {
+    await navigator.clipboard.writeText(cmd);
+    emit('notify', '已复制 SSH 端口转发命令 (ssh -N -L ...)');
+  } catch {
+    emit('notify', cmd);
+  }
+}
+
+async function browseTlsOrKeyFile(target: 'sshKey' | 'ca' | 'cert' | 'key') {
+  try {
+    const picked = await pickCertificateOrKeyFile(target === 'sshKey' || target === 'key' ? 'key' : 'cert');
+    if (!picked) return;
+    if (target === 'sshKey') connForm.sshKeyFile = picked;
+    else if (target === 'ca') connForm.sslCaCert = picked;
+    else if (target === 'cert') connForm.sslClientCert = picked;
+    else connForm.sslClientKey = picked;
+  } catch (err) {
+    emit('notify', `选择文件失败: ${String(err)}`);
+  }
+}
+
+const schemaPatternTokens = computed(() =>
+  connForm.schemaPattern
+    .split(/[\s,;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean),
+);
+
+const allSchemasChecked = computed(() => {
+  if (schemaPatternTokens.value.length === 0) return true;
+  return schemaPatternTokens.value.some((t) => t.toLowerCase() === 'all' || t === '*');
+});
+
+const defaultSchemaChecked = computed(() =>
+  schemaPatternTokens.value.some((t) => t.toLowerCase() === 'default'),
+);
+
+const filteredSchemaRows = computed(() => {
+  const q = schemaSearchText.value.trim().toLowerCase();
+  if (!q) return fetchedSchemas.value;
+  return fetchedSchemas.value.filter((d) => d.name.toLowerCase().includes(q));
+});
+
+function isLiveSchemaSelected(name: string): boolean {
+  if (allSchemasChecked.value) return true;
+  return matchesFilterPattern(name, connForm.schemaPattern, connForm.database);
+}
+
+function toggleAllSchemasRule() {
+  if (allSchemasChecked.value) {
+    connForm.schemaPattern = connForm.database.trim() ? 'default' : '';
+  } else {
+    connForm.schemaPattern = '*';
+  }
+}
+
+function toggleDefaultSchemaRule() {
+  const tokens = schemaPatternTokens.value.filter(
+    (t) => t.toLowerCase() !== 'all' && t !== '*',
+  );
+  const idx = tokens.findIndex((t) => t.toLowerCase() === 'default');
+  if (idx >= 0) tokens.splice(idx, 1);
+  else tokens.unshift('default');
+  connForm.schemaPattern = tokens.join(', ');
+}
+
+function toggleLiveSchemaCheckbox(schemaName: string) {
+  let tokens = schemaPatternTokens.value.filter(
+    (t) => t.toLowerCase() !== 'all' && t !== '*',
+  );
+  if (allSchemasChecked.value && fetchedSchemas.value.length > 0) {
+    tokens = fetchedSchemas.value.map((d) => d.name).filter((n) => n !== schemaName);
+  } else {
+    const idx = tokens.findIndex((t) => t.toLowerCase() === schemaName.toLowerCase());
+    if (idx >= 0) {
+      tokens.splice(idx, 1);
+    } else {
+      tokens.push(schemaName);
+    }
+  }
+  connForm.schemaPattern = tokens.join(', ');
+}
+
+function selectAllVisibleSchemas() {
+  if (filteredSchemaRows.value.length === 0) {
+    connForm.schemaPattern = '*';
+    return;
+  }
+  if (!schemaSearchText.value.trim()) {
+    connForm.schemaPattern = '*';
+    return;
+  }
+  const existing = new Set(schemaPatternTokens.value.map((t) => t.toLowerCase()));
+  const next = [...schemaPatternTokens.value];
+  for (const row of filteredSchemaRows.value) {
+    if (!existing.has(row.name.toLowerCase())) next.push(row.name);
+  }
+  connForm.schemaPattern = next.join(', ');
+}
+
+function clearSchemaSelections() {
+  connForm.schemaPattern = '';
+}
+
+function invertSchemaSelections() {
+  if (fetchedSchemas.value.length === 0) return;
+  const currentSelected = new Set(
+    fetchedSchemas.value.filter((d) => isLiveSchemaSelected(d.name)).map((d) => d.name),
+  );
+  const inverted = fetchedSchemas.value
+    .map((d) => d.name)
+    .filter((name) => !currentSelected.has(name));
+  connForm.schemaPattern = inverted.join(', ');
+}
+
+async function refreshLiveSchemas() {
+  loadingSchemas.value = true;
+  try {
+    const draft = buildDraftPayload();
+    const pwd = connForm.password.length > 0 ? connForm.password : null;
+    fetchedSchemas.value = await listDatabasesDraft(draft, pwd);
+    testResult.value = {
+      ok: true,
+      text: `已加载 ${fetchedSchemas.value.length} 个数据库 / Schema`,
+    };
+    bannerExpanded.value = false;
+  } catch (err) {
+    testResult.value = { ok: false, text: String(err) };
+    bannerExpanded.value = false;
+  } finally {
+    loadingSchemas.value = false;
+  }
 }
 
 function formatServerVersion(version?: string | null, fallback?: string): string {
@@ -586,11 +907,20 @@ watch(
     if (modal !== 'connection') return;
     connTab.value = 'general';
     testResult.value = null;
+    bannerExpanded.value = false;
+    commentExpanded.value = false;
+    startupExpanded.value = false;
+    schemaPatternExpanded.value = false;
+    objectFilterExpanded.value = false;
     showPasswordPlain.value = false;
+    showSslKeyPasswordPlain.value = false;
     urlExpanded.value = false;
+    schemaSearchText.value = '';
+    fetchedSchemas.value = prof && props.editingProfileDatabases ? [...props.editingProfileDatabases] : [];
 
     if (prof) {
       const cfg = (prof.mode?.config ?? {}) as Partial<DirectConfig>;
+      const opt = cfg.options ?? {};
       connForm.id = prof.id ? prof.id : null;
       connForm.projectId = prof.projectId || props.activeProjectId || '';
       connForm.name = prof.name;
@@ -622,13 +952,54 @@ watch(
       connForm.jdbcUrl = cfg.jdbcUrl || buildUrlFromFields();
       connForm.env = prof.env ?? 'DEV';
       connForm.readOnly = Boolean(cfg.readOnly);
-      connForm.sslMode = cfg.ssl?.mode ?? (cfg.ssl && !cfg.ssl.enabled ? 'disabled' : '');
+      // Options
+      connForm.transactionControl = opt.transactionControl === 'manual' ? 'manual' : 'auto';
+      connForm.switchSchema = opt.switchSchema === 'manual' ? 'manual' : 'automatic';
+      connForm.timeZone = opt.timeZone ?? '';
+      connForm.singleSessionMode = Boolean(opt.singleSessionMode);
+      connForm.keepAliveEnabled = Boolean(opt.keepAliveEnabled);
+      connForm.keepAliveSec = String(opt.keepAliveSec ?? 60);
+      connForm.autoDisconnectEnabled = Boolean(opt.autoDisconnectEnabled);
+      connForm.autoDisconnectSec = String(opt.autoDisconnectSec ?? 300);
+      connForm.startupScript = opt.startupScript ?? '';
+      connForm.autoSync = opt.autoSync !== false;
+      connForm.introspectionLevel =
+        opt.introspectionLevel === 'level1' ||
+        opt.introspectionLevel === 'level2' ||
+        opt.introspectionLevel === 'level3'
+          ? opt.introspectionLevel
+          : 'auto';
+      // SSH
       connForm.sshEnabled = Boolean(cfg.ssh?.enabled);
+      connForm.sshConfigName = cfg.ssh?.configName ?? '';
       connForm.sshHost = cfg.ssh?.host ?? '';
       connForm.sshPort = cfg.ssh?.port ? String(cfg.ssh.port) : '22';
       connForm.sshUser = cfg.ssh?.username ?? '';
+      connForm.sshAuthType =
+        cfg.ssh?.authType === 'KEY_PAIR' || cfg.ssh?.authType === 'AGENT'
+          ? cfg.ssh.authType
+          : cfg.ssh?.keyFile
+            ? 'KEY_PAIR'
+            : 'PASSWORD';
       connForm.sshKeyFile = cfg.ssh?.keyFile ?? '';
+      connForm.sshLocalPort = cfg.ssh?.localPort ? String(cfg.ssh.localPort) : '';
+      // SSL
+      connForm.sslEnabled = Boolean(cfg.ssl?.enabled);
+      connForm.sslMode = cfg.ssl?.mode ?? (cfg.ssl && !cfg.ssl.enabled ? 'disabled' : 'preferred');
+      connForm.sslCaCert = cfg.ssl?.caCert ?? '';
+      connForm.sslUseIdeTruststore = cfg.ssl?.useIdeTruststore ?? true;
+      connForm.sslUseSystemTruststore = cfg.ssl?.useSystemTruststore ?? true;
+      connForm.sslClientCert = cfg.ssl?.clientCert ?? '';
+      connForm.sslClientKey = cfg.ssl?.clientKey ?? '';
+      connForm.sslClientKeyPassword = '';
+      connForm.sslClientKeyPwdSaveMode =
+        cfg.ssl?.clientKeyPasswordSaveMode === 'session' ||
+        cfg.ssl?.clientKeyPasswordSaveMode === 'never'
+          ? cfg.ssl.clientKeyPasswordSaveMode
+          : 'forever';
+      // Schemas
       connForm.schemaPattern = cfg.schemaPattern ?? '';
+      connForm.objectFilter = cfg.objectFilter ?? '';
       connForm.advancedProps = Object.entries(cfg.driverProperties ?? {}).map(([key, value]) => ({
         key,
         value,
@@ -654,13 +1025,36 @@ watch(
       connForm.jdbcUrl = 'jdbc:mysql://127.0.0.1:4000';
       connForm.env = 'DEV';
       connForm.readOnly = false;
-      connForm.sslMode = '';
+      connForm.transactionControl = 'auto';
+      connForm.switchSchema = 'automatic';
+      connForm.timeZone = '';
+      connForm.singleSessionMode = false;
+      connForm.keepAliveEnabled = false;
+      connForm.keepAliveSec = '60';
+      connForm.autoDisconnectEnabled = false;
+      connForm.autoDisconnectSec = '300';
+      connForm.startupScript = '';
+      connForm.autoSync = true;
+      connForm.introspectionLevel = 'auto';
       connForm.sshEnabled = false;
+      connForm.sshConfigName = '';
       connForm.sshHost = '';
       connForm.sshPort = '22';
       connForm.sshUser = '';
+      connForm.sshAuthType = 'PASSWORD';
       connForm.sshKeyFile = '';
+      connForm.sshLocalPort = '';
+      connForm.sslEnabled = false;
+      connForm.sslMode = 'preferred';
+      connForm.sslCaCert = '';
+      connForm.sslUseIdeTruststore = true;
+      connForm.sslUseSystemTruststore = true;
+      connForm.sslClientCert = '';
+      connForm.sslClientKey = '';
+      connForm.sslClientKeyPassword = '';
+      connForm.sslClientKeyPwdSaveMode = 'forever';
       connForm.schemaPattern = '';
+      connForm.objectFilter = '';
       connForm.advancedProps = [];
     }
   },
@@ -1201,7 +1595,7 @@ function runImportLiveTemplates() {
           </select>
         </div>
 
-        <div style="padding-left: 82px; margin-top: 2px">
+        <div style="padding-left: 82px; margin-top: 4px">
           <button
             v-if="!showCommentBox"
             class="conn-link-btn"
@@ -1209,13 +1603,30 @@ function runImportLiveTemplates() {
           >
             {{ t('connAddComment') }}
           </button>
-          <input
-            v-else
-            v-model="connForm.comment"
-            class="field"
-            style="margin-top: 4px"
-            placeholder="填写连接备注说明..."
-          />
+          <div v-else class="url-input-wrap" style="margin-top: 2px">
+            <textarea
+              v-if="commentExpanded"
+              v-model="connForm.comment"
+              class="field"
+              rows="2"
+              style="resize: vertical"
+              placeholder="填写连接备注说明..."
+            />
+            <input
+              v-else
+              v-model="connForm.comment"
+              class="field"
+              placeholder="填写连接备注说明..."
+            />
+            <button
+              class="url-expand-btn"
+              type="button"
+              title="展开 / 折叠备注框"
+              @click="commentExpanded = !commentExpanded"
+            >
+              ⤢
+            </button>
+          </div>
         </div>
 
         <!-- Tabs Row: General | Options | SSH/SSL | Schemas | Advanced  +  Save as Template -->
@@ -1470,6 +1881,14 @@ function runImportLiveTemplates() {
         <!-- TAB: OPTIONS -->
         <div v-else-if="connTab === 'options'" class="conn-rows">
           <div class="conn-row">
+            <label class="conn-row-label" />
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px">
+              <input v-model="connForm.readOnly" type="checkbox" />
+              <span>{{ t('connReadOnly') }}</span>
+            </label>
+          </div>
+
+          <div class="conn-row">
             <label class="conn-row-label">{{ t('connEnv') }}:</label>
             <select v-model="connForm.env" class="field">
               <option value="DEV">DEV（开发环境 · 绿色标签条）</option>
@@ -1477,77 +1896,544 @@ function runImportLiveTemplates() {
               <option value="PROD">PROD（生产环境 · 红色高危写拦截）</option>
             </select>
           </div>
+
           <div class="conn-row">
-            <label class="conn-row-label">安全保护:</label>
-            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px">
-              <input v-model="connForm.readOnly" type="checkbox" />
-              <span>{{ t('connReadOnly') }}</span>
+            <label class="conn-row-label">事务控制 (Transaction):</label>
+            <select v-model="connForm.transactionControl" class="field" style="max-width: 240px">
+              <option value="auto">Auto（自动提交）</option>
+              <option value="manual">Manual（手动提交）</option>
+            </select>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label">切换架构 (Switch schema):</label>
+            <select v-model="connForm.switchSchema" class="field" style="max-width: 240px">
+              <option value="automatic">Automatic（自动跟随选中库）</option>
+              <option value="manual">Manual（手动固定）</option>
+            </select>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label">会话时区 (Time zone):</label>
+            <select v-model="connForm.timeZone" class="field" style="max-width: 240px">
+              <option value="">默认（跟随数据库服务器时区）</option>
+              <option value="Asia/Shanghai">Asia/Shanghai (+08:00)</option>
+              <option value="UTC">UTC (+00:00)</option>
+              <option value="Asia/Tokyo">Asia/Tokyo (+09:00)</option>
+              <option value="America/New_York">America/New_York</option>
+              <option value="Europe/London">Europe/London</option>
+            </select>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label" />
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px">
+              <input v-model="connForm.singleSessionMode" type="checkbox" />
+              <span>单会话模式（Single session mode · 限制连接池为单连接）</span>
             </label>
           </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label" />
+            <div class="conn-inline-check-num">
+              <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer">
+                <input v-model="connForm.keepAliveEnabled" type="checkbox" />
+                <span>定时保活检测，间隔</span>
+              </label>
+              <input
+                v-model="connForm.keepAliveSec"
+                class="field conn-num-input"
+                type="number"
+                min="5"
+                :disabled="!connForm.keepAliveEnabled"
+              />
+              <span style="color: var(--text-secondary)">秒 (sec.)</span>
+            </div>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label" />
+            <div class="conn-inline-check-num">
+              <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer">
+                <input v-model="connForm.autoDisconnectEnabled" type="checkbox" />
+                <span>空闲自动断开，超时</span>
+              </label>
+              <input
+                v-model="connForm.autoDisconnectSec"
+                class="field conn-num-input"
+                type="number"
+                min="10"
+                :disabled="!connForm.autoDisconnectEnabled"
+              />
+              <span style="color: var(--text-secondary)">秒 (sec.)</span>
+            </div>
+          </div>
+
           <div class="conn-row align-start">
-            <label class="conn-row-label" style="padding-top: 5px">备注:</label>
-            <textarea
-              v-model="connForm.comment"
-              class="field"
-              rows="3"
-              placeholder="连接用途说明、负责人或集群信息..."
-            />
+            <label class="conn-row-label" style="padding-top: 5px">启动脚本 (Startup script):</label>
+            <div class="url-input-wrap">
+              <textarea
+                v-if="startupExpanded"
+                v-model="connForm.startupScript"
+                class="field"
+                rows="3"
+                style="font-family: var(--font-mono); resize: vertical"
+                placeholder="建立连接后自动执行的 SQL，如: SET SESSION sql_mode='STRICT_TRANS_TABLES'; 或 PRAGMA foreign_keys = ON;"
+              />
+              <input
+                v-else
+                v-model="connForm.startupScript"
+                class="field"
+                style="font-family: var(--font-mono)"
+                placeholder="如: PRAGMA foreign_keys = ON; 或 SET time_zone = '+08:00';"
+              />
+              <button
+                class="url-expand-btn"
+                type="button"
+                title="展开 / 折叠启动 SQL 脚本"
+                @click="startupExpanded = !startupExpanded"
+              >
+                ⤢
+              </button>
+            </div>
+          </div>
+
+          <div class="conn-section-divider">
+            <span>元数据内省 (Introspection)</span>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label" />
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px">
+              <input v-model="connForm.autoSync" type="checkbox" />
+              <span>自动同步库表结构 (Auto sync)</span>
+            </label>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label">默认内省级别:</label>
+            <select v-model="connForm.introspectionLevel" class="field" style="max-width: 240px">
+              <option value="auto">Auto select（自动按库规模选择）</option>
+              <option value="level1">Level 1（仅名称与基础库表）</option>
+              <option value="level2">Level 2（含列类型与注释）</option>
+              <option value="level3">Level 3（全量列、主键与索引）</option>
+            </select>
           </div>
         </div>
 
         <!-- TAB: SSH/SSL -->
         <div v-else-if="connTab === 'ssh'" class="conn-rows">
           <div class="conn-row">
-            <label class="conn-row-label">SSL / TLS 模式:</label>
-            <select v-model="connForm.sslMode" class="field">
-              <option value="">默认（Preferred 优先尝试 TLS，不支持时降级）</option>
-              <option value="disabled">禁用（Disabled / useSSL=false）</option>
-              <option value="required">强制加密（Required）</option>
-              <option value="verify_ca">校验证书链（Verify CA）</option>
-              <option value="verify_identity">严格校验主机名（Verify Identity）</option>
-            </select>
-          </div>
-
-          <div class="conn-row">
-            <label class="conn-row-label">SSH 跳板机:</label>
-            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px">
+            <label class="conn-row-label" />
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 500">
               <input v-model="connForm.sshEnabled" type="checkbox" />
-              <span>保存 SSH 隧道元数据配置（与 DBeaver 导入兼容）</span>
+              <span>启用 SSH 隧道 (Use SSH tunnel)</span>
             </label>
           </div>
 
-          <template v-if="connForm.sshEnabled">
+          <div class="conn-rows" :class="{ 'conn-section-dim': !connForm.sshEnabled }">
             <div class="conn-row">
-              <label class="conn-row-label">SSH 主机:</label>
-              <div class="conn-inline-pair">
-                <input v-model="connForm.sshHost" class="field" placeholder="bastion.internal" />
-                <label class="conn-row-label">端口:</label>
-                <input v-model="connForm.sshPort" class="field" placeholder="22" />
+              <label class="conn-row-label">SSH 配置档案:</label>
+              <div style="display: flex; align-items: center; gap: 6px">
+                <select
+                  class="field"
+                  :value="connForm.sshConfigName"
+                  :disabled="!connForm.sshEnabled"
+                  @change="selectSavedSshProfile(($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">&lt;新建 / 临时 SSH 配置&gt;</option>
+                  <option v-for="p in savedSshProfiles" :key="p.name" :value="p.name">
+                    {{ p.name }} ({{ p.username }}@{{ p.host }})
+                  </option>
+                </select>
+                <button
+                  class="btn btn-sm"
+                  type="button"
+                  :disabled="!connForm.sshEnabled"
+                  title="保存为可复用 SSH 档案"
+                  @click="saveCurrentSshProfile"
+                >
+                  保存
+                </button>
+                <button
+                  class="icon-btn"
+                  type="button"
+                  :disabled="!connForm.sshEnabled"
+                  title="复制生成新 SSH 档案"
+                  @click="duplicateSshProfile"
+                >
+                  <IdeIcon name="copy" :size="13" />
+                </button>
               </div>
             </div>
+
             <div class="conn-row">
-              <label class="conn-row-label">SSH 用户名:</label>
-              <input v-model="connForm.sshUser" class="field" placeholder="ops" />
+              <label class="conn-row-label">SSH 主机 / 端口:</label>
+              <div class="conn-inline-pair">
+                <input
+                  v-model="connForm.sshHost"
+                  class="field"
+                  :disabled="!connForm.sshEnabled"
+                  placeholder="bastion.internal"
+                />
+                <label class="conn-row-label">端口:</label>
+                <input
+                  v-model="connForm.sshPort"
+                  class="field"
+                  :disabled="!connForm.sshEnabled"
+                  placeholder="22"
+                />
+              </div>
             </div>
+
             <div class="conn-row">
-              <label class="conn-row-label">私钥路径:</label>
-              <input v-model="connForm.sshKeyFile" class="field" placeholder="C:/Users/.../.ssh/id_rsa" />
+              <label class="conn-row-label">SSH 用户 / 认证:</label>
+              <div class="conn-inline-pair">
+                <input
+                  v-model="connForm.sshUser"
+                  class="field"
+                  :disabled="!connForm.sshEnabled"
+                  placeholder="ops"
+                />
+                <label class="conn-row-label">认证:</label>
+                <select v-model="connForm.sshAuthType" class="field" :disabled="!connForm.sshEnabled">
+                  <option value="PASSWORD">Password</option>
+                  <option value="KEY_PAIR">Key pair</option>
+                  <option value="AGENT">SSH Agent</option>
+                </select>
+              </div>
             </div>
-          </template>
+
+            <div v-if="connForm.sshAuthType === 'KEY_PAIR'" class="conn-row">
+              <label class="conn-row-label">私钥文件:</label>
+              <div class="conn-file-input-wrap">
+                <input
+                  v-model="connForm.sshKeyFile"
+                  class="field"
+                  :disabled="!connForm.sshEnabled"
+                  placeholder="~/.ssh/id_ed25519 或 id_rsa"
+                />
+                <button
+                  class="icon-btn"
+                  type="button"
+                  :disabled="!connForm.sshEnabled"
+                  title="浏览本地私钥文件"
+                  @click="browseTlsOrKeyFile('sshKey')"
+                >
+                  <IdeIcon name="folder-open" :size="13" />
+                </button>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">本地映射端口:</label>
+              <div style="display: flex; align-items: center; gap: 10px">
+                <input
+                  v-model="connForm.sshLocalPort"
+                  class="field"
+                  style="max-width: 160px"
+                  :disabled="!connForm.sshEnabled"
+                  placeholder="<Dynamic>"
+                />
+                <button
+                  class="conn-link-btn"
+                  type="button"
+                  :disabled="!connForm.sshEnabled || !connForm.sshHost.trim()"
+                  title="生成标准 ssh -N -L 端口转发命令并复制到剪贴板"
+                  @click="copyGeneratedSshCommand"
+                >
+                  复制 ssh -L 命令
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div class="conn-section-divider">
+            <span>SSL / TLS 安全传输</span>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label" />
+            <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 500">
+              <input v-model="connForm.sslEnabled" type="checkbox" />
+              <span>启用 SSL / TLS 加密连接 (Use SSL)</span>
+            </label>
+          </div>
+
+          <div class="conn-rows" :class="{ 'conn-section-dim': !connForm.sslEnabled }">
+            <div class="conn-row">
+              <label class="conn-row-label">CA 根证书 (CA file):</label>
+              <div class="conn-file-input-wrap">
+                <input
+                  v-model="connForm.sslCaCert"
+                  class="field"
+                  :disabled="!connForm.sslEnabled"
+                  placeholder="可选，选择服务端 CA 证书 (.pem / .crt)"
+                />
+                <button
+                  class="icon-btn"
+                  type="button"
+                  :disabled="!connForm.sslEnabled"
+                  title="浏览 CA 证书文件"
+                  @click="browseTlsOrKeyFile('ca')"
+                >
+                  <IdeIcon name="folder-open" :size="13" />
+                </button>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">使用信任库:</label>
+              <div style="display: flex; align-items: center; gap: 16px; font-size: 12px">
+                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer">
+                  <input v-model="connForm.sslUseIdeTruststore" type="checkbox" :disabled="!connForm.sslEnabled" />
+                  <span>Pacer 内置</span>
+                </label>
+                <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer">
+                  <input v-model="connForm.sslUseSystemTruststore" type="checkbox" :disabled="!connForm.sslEnabled" />
+                  <span>操作系统信任库 (System)</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">客户端证书:</label>
+              <div class="conn-file-input-wrap">
+                <input
+                  v-model="connForm.sslClientCert"
+                  class="field"
+                  :disabled="!connForm.sslEnabled"
+                  placeholder="Client certificate file (.pem / .crt)"
+                />
+                <button
+                  class="icon-btn"
+                  type="button"
+                  :disabled="!connForm.sslEnabled"
+                  title="浏览客户端证书文件"
+                  @click="browseTlsOrKeyFile('cert')"
+                >
+                  <IdeIcon name="folder-open" :size="13" />
+                </button>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">客户端私钥:</label>
+              <div class="conn-file-input-wrap">
+                <input
+                  v-model="connForm.sslClientKey"
+                  class="field"
+                  :disabled="!connForm.sslEnabled"
+                  placeholder="Client key file (.key / .pem)"
+                />
+                <button
+                  class="icon-btn"
+                  type="button"
+                  :disabled="!connForm.sslEnabled"
+                  title="浏览客户端私钥文件"
+                  @click="browseTlsOrKeyFile('key')"
+                >
+                  <IdeIcon name="folder-open" :size="13" />
+                </button>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">私钥密码:</label>
+              <div class="conn-inline-pair">
+                <div class="url-input-wrap">
+                  <input
+                    v-model="connForm.sslClientKeyPassword"
+                    :type="showSslKeyPasswordPlain ? 'text' : 'password'"
+                    class="field"
+                    :disabled="!connForm.sslEnabled"
+                    placeholder="可选（无密码留空）"
+                  />
+                  <button
+                    class="url-expand-btn"
+                    type="button"
+                    :disabled="!connForm.sslEnabled"
+                    title="显示 / 隐藏私钥密码"
+                    @click="showSslKeyPasswordPlain = !showSslKeyPasswordPlain"
+                  >
+                    👁
+                  </button>
+                </div>
+                <label class="conn-row-label">保存:</label>
+                <select v-model="connForm.sslClientKeyPwdSaveMode" class="field" :disabled="!connForm.sslEnabled">
+                  <option value="forever">Forever</option>
+                  <option value="session">Until restart</option>
+                  <option value="never">Never</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="conn-row">
+              <label class="conn-row-label">校验模式 (Mode):</label>
+              <select v-model="connForm.sslMode" class="field" style="max-width: 240px" :disabled="!connForm.sslEnabled">
+                <option value="preferred">Preferred（优先加密）</option>
+                <option value="required">Require（必须加密）</option>
+                <option value="verify_ca">Verify CA（校验证书链）</option>
+                <option value="verify_identity">Verify Identity（严格校验主机名）</option>
+              </select>
+            </div>
+          </div>
         </div>
 
         <!-- TAB: SCHEMAS -->
         <div v-else-if="connTab === 'schemas'" class="conn-rows">
-          <div class="conn-row">
-            <label class="conn-row-label">默认 Schema 筛选:</label>
+          <div class="schemas-toolbar">
+            <div style="display: flex; align-items: center; gap: 4px">
+              <button
+                class="icon-btn compact"
+                type="button"
+                :disabled="loadingSchemas || busy"
+                title="从目标数据库实时拉取全部数据库 / Schema"
+                @click="refreshLiveSchemas"
+              >
+                <IdeIcon name="refresh" :size="12" />
+                <span>{{ loadingSchemas ? '拉取中...' : '刷新架构' }}</span>
+              </button>
+              <button
+                class="icon-btn compact"
+                type="button"
+                title="全选可见架构"
+                @click="selectAllVisibleSchemas"
+              >
+                全选
+              </button>
+              <button
+                class="icon-btn compact"
+                type="button"
+                title="清空筛选规则（展示全部）"
+                @click="clearSchemaSelections"
+              >
+                清空
+              </button>
+              <button
+                class="icon-btn compact"
+                type="button"
+                :disabled="fetchedSchemas.length === 0"
+                title="反选已勾选架构"
+                @click="invertSchemaSelections"
+              >
+                反选
+              </button>
+            </div>
             <input
-              v-model="connForm.schemaPattern"
+              v-model="schemaSearchText"
               class="field"
-              placeholder="例如：policy_*（留空显示全部可见数据库/Schema）"
+              style="max-width: 220px; padding: 3px 8px; font-size: 11.5px"
+              placeholder="筛选数据库 / Schema 名称..."
             />
           </div>
-          <div class="conn-helper-hint" style="padding-left: 122px">
-            连接成功后可在左侧数据库树中自由展开实例下的任意库表；TiDB / MySQL 允许 Database 留空直接连接。
+
+          <div class="schemas-checklist-box">
+            <label class="schema-check-row">
+              <input
+                type="checkbox"
+                :checked="allSchemasChecked"
+                @change="toggleAllSchemasRule"
+              />
+              <span style="font-weight: 600">All schemas</span>
+              <span style="font-size: 11px; color: var(--text-muted); margin-left: 6px">
+                展示该实例全部可见数据库 / Schema
+              </span>
+            </label>
+
+            <label class="schema-check-row">
+              <input
+                type="checkbox"
+                :checked="defaultSchemaChecked"
+                @change="toggleDefaultSchemaRule"
+              />
+              <span>Default schema</span>
+              <span v-if="connForm.database.trim()" style="font-size: 11px; color: var(--text-muted); margin-left: 6px">
+                ({{ connForm.database.trim() }})
+              </span>
+            </label>
+
+            <template v-if="filteredSchemaRows.length > 0">
+              <div class="dropdown-sep" style="margin: 4px 0" />
+              <label
+                v-for="db in filteredSchemaRows"
+                :key="db.name"
+                class="schema-check-row"
+              >
+                <input
+                  type="checkbox"
+                  :checked="isLiveSchemaSelected(db.name)"
+                  @change="toggleLiveSchemaCheckbox(db.name)"
+                />
+                <span style="font-family: var(--font-mono)">{{ db.name }}</span>
+                <span v-if="db.isSystem" class="pill pill-neutral" style="margin-left: auto">系统</span>
+              </label>
+            </template>
+            <div v-else style="padding: 12px 8px; font-size: 11.5px; color: var(--text-secondary)">
+              {{
+                loadingSchemas
+                  ? '⏳ 正在连接实例读取架构清单...'
+                  : '尚未加载服务端数据库列表，可点击左上角「刷新架构」实时拉取，或直接在下方输入匹配规则。'
+              }}
+            </div>
+          </div>
+
+          <div class="conn-row align-start">
+            <label class="conn-row-label" style="padding-top: 5px">架构模式 (Schema pattern):</label>
+            <div class="url-input-wrap">
+              <textarea
+                v-if="schemaPatternExpanded"
+                v-model="connForm.schemaPattern"
+                class="field"
+                rows="2"
+                style="font-family: var(--font-mono); resize: vertical"
+                placeholder="例如: app_*, prod_db, -tmp_*（支持通配符与负向排除 -）"
+              />
+              <input
+                v-else
+                v-model="connForm.schemaPattern"
+                class="field"
+                style="font-family: var(--font-mono)"
+                placeholder="例如: app_*, prod_db, -tmp_*（留空显示全部）"
+              />
+              <button
+                class="url-expand-btn"
+                type="button"
+                title="展开 / 折叠 Schema pattern"
+                @click="schemaPatternExpanded = !schemaPatternExpanded"
+              >
+                ⤢
+              </button>
+            </div>
+          </div>
+
+          <div class="conn-row align-start">
+            <label class="conn-row-label" style="padding-top: 5px">对象过滤器 (Object filter):</label>
+            <div class="url-input-wrap">
+              <textarea
+                v-if="objectFilterExpanded"
+                v-model="connForm.objectFilter"
+                class="field"
+                rows="2"
+                style="font-family: var(--font-mono); resize: vertical"
+                placeholder="例如: table:order_*, -*_bak, -tmp_*（支持 - 排除测试/备份表）"
+              />
+              <input
+                v-else
+                v-model="connForm.objectFilter"
+                class="field"
+                style="font-family: var(--font-mono)"
+                placeholder="例如: table:order_*, -*_bak（支持过滤数据表与视图）"
+              />
+              <button
+                class="url-expand-btn"
+                type="button"
+                title="展开 / 折叠 Object filter"
+                @click="objectFilterExpanded = !objectFilterExpanded"
+              >
+                ⤢
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1590,7 +2476,47 @@ function runImportLiveTemplates() {
         </div>
       </div>
 
-      <!-- Footer: Left Test Connection + inline version | Right OK / Cancel / Apply -->
+      <!-- Expandable Test / Schema Status Banner -->
+      <div
+        v-if="testingDraft || testResult"
+        class="conn-banner"
+        :class="testingDraft ? 'muted' : testResult?.ok ? 'ok' : 'err'"
+      >
+        <div class="conn-banner-head">
+          <span class="conn-banner-summary">
+            <template v-if="testingDraft">⏳ 正在测试连接连通性...</template>
+            <template v-else-if="testResult?.ok">✓ {{ testResult.text }}</template>
+            <template v-else>
+              <strong>⚠ Error:</strong> {{ testResult?.text }}
+            </template>
+          </span>
+          <div style="display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0">
+            <button
+              v-if="testResult && !testResult.ok"
+              class="conn-link-btn"
+              type="button"
+              @click="bannerExpanded = !bannerExpanded"
+            >
+              {{ bannerExpanded ? '收起详情' : '查看详情' }}
+            </button>
+            <button
+              v-if="testResult"
+              class="icon-btn compact"
+              type="button"
+              title="关闭提示"
+              @click="
+                testResult = null;
+                bannerExpanded = false;
+              "
+            >
+              ×
+            </button>
+          </div>
+        </div>
+        <pre v-if="bannerExpanded && testResult" class="conn-banner-detail">{{ testResult.text }}</pre>
+      </div>
+
+      <!-- Footer: Left Test Connection + Engine label | Right OK / Cancel / Apply -->
       <div class="conn-modal-footer">
         <div class="conn-test-zone">
           <button
@@ -1601,15 +2527,8 @@ function runImportLiveTemplates() {
           >
             {{ t('connTestBtn') }}
           </button>
-
-          <span v-if="testingDraft" class="conn-test-status muted">⏳ 正在测试连通性...</span>
-          <span
-            v-else-if="testResult"
-            class="conn-test-status"
-            :class="testResult.ok ? 'ok' : 'err'"
-            :title="testResult.text"
-          >
-            {{ testResult.ok ? `✓ ${testResult.text}` : `✕ ${testResult.text}` }}
+          <span style="font-size: 11.5px; color: var(--text-muted)">
+            {{ activeEngineMetaLabel }}
           </span>
         </div>
 

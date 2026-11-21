@@ -14,6 +14,7 @@ use pacer_core::{
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
 use crate::sqlite::stream_chunks;
+use crate::{build_connection_init_stmts, resolve_pool_limits};
 
 /// Native PostgreSQL / openGauss / KingbaseES backend powered by `sqlx`.
 pub struct PostgresBackend {
@@ -43,6 +44,19 @@ impl PostgresBackend {
         if let Some(ssl_mode) = resolve_pg_ssl_mode(config) {
             opts = opts.ssl_mode(ssl_mode);
         }
+        if let Some(ref ssl) = config.ssl {
+            if ssl.enabled {
+                if let Some(ca) = ssl.ca_cert.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    opts = opts.ssl_root_cert(ca);
+                }
+                if let Some(cert) = ssl.client_cert.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    opts = opts.ssl_client_cert(cert);
+                }
+                if let Some(key) = ssl.client_key.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    opts = opts.ssl_client_key(key);
+                }
+            }
+        }
 
         if let Some(pwd) = password {
             opts = opts.password(pwd);
@@ -51,9 +65,31 @@ impl PostgresBackend {
             opts = opts.database(db);
         }
 
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
+        let (max_conns, idle_timeout, test_before_acquire) =
+            resolve_pool_limits(config.options.as_ref());
+        let init_stmts =
+            build_connection_init_stmts(config.options.as_ref(), Some("SET TIME ZONE "));
+        let mut pool_opts = PgPoolOptions::new()
+            .max_connections(max_conns)
             .acquire_timeout(Duration::from_secs(8))
+            .test_before_acquire(test_before_acquire);
+        if let Some(idle) = idle_timeout {
+            pool_opts = pool_opts.idle_timeout(Some(idle));
+        }
+        if !init_stmts.is_empty() {
+            let stmts = init_stmts.clone();
+            pool_opts = pool_opts.after_connect(move |conn, _meta| {
+                let stmts = stmts.clone();
+                Box::pin(async move {
+                    for stmt in &stmts {
+                        let _ = conn.execute(stmt.as_str()).await;
+                    }
+                    Ok(())
+                })
+            });
+        }
+
+        let pool = pool_opts
             .connect_with(opts)
             .await
             .map_err(|e| CoreError::Transport(format!("PostgreSQL connection failed: {e}")))?;

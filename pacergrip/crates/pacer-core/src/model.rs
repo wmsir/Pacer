@@ -163,20 +163,28 @@ fn parse_hex_rgb(raw: &str) -> Option<(u8, u8, u8)> {
     None
 }
 
-/// SSH jump-host tunnel configuration imported from DataGrip `sshConfigs.xml`.
+fn default_true() -> bool {
+    true
+}
+
+/// SSH jump-host tunnel configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshTunnelConfig {
     pub id: Option<String>,
+    #[serde(default)]
+    pub config_name: Option<String>,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub auth_type: String,
     pub key_file: Option<String>,
+    #[serde(default)]
+    pub local_port: Option<u16>,
     pub enabled: bool,
 }
 
-/// TLS/SSL transport configuration parsed from DataGrip `<ssl-config>`.
+/// TLS/SSL transport configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SslConfig {
@@ -185,6 +193,58 @@ pub struct SslConfig {
     pub client_cert: Option<String>,
     pub client_key: Option<String>,
     pub mode: Option<String>,
+    #[serde(default)]
+    pub use_ide_truststore: bool,
+    #[serde(default)]
+    pub use_system_truststore: bool,
+    #[serde(default)]
+    pub client_key_password_save_mode: Option<String>,
+}
+
+/// Advanced session, keep-alive, time zone, startup script & introspection options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionOptionsConfig {
+    #[serde(default)]
+    pub transaction_control: Option<String>,
+    #[serde(default)]
+    pub switch_schema: Option<String>,
+    #[serde(default)]
+    pub time_zone: Option<String>,
+    #[serde(default)]
+    pub single_session_mode: bool,
+    #[serde(default)]
+    pub keep_alive_enabled: bool,
+    #[serde(default)]
+    pub keep_alive_sec: Option<u32>,
+    #[serde(default)]
+    pub auto_disconnect_enabled: bool,
+    #[serde(default)]
+    pub auto_disconnect_sec: Option<u32>,
+    #[serde(default)]
+    pub startup_script: Option<String>,
+    #[serde(default = "default_true")]
+    pub auto_sync: bool,
+    #[serde(default)]
+    pub introspection_level: Option<String>,
+}
+
+impl Default for ConnectionOptionsConfig {
+    fn default() -> Self {
+        Self {
+            transaction_control: Some("auto".to_string()),
+            switch_schema: Some("automatic".to_string()),
+            time_zone: None,
+            single_session_mode: false,
+            keep_alive_enabled: false,
+            keep_alive_sec: Some(60),
+            auto_disconnect_enabled: false,
+            auto_disconnect_sec: Some(300),
+            startup_script: None,
+            auto_sync: true,
+            introspection_level: Some("auto".to_string()),
+        }
+    }
 }
 
 /// Direct database connection configuration (passwords are never stored in plain JSON profiles).
@@ -204,6 +264,10 @@ pub struct DirectConfig {
     pub ssl: Option<SslConfig>,
     pub read_only: bool,
     pub schema_pattern: Option<String>,
+    #[serde(default)]
+    pub object_filter: Option<String>,
+    #[serde(default)]
+    pub options: Option<ConnectionOptionsConfig>,
     /// Connection mode: `"default"`, `"socket"`, or `"urlOnly"`.
     #[serde(default)]
     pub connection_type: Option<String>,

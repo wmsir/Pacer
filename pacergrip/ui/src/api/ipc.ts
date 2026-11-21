@@ -18,11 +18,13 @@ export interface CapabilityFlags {
 
 export interface SshTunnelConfig {
   id?: string | null;
+  configName?: string | null;
   host: string;
   port: number;
   username: string;
   authType: string;
   keyFile?: string | null;
+  localPort?: number | null;
   enabled: boolean;
 }
 
@@ -32,6 +34,23 @@ export interface SslConfig {
   clientCert?: string | null;
   clientKey?: string | null;
   mode?: string | null;
+  useIdeTruststore?: boolean;
+  useSystemTruststore?: boolean;
+  clientKeyPasswordSaveMode?: string | null;
+}
+
+export interface ConnectionOptionsConfig {
+  transactionControl?: string | null;
+  switchSchema?: string | null;
+  timeZone?: string | null;
+  singleSessionMode?: boolean;
+  keepAliveEnabled?: boolean;
+  keepAliveSec?: number | null;
+  autoDisconnectEnabled?: boolean;
+  autoDisconnectSec?: number | null;
+  startupScript?: string | null;
+  autoSync?: boolean;
+  introspectionLevel?: string | null;
 }
 
 export interface DirectConfig {
@@ -48,6 +67,8 @@ export interface DirectConfig {
   ssh?: SshTunnelConfig | null;
   ssl?: SslConfig | null;
   schemaPattern?: string | null;
+  objectFilter?: string | null;
+  options?: ConnectionOptionsConfig | null;
   connectionType?: 'default' | 'socket' | 'urlOnly' | string | null;
   authType?: 'userPassword' | 'noAuth' | string | null;
   passwordSaveMode?: 'forever' | 'session' | 'never' | string | null;
@@ -118,8 +139,11 @@ export interface ConnectionDraft {
   socketPath?: string | null;
   driverProperties?: Record<string, string>;
   sslMode?: string | null;
+  ssl?: SslConfig | null;
   ssh?: SshTunnelConfig | null;
   schemaPattern?: string | null;
+  objectFilter?: string | null;
+  options?: ConnectionOptionsConfig | null;
 }
 
 export interface DbeaverDiscoveryItem {
@@ -359,6 +383,24 @@ export async function pickDbeaverFolder(): Promise<string | null> {
   return typeof res === 'string' ? res : null;
 }
 
+export async function pickCertificateOrKeyFile(
+  kind: 'cert' | 'key' = 'cert',
+): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: false,
+    filters: [
+      {
+        name: kind === 'key' ? 'Private Key / Identity Files' : 'Certificates / PEM Files',
+        extensions: ['pem', 'crt', 'cer', 'key', 'p12', 'pfx', 'ppk'],
+      },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
 export async function listProjects(): Promise<WorkspaceProject[]> {
   assertTauri();
   return invoke('list_projects_cmd');
@@ -460,6 +502,14 @@ export async function listDatabases(
 ): Promise<DatabaseMeta[]> {
   assertTauri();
   return invoke('list_databases_cmd', { profileId, password: password ?? null });
+}
+
+export async function listDatabasesDraft(
+  draft: ConnectionDraft,
+  password?: string | null,
+): Promise<DatabaseMeta[]> {
+  assertTauri();
+  return invoke('list_databases_draft_cmd', { draft, password: password ?? null });
 }
 
 export async function listTables(profileId: string, dbName: string): Promise<TableMeta[]> {

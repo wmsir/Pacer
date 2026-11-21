@@ -1240,3 +1240,86 @@ export function buildExplainPlanSql(
     canRunDirectly,
   };
 }
+
+// ==================== Schema & Object Pattern Filter + SSH Command Helpers ====================
+
+function globToRegex(glob: string): RegExp {
+  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`, 'i');
+}
+
+/**
+ * Matches a schema, database, table, or view name against comma/whitespace-separated glob patterns.
+ * Supports positive rules (`app_*`, `all`, `*`, `default`), exclusion rules (`-tmp_*`, `-*_bak`),
+ * and optional object-kind prefixes (`table:*`, `view:*`, `schema:*`). Empty pattern matches all.
+ */
+export function matchesFilterPattern(
+  name: string,
+  pattern?: string | null,
+  defaultName?: string | null,
+): boolean {
+  const raw = (pattern ?? '').trim();
+  if (!raw) return true;
+
+  const tokens = raw
+    .split(/[\s,;]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  if (tokens.length === 0) return true;
+
+  const includes: RegExp[] = [];
+  const excludes: RegExp[] = [];
+  let hasAll = false;
+
+  for (const rawToken of tokens) {
+    const isExclude = rawToken.startsWith('-') && rawToken.length > 1;
+    let body = isExclude ? rawToken.slice(1).trim() : rawToken;
+    body = body.replace(/^(?:table|view|schema):/i, '').trim();
+    if (!body) continue;
+
+    const lower = body.toLowerCase();
+    if (!isExclude && (lower === 'all' || lower === '*')) {
+      hasAll = true;
+      continue;
+    }
+    if (!isExclude && lower === 'default') {
+      if (defaultName && defaultName.trim()) {
+        includes.push(globToRegex(defaultName.trim()));
+      }
+      continue;
+    }
+    if (isExclude) {
+      excludes.push(globToRegex(body));
+    } else {
+      includes.push(globToRegex(body));
+    }
+  }
+
+  for (const ex of excludes) {
+    if (ex.test(name)) return false;
+  }
+  if (hasAll || includes.length === 0) return true;
+  return includes.some((inc) => inc.test(name));
+}
+
+export function buildSshTunnelCommand(
+  ssh: {
+    host: string;
+    port?: number | string | null;
+    username?: string | null;
+    keyFile?: string | null;
+    localPort?: number | string | null;
+  },
+  targetHost: string,
+  targetPort: number | string,
+): string {
+  const host = (ssh.host || 'bastion.example.com').trim();
+  const sshPort = Number(ssh.port) || 22;
+  const user = (ssh.username || 'ops').trim();
+  const localPort = Number(ssh.localPort) || Number(targetPort) || 13306;
+  const dbHost = (targetHost || '127.0.0.1').trim();
+  const dbPort = Number(targetPort) || 3306;
+  const keyPart = ssh.keyFile?.trim() ? ` -i "${ssh.keyFile.trim()}"` : '';
+  const portPart = sshPort !== 22 ? ` -p ${sshPort}` : '';
+  return `ssh -N -L ${localPort}:${dbHost}:${dbPort}${keyPart}${portPart} ${user}@${host}`;
+}
