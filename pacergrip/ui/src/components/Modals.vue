@@ -20,6 +20,7 @@ import type { GridMutationPreviewPayload } from './ResultGrid.vue';
 import IdeIcon from './IdeIcon.vue';
 import { formatBytes } from '../utils/sqlTools';
 import {
+  IS_MAC,
   SHORTCUT_ACTIONS,
   SHORTCUT_CATEGORY_LABELS,
   eventToCombo,
@@ -2020,7 +2021,10 @@ onBeforeUnmount(() => {
           color: var(--text-secondary);
         "
       >
-        <span>提示：点击任意快捷键徽章后直接按组合键即可生效（如 Ctrl+Q、F5、Alt+L），修改立即自动保存。</span>
+        <span>
+          提示：点击任意快捷键徽章后直接按组合键即可生效（如
+          {{ IS_MAC ? '⌘+Q、F5、⌥+L' : 'Ctrl+Q、F5、Alt+L' }}），修改立即自动保存。
+        </span>
         <button
           class="btn btn-primary"
           @click="

@@ -61,11 +61,139 @@ fn is_dir_writable(dir: &Path) -> bool {
     }
 }
 
-/// Prefers `<exe_dir>/pacer-workspace` so portable builds keep all projects, connections,
-/// temporary console scripts, and local plugins next to Pacer.exe; falls back to AppData if read-only.
+#[cfg(target_os = "macos")]
+fn is_restricted_macos_bundle_parent(bundle_parent: &Path) -> bool {
+    let norm = bundle_parent.to_string_lossy().replace('\\', "/");
+    norm == "/Applications"
+        || norm.starts_with("/Applications/")
+        || norm == "/System"
+        || norm.starts_with("/System/")
+        || norm == "/Library"
+        || norm.starts_with("/Library/")
+        || norm == "/usr"
+        || norm.starts_with("/usr/")
+        || norm == "/Volumes"
+        || norm.starts_with("/Volumes/")
+        || norm.contains("/AppTranslocation/")
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_macos_bundle_parent(exe_dir: &Path) -> Option<std::path::PathBuf> {
+    let is_macos_dir = exe_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("MacOS"));
+    if !is_macos_dir {
+        return None;
+    }
+    let contents_dir = exe_dir.parent()?;
+    let is_contents_dir = contents_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case("Contents"));
+    if !is_contents_dir {
+        return None;
+    }
+    let app_bundle = contents_dir.parent()?;
+    let is_app_bundle = app_bundle
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.to_ascii_lowercase().ends_with(".app"));
+    if !is_app_bundle {
+        return None;
+    }
+    app_bundle.parent().map(|p| p.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn build_macos_menu<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> tauri::Result<tauri::menu::Menu<R>> {
+    use tauri::menu::{AboutMetadata, Menu, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID};
+
+    let pkg_info = app_handle.package_info();
+    let config = app_handle.config();
+    let about_metadata = AboutMetadata {
+        name: Some(pkg_info.name.clone()),
+        version: Some(pkg_info.version.to_string()),
+        copyright: config.bundle.copyright.clone(),
+        authors: config.bundle.publisher.clone().map(|p| vec![p]),
+        ..Default::default()
+    };
+
+    let app_menu = Submenu::with_items(
+        app_handle,
+        pkg_info.name.clone(),
+        true,
+        &[
+            &PredefinedMenuItem::about(app_handle, None, Some(about_metadata))?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::services(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::hide(app_handle, None)?,
+            &PredefinedMenuItem::hide_others(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::quit(app_handle, None)?,
+        ],
+    )?;
+
+    // Keep standard Edit menu items so Cmd+C / Cmd+V / Cmd+X / Cmd+A / Cmd+Z work natively in WKWebView.
+    let edit_menu = Submenu::with_items(
+        app_handle,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app_handle, None)?,
+            &PredefinedMenuItem::redo(app_handle, None)?,
+            &PredefinedMenuItem::separator(app_handle)?,
+            &PredefinedMenuItem::cut(app_handle, None)?,
+            &PredefinedMenuItem::copy(app_handle, None)?,
+            &PredefinedMenuItem::paste(app_handle, None)?,
+            &PredefinedMenuItem::select_all(app_handle, None)?,
+        ],
+    )?;
+
+    let view_menu = Submenu::with_items(
+        app_handle,
+        "View",
+        true,
+        &[&PredefinedMenuItem::fullscreen(app_handle, None)?],
+    )?;
+
+    // Omit PredefinedMenuItem::close_window so Cmd+W routes to Pacer's editor tab close action.
+    let window_menu = Submenu::with_id_and_items(
+        app_handle,
+        WINDOW_SUBMENU_ID,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app_handle, None)?,
+            &PredefinedMenuItem::maximize(app_handle, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app_handle, &[&app_menu, &edit_menu, &view_menu, &window_menu])
+}
+
+/// Prefers `<exe_dir>/pacer-workspace` on Windows/Linux (or next to `Pacer.app` in custom writable
+/// folders on macOS); falls back to OS AppData / Application Support when inside `/Applications`,
+/// DMG volumes, Gatekeeper AppTranslocation, or read-only locations.
 fn resolve_workspace_dir(fallback_app_data: &Path) -> (std::path::PathBuf, bool) {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(bundle_parent) = resolve_macos_bundle_parent(exe_dir) {
+                    if !is_restricted_macos_bundle_parent(&bundle_parent) {
+                        let portable_dir = bundle_parent.join("pacer-workspace");
+                        if is_dir_writable(&portable_dir) {
+                            return (portable_dir, true);
+                        }
+                    }
+                    let _ = std::fs::create_dir_all(fallback_app_data);
+                    return (fallback_app_data.to_path_buf(), false);
+                }
+            }
             let portable_dir = exe_dir.join("pacer-workspace");
             if is_dir_writable(&portable_dir) {
                 return (portable_dir, true);
@@ -79,8 +207,15 @@ fn resolve_workspace_dir(fallback_app_data: &Path) -> (std::path::PathBuf, bool)
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .enable_macos_default_menu(false)
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(menu) = build_macos_menu(app.handle()) {
+                    let _ = app.set_menu(menu);
+                }
+            }
             let fallback_app_data = app
                 .path()
                 .app_data_dir()

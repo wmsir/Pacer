@@ -3,6 +3,10 @@ import { computed, ref } from 'vue';
 export type Locale = 'zh-CN' | 'en-US';
 
 const STORAGE_KEY = 'pacergrip.locale';
+const MOD_KEY =
+  typeof navigator !== 'undefined' && /mac|darwin/i.test(navigator.platform || navigator.userAgent)
+    ? '⌘'
+    : 'Ctrl';
 const initialLocale = (typeof localStorage !== 'undefined'
   ? (localStorage.getItem(STORAGE_KEY) as Locale | null)
   : null) ?? 'zh-CN';
@@ -60,7 +64,7 @@ const MESSAGES = {
     newConnection: '新建数据源',
     importDbeaver: '导入 DBeaver 连接...',
     exportDbeaver: '导出 DBeaver JSON',
-    searchEverywhere: '随处搜索 (Ctrl+K)',
+    searchEverywhere: `随处搜索 (${MOD_KEY}+K)`,
     shortcutsTitle: '快捷键参考',
     extensionsTitle: '扩展插槽',
     themeDark: '深色 Darcula',
@@ -93,7 +97,7 @@ const MESSAGES = {
     mdPreviewOnly: '仅预览',
     mdSqlBlocks: '文档 SQL 块',
     mdNoBlocks: '当前 Markdown 未检测到 ```sql 代码块',
-    mdRunHint: '选中任意 SQL 按 Ctrl+Enter 或点击代码块上方 ▶ 直接执行',
+    mdRunHint: `选中任意 SQL 按 ${MOD_KEY}+Enter 或点击代码块上方 ▶ 直接执行`,
     statusLineCol: '行 {line}, 列 {col}',
     statusSelection: '已选 {chars} 字符 ({lines} 行)',
     statusTotalLines: '共 {count} 行',
@@ -110,7 +114,7 @@ const MESSAGES = {
     copyInsertSql: '复制为 INSERT SQL',
     copyDdl: '复制 DDL',
     copyJson: '复制 JSON',
-    emptyGridHint: '按 Ctrl+Enter 执行当前语句或选中 SQL；在 .md 文件中可直接选中 SQL 或点击代码块上的 ▶ 执行。',
+    emptyGridHint: `按 ${MOD_KEY}+Enter 执行当前语句或选中 SQL；在 .md 文件中可直接选中 SQL 或点击代码块上的 ▶ 执行。`,
     emptyHistoryHint: '尚无 SQL 执行记录，执行查询后将自动记录在此处。',
     emptyFilesHint: '点击上方按钮挂载本地脚本/文档目录，或直接打开单个 .md / .sql 文件。',
     emptyStructureHint: '在左侧数据库树点击任意数据表，即可在此检视字段、索引与建表 DDL。',
@@ -168,7 +172,7 @@ const MESSAGES = {
     dangerConfirm: '确认执行',
     encodingModalTitle: '文件编码与行尾符设置',
     encodingReload: '以此编码重新解码文件',
-    encodingConvert: '切换保存编码（下次 Ctrl+S 生效）',
+    encodingConvert: `切换保存编码（下次 ${MOD_KEY}+S 生效）`,
     encodingDesc: '支持 UTF-8、UTF-8 BOM、GBK (GB18030)、UTF-16 LE/BE 与 Windows-1252，解决中文文档与旧版 SQL 脚本乱码问题。',
     passwordPromptTitle: '输入数据库连接密码',
     passwordPromptHint: '密码仅缓存在当前桌面会话内存中，关闭应用自动清除。',
@@ -231,7 +235,7 @@ const MESSAGES = {
     newConnection: 'New Data Source',
     importDbeaver: 'Import DBeaver Connections...',
     exportDbeaver: 'Export DBeaver JSON',
-    searchEverywhere: 'Search Everywhere (Ctrl+K)',
+    searchEverywhere: `Search Everywhere (${MOD_KEY}+K)`,
     shortcutsTitle: 'Keyboard Shortcuts',
     extensionsTitle: 'Extensions',
     themeDark: 'Darcula Dark',
@@ -264,7 +268,7 @@ const MESSAGES = {
     mdPreviewOnly: 'Preview',
     mdSqlBlocks: 'SQL Blocks',
     mdNoBlocks: 'No fenced ```sql blocks detected in this Markdown document',
-    mdRunHint: 'Select any SQL and press Ctrl+Enter, or click ▶ above any SQL fence',
+    mdRunHint: `Select any SQL and press ${MOD_KEY}+Enter, or click ▶ above any SQL fence`,
     statusLineCol: 'Ln {line}, Col {col}',
     statusSelection: '{chars} chars ({lines} ln) selected',
     statusTotalLines: '{count} lines',
@@ -281,7 +285,7 @@ const MESSAGES = {
     copyInsertSql: 'Copy as INSERT SQL',
     copyDdl: 'Copy DDL',
     copyJson: 'Copy JSON',
-    emptyGridHint: 'Press Ctrl+Enter to run the statement at cursor or selected SQL; in .md files click ▶ above SQL blocks.',
+    emptyGridHint: `Press ${MOD_KEY}+Enter to run the statement at cursor or selected SQL; in .md files click ▶ above SQL blocks.`,
     emptyHistoryHint: 'No query history yet.',
     emptyFilesHint: 'Mount a local SQL/Markdown directory or open an individual .md / .sql file.',
     emptyStructureHint: 'Select any table in Database Explorer to inspect columns, indexes, and DDL.',
@@ -330,7 +334,7 @@ const MESSAGES = {
     dangerConfirm: 'Execute Anyway',
     encodingModalTitle: 'File Encoding & Line Separator',
     encodingReload: 'Reload File with Encoding',
-    encodingConvert: 'Set Save Encoding (applied on Ctrl+S)',
+    encodingConvert: `Set Save Encoding (applied on ${MOD_KEY}+S)`,
     encodingDesc: 'Supports UTF-8, UTF-8 BOM, GBK (GB18030), UTF-16 LE/BE, and Windows-1252.',
     importModalTitle: 'DBeaver Connection Import / Export',
     importPathLabel: 'DBeaver data-sources.json / .dbp archive / .dbeaver folder / .xml path',

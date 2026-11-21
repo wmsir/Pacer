@@ -1590,6 +1590,19 @@ table.dg-grid td.num-cell {
   border-color: var(--accent);
 }
 
+.project-switcher.in-run-widget {
+  height: 24px;
+  padding: 0 7px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  max-width: 150px;
+}
+
+.project-switcher.in-run-widget:hover {
+  background: var(--bg-hover);
+}
+
 .project-dot {
   width: 8px;
   height: 8px;

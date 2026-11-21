@@ -65,9 +65,16 @@ import {
   extractSingleTableTarget,
   formatBytes,
   parseMarkdownSegments,
+  quoteIdentifier,
   type SqlSnippet,
 } from './utils/sqlTools';
-import { matchesCombo, useKeymap } from './utils/keymap';
+import {
+  FILE_MANAGER_LABEL,
+  IS_MAC,
+  formatComboDisplay,
+  matchesCombo,
+  useKeymap,
+} from './utils/keymap';
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
 import DatabaseTree from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
@@ -267,6 +274,69 @@ const projectConnections = computed(() => {
   );
 });
 
+const FILE_DB_BINDINGS_KEY = 'pacer.fileDbBindings.v1';
+
+interface FileDbBinding {
+  projectId?: string;
+  profileId: string;
+  dbName: string;
+  updatedAt: number;
+}
+
+function normalizeBindingPath(path: string): string {
+  const norm = path.replace(/\\/g, '/').trim();
+  return IS_MAC ? norm : norm.toLowerCase();
+}
+
+function loadFileDbBindings(): Record<string, FileDbBinding> {
+  try {
+    const raw = localStorage.getItem(FILE_DB_BINDINGS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, FileDbBinding>) : {};
+  } catch {
+    return {};
+  }
+}
+
+const fileDbBindings: Record<string, FileDbBinding> = loadFileDbBindings();
+
+function getFileDbBinding(path?: string | null): FileDbBinding | null {
+  if (!path) return null;
+  const key = normalizeBindingPath(path);
+  return fileDbBindings[key] ?? null;
+}
+
+function saveFileDbBinding(
+  path: string | null | undefined,
+  profileId: string,
+  dbName: string,
+  projectId?: string,
+) {
+  if (!path || !profileId) return;
+  const key = normalizeBindingPath(path);
+  fileDbBindings[key] = {
+    projectId,
+    profileId,
+    dbName: dbName || '',
+    updatedAt: Date.now(),
+  };
+  const keys = Object.keys(fileDbBindings);
+  if (keys.length > 300) {
+    keys
+      .sort((a, b) => (fileDbBindings[a]?.updatedAt ?? 0) - (fileDbBindings[b]?.updatedAt ?? 0))
+      .slice(0, keys.length - 300)
+      .forEach((oldKey) => {
+        delete fileDbBindings[oldKey];
+      });
+  }
+  try {
+    localStorage.setItem(FILE_DB_BINDINGS_KEY, JSON.stringify(fileDbBindings));
+  } catch {
+    // non-fatal
+  }
+}
+
 const connections = ref<ConnectionProfile[]>([]);
 const databasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
 const tablesByKey = reactive<Record<string, TableMeta[]>>({});
@@ -346,7 +416,7 @@ const allSnippets = computed(() => {
 // Editor Tabs State
 let consoleCounter = 1;
 const defaultConsoleSql = `-- Pacer · 原生 SQL 控制台
--- 快捷键：Ctrl+Enter 执行当前语句或选中 SQL ｜ Ctrl+Shift+Enter 执行全部 ｜ Ctrl+O 打开 .md/.sql 文件
+-- 快捷键：${formatComboDisplay('Ctrl+Enter')} 执行当前语句或选中 SQL ｜ ${formatComboDisplay('Ctrl+Shift+Enter')} 执行全部 ｜ ${formatComboDisplay('Ctrl+O')} 打开 .md/.sql 文件
 -- 提示：支持多项目多数据源管理、结果集直接双击修改生成 SQL，以及 Markdown 选中 SQL 直接执行
 
 SELECT
@@ -699,7 +769,15 @@ async function selectProject(projectId: string) {
       activeTab.value.dbName = '';
     }
     if (next) {
-      void loadDatabasesForProfile(next, true);
+      await loadDatabasesForProfile(next, true);
+      if (activeTab.value?.path && activeTab.value.profileId === next.id) {
+        saveFileDbBinding(
+          activeTab.value.path,
+          next.id,
+          activeTab.value.dbName || '',
+          next.projectId || projectId,
+        );
+      }
     }
   }
   if (proj.rootDir) {
@@ -788,14 +866,21 @@ async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFir
     const dbs = await listDatabases(profile.id);
     databasesByProfile[profile.id] = dbs;
     expandedProfiles[profile.id] = true;
-    const defaultDb = dbs.find((d) => !d.isSystem)?.name ?? dbs[0]?.name ?? '';
+    const preferredDb = profile.fingerprint.database?.trim();
+    const defaultDb =
+      (preferredDb ? dbs.find((d) => d.name === preferredDb)?.name : undefined) ??
+      dbs.find((d) => !d.isSystem)?.name ??
+      dbs[0]?.name ??
+      '';
     if (autoSelectFirst && defaultDb) {
-      if (selectedProfileId.value === profile.id) {
+      if (selectedProfileId.value === profile.id && !selectedDbName.value) {
         selectedDbName.value = defaultDb;
       }
       if (activeTab.value && activeTab.value.profileId === profile.id) {
-        activeTab.value.dbName = defaultDb;
-        await loadTablesForDb(profile, defaultDb);
+        if (!activeTab.value.dbName) {
+          activeTab.value.dbName = defaultDb;
+        }
+        await loadTablesForDb(profile, activeTab.value.dbName);
       } else if (!activeTab.value && selectedProfileId.value === profile.id) {
         await loadTablesForDb(profile, defaultDb);
       }
@@ -859,11 +944,45 @@ function syncActiveProjectForProfile(profile: ConnectionProfile) {
   }
 }
 
+async function applyTabDatabaseBinding(
+  tab: EditorTab | null | undefined,
+  preferSavedFileBinding = false,
+) {
+  if (!tab) return;
+  if (preferSavedFileBinding && tab.path) {
+    const saved = getFileDbBinding(tab.path);
+    if (saved && connections.value.some((c) => c.id === saved.profileId)) {
+      tab.profileId = saved.profileId;
+      tab.dbName = saved.dbName || '';
+    }
+  }
+  const prof = connections.value.find((c) => c.id === tab.profileId);
+  if (!prof) return;
+  syncActiveProjectForProfile(prof);
+  selectedProfileId.value = prof.id;
+  selectedDbName.value = tab.dbName || '';
+  if (!databasesByProfile[prof.id]) {
+    await loadDatabasesForProfile(prof, !tab.dbName);
+  }
+  const targetDb = tab.dbName || selectedDbName.value;
+  if (targetDb && !tablesByKey[`${prof.id}:${targetDb}`]) {
+    void loadTablesForDb(prof, targetDb);
+  }
+}
+
 async function toggleProfileNode(profile: ConnectionProfile) {
   syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
+    if (activeTab.value.path) {
+      saveFileDbBinding(
+        activeTab.value.path,
+        profile.id,
+        activeTab.value.dbName || '',
+        profile.projectId || activeProjectId.value,
+      );
+    }
   }
   if (expandedProfiles[profile.id]) {
     expandedProfiles[profile.id] = false;
@@ -879,6 +998,14 @@ async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
     activeTab.value.dbName = dbName;
+    if (activeTab.value.path) {
+      saveFileDbBinding(
+        activeTab.value.path,
+        profile.id,
+        dbName,
+        profile.projectId || activeProjectId.value,
+      );
+    }
   }
   const key = `${profile.id}:${dbName}`;
   if (expandedDatabases[key]) {
@@ -931,6 +1058,18 @@ async function handleProfileSelectChange(profileId: string) {
   if (prof) {
     syncActiveProjectForProfile(prof);
     await loadDatabasesForProfile(prof, true);
+    const finalDb = activeTab.value?.dbName || selectedDbName.value || '';
+    if (activeTab.value?.path && activeTab.value.profileId === prof.id) {
+      saveFileDbBinding(
+        activeTab.value.path,
+        prof.id,
+        finalDb,
+        prof.projectId || activeProjectId.value,
+      );
+      setStatus(
+        `已为 ${activeTab.value.title} 记住执行数据源: ${prof.name}${finalDb ? ` / ${finalDb}` : ''}`,
+      );
+    }
   }
 }
 
@@ -939,6 +1078,17 @@ async function handleDbSelectChange(dbName: string) {
   const tab = activeTab.value;
   if (tab) {
     tab.dbName = dbName;
+    if (tab.path && activeProfile.value) {
+      saveFileDbBinding(
+        tab.path,
+        activeProfile.value.id,
+        dbName,
+        activeProfile.value.projectId || activeProjectId.value,
+      );
+      setStatus(
+        `已为 ${tab.title} 记住执行数据库: ${activeProfile.value.name}${dbName ? ` / ${dbName}` : ''}`,
+      );
+    }
   }
   if (!activeProfile.value) return;
   if (dbName) {
@@ -1157,11 +1307,13 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
   syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   selectedDbName.value = dbName;
-  if (activeTab.value) {
+  if (activeTab.value && !activeTab.value.path) {
     activeTab.value.profileId = profile.id;
     activeTab.value.dbName = dbName;
   }
-  const sql = `SELECT * FROM ${tableName} LIMIT 100;`;
+  const engineKey = engineKeyOf(profile);
+  const quotedTable = quoteIdentifier(tableName, engineKey);
+  const sql = `SELECT * FROM ${quotedTable} LIMIT 100;`;
   await executeStatementsBatch([sql], `${tableName} (前100行)`, profile, dbName, tableName);
 }
 
@@ -1183,8 +1335,11 @@ async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableNa
 function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: string) {
   const cKey = `${profile.id}:${dbName}:${tableName}`;
   const cols = columnsByKey[cKey] ?? [];
-  const colList = cols.length > 0 ? cols.map((c) => `  ${c.name}`).join(',\n') : '  *';
-  const snippet = `SELECT\n${colList}\nFROM ${tableName}\nLIMIT 100;\n`;
+  const engineKey = engineKeyOf(profile);
+  const quotedTable = quoteIdentifier(tableName, engineKey);
+  const colList =
+    cols.length > 0 ? cols.map((c) => `  ${quoteIdentifier(c.name, engineKey)}`).join(',\n') : '  *';
+  const snippet = `SELECT\n${colList}\nFROM ${quotedTable}\nLIMIT 100;\n`;
   if (!activeTab.value) {
     createNewConsoleTab(snippet, profile.id, dbName);
   } else {
@@ -1405,6 +1560,10 @@ async function executeStatementsBatch(
   const availableTables = (tablesByKey[`${profile.id}:${dbName}`] ?? []).map((t) => t.name);
   const engineKey = engineKeyOf(profile);
   const readOnly = isProfileReadOnly(profile);
+
+  if (!explicitTableName && activeTab.value?.path) {
+    saveFileDbBinding(activeTab.value.path, profile.id, dbName, targetProjectId);
+  }
 
   try {
     for (let idx = 0; idx < statements.length; idx += 1) {
@@ -2026,6 +2185,12 @@ function recordRecentFile(path: string) {
 function openFileDtoInTab(dto: OpenedFileDto) {
   const existing = tabs.value.find((t) => t.path && t.path === dto.path);
   const defaultMdMode = window.innerWidth >= 1120 ? 'split' : 'source';
+  const savedBinding = getFileDbBinding(dto.path);
+  const boundProf = savedBinding
+    ? connections.value.find((c) => c.id === savedBinding.profileId)
+    : undefined;
+
+  let targetTab: EditorTab;
   if (existing) {
     existing.content = dto.content;
     existing.savedContent = dto.content;
@@ -2035,14 +2200,25 @@ function openFileDtoInTab(dto: OpenedFileDto) {
     existing.byteSize = dto.byteSize;
     existing.fileKind = dto.fileKind;
     existing.cursor = createEmptyCursor(dto.content);
+    if (boundProf && savedBinding) {
+      existing.profileId = boundProf.id;
+      existing.dbName = savedBinding.dbName || '';
+    }
+    targetTab = existing;
     activeTabId.value = existing.id;
   } else {
     const current = activeTab.value;
     const id = `file-${Date.now()}`;
     const resolvedProfileId =
-      current?.profileId ?? (selectedProfileId.value || projectConnections.value[0]?.id || connections.value[0]?.id || '');
-    const resolvedDbName = current?.dbName ?? selectedDbName.value ?? '';
-    tabs.value.push({
+      (boundProf ? boundProf.id : undefined) ??
+      current?.profileId ??
+      (selectedProfileId.value || projectConnections.value[0]?.id || connections.value[0]?.id || '');
+    const resolvedDbName =
+      (boundProf && savedBinding ? savedBinding.dbName || '' : undefined) ??
+      current?.dbName ??
+      selectedDbName.value ??
+      '';
+    targetTab = {
       id,
       title: dto.name,
       path: dto.path,
@@ -2058,13 +2234,19 @@ function openFileDtoInTab(dto: OpenedFileDto) {
       dbName: resolvedDbName,
       mdViewMode: dto.fileKind === 'markdown' ? defaultMdMode : 'source',
       cursor: createEmptyCursor(dto.content),
-    });
+    };
+    tabs.value.push(targetTab);
     activeTabId.value = id;
   }
+  void applyTabDatabaseBinding(targetTab, false);
   recordRecentFile(dto.path);
   setStatus(
     `已打开 ${dto.name} · ${dto.encoding} · ${dto.lineEnding} · 共 ${dto.lineCount} 行 · ${formatBytes(dto.byteSize)}${
       dto.sqlBlocks.length > 0 ? ` · 检测到 ${dto.sqlBlocks.length} 个可执行 SQL 块` : ''
+    }${
+      boundProf && savedBinding
+        ? ` · 已自动选中库: ${boundProf.name}${savedBinding.dbName ? `/${savedBinding.dbName}` : ''}`
+        : ''
     }`,
   );
   scheduleAstInspect();
@@ -2131,6 +2313,9 @@ async function saveActiveTab(forceSaveAs = false) {
       tab.fileKind = 'markdown';
     }
     recordRecentFile(stats.path);
+    if (tab.profileId) {
+      saveFileDbBinding(stats.path, tab.profileId, tab.dbName || '', activeProjectId.value);
+    }
     setStatus(
       t('savedNotice', {
         name: tab.title,
@@ -2165,7 +2350,7 @@ function handleConvertEncoding(encoding: string, hasBom: boolean, lineEnding: 'C
     tab.savedContent = tab.savedContent === tab.content ? `${tab.savedContent}\0__enc_dirty__` : tab.savedContent;
   }
   activeModal.value = 'none';
-  setStatus(`已切换保存格式为 ${encoding} (${lineEnding})，按 Ctrl+S 保存生效`);
+  setStatus(`已切换保存格式为 ${encoding} (${lineEnding})，按 ${keymap.getDisplay('saveFile')} 保存生效`);
 }
 
 function toggleLineEndingQuick() {
@@ -2813,6 +2998,9 @@ async function restoreEditorSession() {
       if (s.path && isTauriRuntime()) {
         try {
           const dto = await openTextFile(s.path);
+          const fileBinding = getFileDbBinding(dto.path);
+          const fallbackProfId = s.profileId || fileBinding?.profileId || selectedProfileId.value || connections.value[0]?.id || '';
+          const fallbackDb = s.dbName || fileBinding?.dbName || '';
           restored.push({
             id: `restored-${Date.now()}-${i}`,
             title: dto.name,
@@ -2825,8 +3013,8 @@ async function restoreEditorSession() {
             lineEnding: dto.lineEnding === 'CRLF' ? 'CRLF' : 'LF',
             byteSize: dto.byteSize,
             readOnly: Boolean(s.readOnly),
-            profileId: s.profileId || selectedProfileId.value || connections.value[0]?.id || '',
-            dbName: s.dbName || '',
+            profileId: fallbackProfId,
+            dbName: fallbackDb,
             mdViewMode: s.mdViewMode || 'split',
             cursor: createEmptyCursor(dto.content),
           });
@@ -2862,6 +3050,7 @@ async function restoreEditorSession() {
       tabs.value = restored;
       const idx = Math.max(0, Math.min(saved.activeIndex ?? 0, restored.length - 1));
       activeTabId.value = restored[idx].id;
+      void applyTabDatabaseBinding(restored[idx], false);
     }
   } catch {
     // non-fatal
@@ -2877,6 +3066,7 @@ watch(
 );
 
 watch(activeTabId, () => {
+  void applyTabDatabaseBinding(activeTab.value, false);
   scheduleAstInspect();
 });
 
@@ -2930,64 +3120,6 @@ onBeforeUnmount(() => {
         <div class="brand-mark" :title="t('appSubtitle')">
           <span class="brand-logo">P</span>
           <span>{{ t('appTitle') }}</span>
-        </div>
-
-        <!-- JetBrains-style Project Switcher -->
-        <div class="menu-trigger" @click.stop>
-          <button
-            class="project-switcher"
-            :title="activeProject?.description || activeProject?.name"
-            @click="openMenu = openMenu === 'project' ? null : 'project'"
-          >
-            <span
-              class="project-dot"
-              :style="{ background: activeProject?.color || 'var(--accent)' }"
-            />
-            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-              {{ activeProject?.name || '默认项目' }}
-            </span>
-            <span style="opacity: 0.65; font-size: 10px">▾</span>
-          </button>
-
-          <div v-if="openMenu === 'project'" class="dropdown-menu" style="min-width: 245px">
-            <div style="padding: 4px 10px; font-size: 10.5px; color: var(--text-secondary)">
-              切换工作区项目
-            </div>
-            <button
-              v-for="proj in projects"
-              :key="proj.id"
-              class="dropdown-item"
-              @click="selectProject(proj.id)"
-            >
-              <span style="display: inline-flex; align-items: center; gap: 7px; min-width: 0">
-                <span class="project-dot" :style="{ background: proj.color || 'var(--accent)' }" />
-                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
-                  {{ proj.name }}
-                </span>
-              </span>
-              <span class="shortcut-hint">
-                {{ connections.filter((c) => !c.projectId || c.projectId === proj.id).length }} 库
-                {{ proj.id === activeProjectId ? '✓' : '' }}
-              </span>
-            </button>
-            <div class="dropdown-sep" />
-            <button class="dropdown-item" @click="openMenu = null; openProjectModal(null)">
-              <span style="display: inline-flex; align-items: center; gap: 6px">
-                <IdeIcon name="project-add" :size="14" />
-                {{ t('newProject') }}
-              </span>
-            </button>
-            <button
-              v-if="activeProject"
-              class="dropdown-item"
-              @click="openMenu = null; openProjectModal(activeProject)"
-            >
-              <span style="display: inline-flex; align-items: center; gap: 6px">
-                <IdeIcon name="edit" :size="13" />
-                {{ t('manageProject') }}
-              </span>
-            </button>
-          </div>
         </div>
 
         <nav class="menu-bar" @click.stop>
@@ -3123,7 +3255,7 @@ onBeforeUnmount(() => {
                 class="dropdown-item"
                 @click="openMenu = null; handleRevealInExplorer(workspaceInfo.workspaceDir)"
               >
-                <span>在资源管理器打开工作空间目录</span>
+                <span>在{{ FILE_MANAGER_LABEL }}中打开工作空间目录</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; applyTheme('dark')">
@@ -3185,6 +3317,66 @@ onBeforeUnmount(() => {
       <!-- Centered Pacer Run Widget -->
       <div class="header-center">
         <div class="run-widget">
+          <!-- Workspace Project Switcher docked immediately left of Data Source -->
+          <div class="menu-trigger" @click.stop>
+            <button
+              class="project-switcher in-run-widget"
+              :title="`工作区项目：${activeProject?.name || '默认项目'}${activeProject?.description ? ` · ${activeProject.description}` : ''}`"
+              @click="openMenu = openMenu === 'project' ? null : 'project'"
+            >
+              <span
+                class="project-dot"
+                :style="{ background: activeProject?.color || 'var(--accent)' }"
+              />
+              <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                {{ activeProject?.name || '默认项目' }}
+              </span>
+              <span style="opacity: 0.65; font-size: 10px">▾</span>
+            </button>
+
+            <div v-if="openMenu === 'project'" class="dropdown-menu" style="min-width: 245px">
+              <div style="padding: 4px 10px; font-size: 10.5px; color: var(--text-secondary)">
+                切换工作区项目
+              </div>
+              <button
+                v-for="proj in projects"
+                :key="proj.id"
+                class="dropdown-item"
+                @click="selectProject(proj.id)"
+              >
+                <span style="display: inline-flex; align-items: center; gap: 7px; min-width: 0">
+                  <span class="project-dot" :style="{ background: proj.color || 'var(--accent)' }" />
+                  <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                    {{ proj.name }}
+                  </span>
+                </span>
+                <span class="shortcut-hint">
+                  {{ connectionsInProjectById(proj.id).length }} 库
+                  {{ proj.id === activeProjectId ? '✓' : '' }}
+                </span>
+              </button>
+              <div class="dropdown-sep" />
+              <button class="dropdown-item" @click="openMenu = null; openProjectModal(null)">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <IdeIcon name="project-add" :size="14" />
+                  {{ t('newProject') }}
+                </span>
+              </button>
+              <button
+                v-if="activeProject"
+                class="dropdown-item"
+                @click="openMenu = null; openProjectModal(activeProject)"
+              >
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <IdeIcon name="edit" :size="13" />
+                  {{ t('manageProject') }}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <span class="run-widget-sep" />
+
           <span
             v-if="activeProfile"
             class="env-dot"
@@ -3220,10 +3412,19 @@ onBeforeUnmount(() => {
 
           <select
             :value="activeTab?.dbName || selectedDbName"
-            title="当前执行数据库 / Schema"
+            title="当前执行数据库 / Schema（打开本地文件时自动记住并恢复）"
             @change="handleDbSelectChange(($event.target as HTMLSelectElement).value)"
           >
             <option value="">{{ t('noSchemaSelected') }}</option>
+            <option
+              v-if="
+                (activeTab?.dbName || selectedDbName) &&
+                !activeDatabases.some((d) => d.name === (activeTab?.dbName || selectedDbName))
+              "
+              :value="activeTab?.dbName || selectedDbName"
+            >
+              {{ activeTab?.dbName || selectedDbName }}
+            </option>
             <option v-for="db in activeDatabases" :key="db.name" :value="db.name">
               {{ db.name }}
             </option>
@@ -3376,7 +3577,7 @@ onBeforeUnmount(() => {
         <button
           class="stripe-btn"
           :class="{ active: leftTool === 'database' }"
-          :title="`${t('toolDatabase')} (Alt+1)`"
+          :title="`${t('toolDatabase')} (${keymap.getDisplay('toggleDbPanel')})`"
           @click="toggleLeftTool('database')"
         >
           <IdeIcon name="database" :size="16" />
@@ -3386,7 +3587,7 @@ onBeforeUnmount(() => {
           v-if="filesDockSide === 'left'"
           class="stripe-btn"
           :class="{ active: leftTool === 'files' }"
-          :title="`${t('toolFiles')} (Alt+2)`"
+          :title="`${t('toolFiles')} (${keymap.getDisplay('toggleFilesPanel')})`"
           @click="toggleLeftTool('files')"
         >
           <IdeIcon name="folder-open" :size="16" />
@@ -3580,7 +3781,11 @@ onBeforeUnmount(() => {
             <span v-if="isTabDirty(tab)" class="dirty-dot" title="未保存更改" />
             <button
               class="tab-close-btn"
-              :title="`关闭标签页 (${keymap.getDisplay('closeTab')} / Ctrl+F4)`"
+              :title="
+                IS_MAC
+                  ? `关闭标签页 (${keymap.getDisplay('closeTab')})`
+                  : `关闭标签页 (${keymap.getDisplay('closeTab')} / Ctrl+F4)`
+              "
               @click.stop="closeEditorTab(tab.id)"
             >
               <IdeIcon name="close" :size="11" />
@@ -3681,7 +3886,7 @@ onBeforeUnmount(() => {
                   activeTab.path ||
                   (consoleScratchPaths[activeTab.id]
                     ? `工作空间临时脚本: ${consoleScratchPaths[activeTab.id]}`
-                    : '临时查询控制台（按 Ctrl+S 可保存为 .sql / .md）')
+                    : `临时查询控制台（按 ${keymap.getDisplay('saveFile')} 可保存为 .sql / .md）`)
                 }}
               </span>
             </template>
@@ -3721,7 +3926,7 @@ onBeforeUnmount(() => {
             <button
               v-if="activeTab.path || consoleScratchPaths[activeTab.id]"
               class="icon-btn compact"
-              title="在系统资源管理器中打开所在位置"
+              :title="`在${FILE_MANAGER_LABEL}中打开所在位置`"
               @click="handleRevealInExplorer(activeTab.path || consoleScratchPaths[activeTab.id])"
             >
               <IdeIcon name="reveal" :size="13" />
@@ -4118,7 +4323,13 @@ onBeforeUnmount(() => {
               >
                 目录: {{ workspaceInfo.pluginsDir }}
                 <span class="pill pill-neutral" style="margin-left: 4px">
-                  {{ workspaceInfo.isPortable ? 'EXE 同级工作空间' : '系统数据目录' }}
+                  {{
+                    workspaceInfo.isPortable
+                      ? IS_MAC
+                        ? '应用同级工作空间'
+                        : 'EXE 同级工作空间'
+                      : '系统数据目录'
+                  }}
                 </span>
               </div>
               <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px">
@@ -4236,7 +4447,7 @@ onBeforeUnmount(() => {
           v-if="filesDockSide === 'right'"
           class="stripe-btn"
           :class="{ active: rightTool === 'files' }"
-          :title="`${t('toolFiles')} (Alt+2)`"
+          :title="`${t('toolFiles')} (${keymap.getDisplay('toggleFilesPanel')})`"
           @click="toggleRightTool('files')"
         >
           <IdeIcon name="folder-open" :size="16" />
@@ -4527,7 +4738,7 @@ onBeforeUnmount(() => {
             handleRevealInExplorer(tabCtxTab.path!);
           "
         >
-          <span>在系统资源管理器中定位</span>
+          <span>在{{ FILE_MANAGER_LABEL }}中定位</span>
         </button>
         <button
           class="dropdown-item"

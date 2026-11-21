@@ -264,9 +264,10 @@ export function toInsertSql(
   tableName: string,
   columns: string[],
   rows: Record<string, unknown>[],
+  engineKey = 'mysql',
 ): string {
-  const safeTable = tableName || 'target_table';
-  const colList = columns.join(', ');
+  const safeTable = quoteIdentifier(tableName || 'target_table', engineKey);
+  const colList = columns.map((c) => quoteIdentifier(c, engineKey)).join(', ');
   const sqlVal = (v: unknown): string => {
     if (v === null || v === undefined) return 'NULL';
     if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL';
@@ -314,10 +315,11 @@ export function extractSingleTableTarget(sql: string): { db?: string; table: str
   if (fromMatch[0].trimEnd().endsWith(',')) return null;
   if (/^(?:as\s+)?[A-Za-z0-9_$-]+\s*,/i.test(afterFrom)) return null;
 
+  const wasQuoted = /^[`"\[]/.test(fromMatch[2]);
   const stripQuotes = (s: string) => s.replace(/^[`"\[]|[`"\]]$/g, '');
   const db = fromMatch[1] ? stripQuotes(fromMatch[1]) : undefined;
   const table = stripQuotes(fromMatch[2]);
-  if (!table || /^(select|where|group|order|limit|having|values)$/i.test(table)) {
+  if (!table || (!wasQuoted && /^(select|where|group|order|limit|having|values)$/i.test(table))) {
     return null;
   }
   return { db, table };

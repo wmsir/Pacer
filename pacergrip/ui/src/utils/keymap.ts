@@ -336,26 +336,33 @@ export function normalizeCombo(raw: string): string {
   return tokens.join('+');
 }
 
+export const IS_MAC: boolean =
+  typeof navigator !== 'undefined' && /mac|darwin/i.test(navigator.platform || navigator.userAgent);
+
+export const FILE_MANAGER_LABEL: string = IS_MAC ? '访达 (Finder)' : '系统资源管理器';
+
+function resolveKeyTokenFromEvent(e: KeyboardEvent): string {
+  if (e.code === 'Equal' || e.key === '=' || e.key === '+') return '=';
+  if (e.code === 'Minus' || e.key === '-' || e.key === '_') return '-';
+  if (e.code === 'Slash' || e.key === '/') return '/';
+  if (e.code === 'Comma' || e.key === ',') return ',';
+  if (e.code === 'Period' || e.key === '.') return '.';
+  if (e.code === 'Semicolon' || e.key === ';') return ';';
+  // macOS Option+letter/digit produces dead keys or accented glyphs in e.key; recover physical key from e.code.
+  if (IS_MAC && e.altKey && e.code) {
+    const keyMatch = /^Key([A-Z])$/.exec(e.code);
+    if (keyMatch) return keyMatch[1];
+    const digitMatch = /^Digit([0-9])$/.exec(e.code);
+    if (digitMatch) return digitMatch[1];
+  }
+  return normalizeKeyToken(e.key);
+}
+
 export function eventToCombo(e: KeyboardEvent): string | null {
   if (['Control', 'Shift', 'Alt', 'Meta', 'OS'].includes(e.key)) {
     return null;
   }
-  let keyToken = '';
-  if (e.code === 'Equal' || e.key === '=' || e.key === '+') {
-    keyToken = '=';
-  } else if (e.code === 'Minus' || e.key === '-' || e.key === '_') {
-    keyToken = '-';
-  } else if (e.code === 'Slash' || e.key === '/') {
-    keyToken = '/';
-  } else if (e.code === 'Comma' || e.key === ',') {
-    keyToken = ',';
-  } else if (e.code === 'Period' || e.key === '.') {
-    keyToken = '.';
-  } else if (e.code === 'Semicolon' || e.key === ';') {
-    keyToken = ';';
-  } else {
-    keyToken = normalizeKeyToken(e.key);
-  }
+  const keyToken = resolveKeyTokenFromEvent(e);
   if (!keyToken || keyToken === 'Escape' || keyToken === 'Backspace' || keyToken === 'Delete') {
     return null;
   }
@@ -386,15 +393,7 @@ export function matchesCombo(e: KeyboardEvent, combo: string): boolean {
   if (e.altKey !== expectAlt) return false;
   if (e.shiftKey !== expectShift) return false;
 
-  let actualKey = normalizeKeyToken(e.key);
-  if (expectedKey === '=' && (e.code === 'Equal' || e.key === '=' || e.key === '+')) {
-    actualKey = '=';
-  } else if (expectedKey === '-' && (e.code === 'Minus' || e.key === '-' || e.key === '_')) {
-    actualKey = '-';
-  } else if (expectedKey === '/' && (e.code === 'Slash' || e.key === '/')) {
-    actualKey = '/';
-  }
-  return actualKey === expectedKey;
+  return resolveKeyTokenFromEvent(e) === expectedKey;
 }
 
 export function comboToCodeMirrorKey(combo: string): string {
@@ -416,12 +415,22 @@ export function comboToCodeMirrorKey(combo: string): string {
 
 export function formatComboDisplay(combo: string): string {
   if (!combo) return '未设置';
-  return combo
+  const tokens = combo
     .replace('ArrowLeft', '←')
     .replace('ArrowRight', '→')
     .replace('ArrowUp', '↑')
     .replace('ArrowDown', '↓')
-    .split('+')
+    .split('+');
+  if (!IS_MAC) {
+    return tokens.join(' + ');
+  }
+  return tokens
+    .map((token) => {
+      if (token === 'Ctrl') return '⌘';
+      if (token === 'Alt') return '⌥';
+      if (token === 'Shift') return '⇧';
+      return token;
+    })
     .join(' + ');
 }
 

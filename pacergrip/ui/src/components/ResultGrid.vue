@@ -10,6 +10,7 @@ import type {
   WorkspaceProject,
 } from '../api/ipc';
 import IdeIcon from './IdeIcon.vue';
+import { IS_MAC } from '../utils/keymap';
 import {
   downloadTextFile,
   generateGridMutationSql,
@@ -543,7 +544,14 @@ function doCopyInsertSql() {
   const res = currentResult.value;
   if (!res) return;
   const tableName = effectiveTargetTable.value || 'target_table';
-  void copyText(toInsertSql(tableName, res.columns, displayedRows.value.map((r) => r.row)));
+  void copyText(
+    toInsertSql(
+      tableName,
+      res.columns,
+      displayedRows.value.map((r) => r.row),
+      res.engineKey,
+    ),
+  );
 }
 
 const activeStatsColumn = computed(() => {
@@ -1419,7 +1427,7 @@ const astWarnings = computed(
             v-model="quickConsoleSql"
             class="field"
             style="font-family: var(--font-mono); padding: 3px 8px; font-size: 12px"
-            placeholder="可直接 Ctrl+V 粘贴单条 SQL 并按 Enter 在当前数据源执行..."
+            :placeholder="`可直接 ${IS_MAC ? '⌘+V' : 'Ctrl+V'} 粘贴单条 SQL 并按 Enter 在当前数据源执行...`"
             @keydown.enter="submitQuickConsoleSql"
           />
           <button

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { WorkspaceFileEntry } from '../api/ipc';
+import { FILE_MANAGER_LABEL } from '../utils/keymap';
 import { formatBytes } from '../utils/sqlTools';
 import IdeIcon from './IdeIcon.vue';
 
@@ -66,7 +67,7 @@ function visibleChildren(dirPath: string): WorkspaceFileEntry[] {
       <span class="tree-hover-actions" @click.stop>
         <button
           class="icon-btn compact"
-          title="在系统资源管理器中定位"
+          :title="`在${FILE_MANAGER_LABEL}中定位`"
           @click="emit('reveal-path', entry.path)"
         >
           <IdeIcon name="reveal" :size="12" />

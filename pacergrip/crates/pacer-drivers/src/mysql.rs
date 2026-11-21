@@ -415,10 +415,19 @@ impl DbBackend for MySqlBackend {
 }
 
 fn is_mysql_system_schema(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
     matches!(
-        name.to_ascii_lowercase().as_str(),
-        "information_schema" | "performance_schema" | "mysql" | "sys" | "metrics_schema"
-    )
+        lower.as_str(),
+        "information_schema"
+            | "performance_schema"
+            | "mysql"
+            | "sys"
+            | "metrics_schema"
+            | "ndbinfo"
+            | "oceanbase"
+            | "__recycle_bin__"
+            | "__cdb_recycle_bin__"
+    ) || lower.starts_with("__")
 }
 
 fn resolve_mysql_ssl_mode(config: &DirectConfig) -> Option<MySqlSslMode> {

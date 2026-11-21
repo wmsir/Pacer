@@ -2,6 +2,7 @@
 import { computed, nextTick, ref } from 'vue';
 import { useI18n } from '../i18n';
 import type { WorkspaceFileEntry } from '../api/ipc';
+import { FILE_MANAGER_LABEL } from '../utils/keymap';
 import IdeIcon from './IdeIcon.vue';
 import FileTreeNode from './FileTreeNode.vue';
 
@@ -154,7 +155,7 @@ defineExpose({ scrollToActiveFile });
         <button
           class="icon-btn compact"
           :disabled="!activeFilePath && !mountedDir"
-          title="在系统资源管理器中定位文件/目录"
+          :title="`在${FILE_MANAGER_LABEL}中定位文件/目录`"
           @click="emit('reveal-path', activeFilePath || mountedDir)"
         >
           <IdeIcon name="reveal" :size="13" />
@@ -190,7 +191,7 @@ defineExpose({ scrollToActiveFile });
             </button>
             <button
               class="icon-btn compact"
-              title="在系统资源管理器中定位文件夹"
+              :title="`在${FILE_MANAGER_LABEL}中定位文件夹`"
               @click="emit('reveal-path', mountedDir)"
             >
               <IdeIcon name="reveal" :size="12" />
@@ -291,7 +292,7 @@ defineExpose({ scrollToActiveFile });
             <span class="tree-hover-actions" @click.stop>
               <button
                 class="icon-btn compact"
-                title="在系统资源管理器中定位"
+                :title="`在${FILE_MANAGER_LABEL}中定位`"
                 @click="emit('reveal-path', rf)"
               >
                 <IdeIcon name="reveal" :size="12" />

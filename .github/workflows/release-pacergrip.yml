@@ -1,4 +1,4 @@
-name: Release Pacer Windows
+name: Release Pacer (Windows & macOS)
 
 on:
   push:
@@ -10,8 +10,8 @@ permissions:
   contents: write
 
 jobs:
-  release-windows:
-    name: Build & Publish Pacer Release (Windows x64)
+  build-windows:
+    name: Build Pacer (Windows x64)
     runs-on: windows-latest
     defaults:
       run:
@@ -58,7 +58,7 @@ jobs:
       - name: Build Windows portable EXE & NSIS installer
         run: .\ui\node_modules\.bin\tauri.cmd build --bundles nsis
 
-      - name: Collect Windows executables & SHA256 checksums
+      - name: Collect Windows executables
         run: |
           New-Item -ItemType Directory -Force -Path dist-win | Out-Null
           $portable = "target/release/Pacer.exe"
@@ -72,45 +72,166 @@ jobs:
             throw "No NSIS setup executable produced under target/release/bundle/nsis/"
           }
           Copy-Item $nsisFiles.FullName "dist-win/"
-
-          Get-ChildItem "dist-win/*.exe" | ForEach-Object {
-            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($_.Name)"
-          } | Set-Content -Path "dist-win/SHA256SUMS.txt" -Encoding UTF8
-
           Get-ChildItem dist-win
 
-      - name: Upload Release build artifact
+      - name: Upload Windows Release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Pacer-${{ github.ref_name }}-windows-x64
-          path: pacergrip/dist-win/*
+          name: dist-windows
+          path: pacergrip/dist-win/*.exe
           retention-days: 30
           if-no-files-found: error
+
+  build-macos:
+    name: Build Pacer (macOS ${{ matrix.arch_label }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch_label: arm64
+            dmg_suffix: aarch64
+            run_tests: true
+          - target: x86_64-apple-darwin
+            arch_label: x64
+            dmg_suffix: x64
+            run_tests: false
+    defaults:
+      run:
+        shell: bash
+        working-directory: pacergrip
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      CI: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: pacergrip/ui/package-lock.json
+
+      - name: Setup Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'pacergrip -> target'
+          shared-key: pacergrip-macos-${{ matrix.arch_label }}
+
+      - name: Install UI dependencies
+        working-directory: pacergrip/ui
+        run: npm ci
+
+      - name: Build UI bundle
+        working-directory: pacergrip/ui
+        run: npm run build
+
+      - name: Run Rust tests & Clippy checks (native arm64)
+        if: matrix.run_tests
+        run: |
+          cargo test --workspace --exclude pacergrip-app
+          cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build macOS .app bundle & DMG (${{ matrix.target }})
+        run: ./ui/node_modules/.bin/tauri build --target ${{ matrix.target }} --bundles dmg,app
+
+      - name: Collect macOS DMG & verify .app bundle
+        run: |
+          set -euo pipefail
+          mkdir -p dist-macos
+          APP_BUNDLE="target/${{ matrix.target }}/release/bundle/macos/Pacer.app"
+          if [ ! -d "$APP_BUNDLE" ]; then
+            echo "Expected Pacer.app not found at $APP_BUNDLE" >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          DMGS=(target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#DMGS[@]} -eq 0 ]; then
+            echo "No DMG produced under target/${{ matrix.target }}/release/bundle/dmg/" >&2
+            exit 1
+          fi
+          cp "${DMGS[@]}" dist-macos/
+          ls -lh dist-macos
+
+      - name: Upload macOS Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-macos-${{ matrix.arch_label }}
+          path: pacergrip/dist-macos/*.dmg
+          retention-days: 30
+          if-no-files-found: error
+
+  publish-release:
+    name: Publish Unified Multi-Platform GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Windows & macOS Release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate unified SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum *.exe *.dmg > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -lh
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Pacer ${{ github.ref_name }} (Windows x64)"
+          name: "Pacer ${{ github.ref_name }} (Windows & macOS)"
           draft: false
           prerelease: false
           generate_release_notes: true
           body: |
-            ## Pacer `${{ github.ref_name }}` — 原生数据库桌面 IDE (Windows x64)
+            ## Pacer `${{ github.ref_name }}` — 原生多平台数据库桌面 IDE (Windows & macOS)
 
             ### 下载说明 / Downloads
-            - **`Pacer-windows-x64-portable.exe`**：绿色便携单文件版（无需安装，双击即用）。
-            - **`Pacer_*_x64-setup.exe`**：Windows NSIS 安装包（支持简中/英文安装向导，当前用户安装并自动引导安装缺失的 WebView2 Runtime）。
-            - **`SHA256SUMS.txt`**：SHA-256 完整性校验文件。
+
+            | 平台 / Platform | 安装包 / Artifact | 说明 / Notes |
+            | :--- | :--- | :--- |
+            | **macOS Apple Silicon (M1–M4)** | `Pacer_*_aarch64.dmg` | 原生 ARM64 `.app` 镜像，拖入「应用程序 / Applications」即可 |
+            | **macOS Intel (x86_64)** | `Pacer_*_x64.dmg` | Intel Mac 原生镜像，拖入「应用程序 / Applications」即可 |
+            | **Windows x64（安装版）** | `Pacer_*_x64-setup.exe` | NSIS 安装包（简中/英文向导，自动引导安装 WebView2） |
+            | **Windows x64（绿色便携版）** | `Pacer-windows-x64-portable.exe` | 免安装单文件版，双击即用 |
+            | **完整性校验 / Checksums** | `SHA256SUMS.txt` | Windows & macOS 全量资产 SHA-256 校验清单 |
+
+            > **macOS 首次启动提示（未经过 Apple 公证的开源构建）**：
+            > 若 macOS 提示“无法验证开发者”或“已损坏，无法打开”，请在终端执行以下命令解除隔离属性后重新打开：
+            > ```bash
+            > xattr -cr /Applications/Pacer.app
+            > ```
+            > 或右键点击 `Pacer.app` 选择「打开」并在「系统设置 → 隐私与安全性」中点击「仍要打开」。
+
+            ### macOS 专项适配亮点 / macOS Highlights
+            - **原生 Apple Icon & Retina 桌面集成**：新增 `icon.icns` 多分辨率应用图标与 macOS 11+ 最低系统适配（同步发布 Apple Silicon ARM64 与 Intel x64 双架构 `.dmg`）。
+            - **macOS `.app` 安全工作空间策略**：在 `/Applications`、`AppTranslocation` 沙盒或只读挂载卷启动时自动落盘至标准 `~/Library/Application Support/cn.fwpt.pacer`（绝不向 `.app` 包内部写入文件）；若将 `Pacer.app` 放在用户自定义可写目录，则优先在同级创建便携 `pacer-workspace/`。
+            - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
 
             ### 核心特性 / Highlights
-            - **EXE 同级便携工作空间（`pacer-workspace/`）& 临时控制台落盘**：优先在当前 `Pacer.exe` 同级目录自动创建可写工作空间，统一收纳多项目配置、加密凭据、执行历史与临时 `console_*.sql` 草稿（`consoles/`），重装或拷走即带走全部工作现场（若所在目录只读则安全回退至系统数据目录并自动迁移旧配置）。
-            - **右侧文件与脚本面板重构排版**：将文件操作（打开文件、打开目录、一键挂载工作空间、刷新、树中定位、资源管理器定位）拆分为独立的工具条，彻底解决窄栏下标题文字换行截断问题；支持纯树状折叠与可隐藏/折叠的最近打开列表。
-            - **全新独立原生 Pacer 扩展体系（热加载本地插件 + Rust 内核接口）**：新增 `pacer-workspace/plugins/*/pacer-plugin.json` 免编译热加载插件机制，一键生成示例插件即可扩展「SQL 代码片段」与「团队高危 SQL 审计规则」；同时在架构层保留 `GovernanceExtension` / `AiSqlExtension` 原生 Rust Trait 扩展接口。
-            - **全工作区项目/数据源统一 & 可配置快捷键 (Keymap)**：控制台输出（默认展示全部项目）、执行历史与顶部运行器选项完全对齐左侧项目树；支持交互式录制修改全部快捷键、冲突检测及 IDEA / VS Code 一键预设切换。
-            - **商业级结果集在线修改 & 三套护眼主题**：支持双击结果集生成 `UPDATE/INSERT/DELETE`、Pin 固定对比结果页、一键复制列 `IN (...)` 条件、实时列统计栏，以及「深色 Darcula」「浅色 Light」「绿豆沙护眼色（`#CCE8CF`）」三套全界面联动主题。
+            - **保留字表名/列名自动转义 & 云库系统库识别**：修复 `groups`、`order`、`user` 等 MySQL 8 / TiDB / PostgreSQL 保留字表名生成 `SELECT * FROM ... LIMIT 100` 及 `INSERT` 语句时的 `1064` 语法错误，并自动过滤 `__recycle_bin__` 等云数据库系统库避免误选中。
+            - **顶部执行上下文与文件级数据库记忆**：项目切换器紧贴数据源与数据库选择器左侧；打开右侧 `.sql` / `.md` 文件时自动记住并恢复上次选中的项目、数据源与数据库，随时可改选更新。
+            - **便携工作空间（`pacer-workspace/`）& 临时控制台落盘**：统一收纳多项目配置、加密凭据、执行历史与临时 `console_*.sql` 草稿（`consoles/`）。
+            - **独立原生 Pacer 扩展体系**：支持 `plugins/*/pacer-plugin.json` 热加载 SQL 模板与安全审计规则，并预留 `GovernanceExtension` / `AiSqlExtension` Rust Trait 插槽。
+            - **全工作区项目/数据源统一 & 可配置快捷键 (Keymap)**：控制台输出（默认展示全部项目）、执行历史与顶部运行器完全对齐左侧项目树；支持交互式录制修改快捷键、冲突检测及 IDEA / VS Code 预设切换。
+            - **商业级结果集在线修改 & 三套护眼主题**：支持双击结果集生成 `UPDATE/INSERT/DELETE`、Pin 固定对比结果页、一键复制列 `IN (...)` 条件、实时列统计栏，以及「深色 Darcula」「浅色 Light」「绿豆沙护眼色（`#CCE8CF`）」。
 
-            **运行环境 / System Requirement**：Windows 10 / 11 (x64)。
-          files: pacergrip/dist-win/*
+            **运行环境 / System Requirements**：macOS 11 Big Sur 及以上 (Apple Silicon / Intel) · Windows 10 / 11 (x64)。
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -61,6 +61,7 @@ pub fn discover_local_dbeaver_files() -> Vec<DbeaverDiscoveryItem> {
     if let Ok(home) = std::env::var("HOME") {
         let h = PathBuf::from(&home);
         candidate_roots.push(h.join("Library").join("DBeaverData").join("workspace6"));
+        candidate_roots.push(h.join("Library").join("DBeaverData"));
         candidate_roots.push(
             h.join(".local")
                 .join("share")

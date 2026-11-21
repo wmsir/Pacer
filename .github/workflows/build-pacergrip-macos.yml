@@ -1,0 +1,97 @@
+name: Build Pacer macOS App
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'pacergrip/**'
+      - '.github/workflows/build-pacergrip-macos.yml'
+  pull_request:
+    paths:
+      - 'pacergrip/**'
+      - '.github/workflows/build-pacergrip-macos.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build Pacer macOS (${{ matrix.arch_label }})
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            arch_label: arm64
+    defaults:
+      run:
+        shell: bash
+        working-directory: pacergrip
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
+      CI: 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: pacergrip/ui/package-lock.json
+
+      - name: Setup Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: clippy
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: 'pacergrip -> target'
+          shared-key: pacergrip-macos-${{ matrix.arch_label }}
+
+      - name: Install UI dependencies
+        working-directory: pacergrip/ui
+        run: npm ci
+
+      - name: Build UI bundle
+        working-directory: pacergrip/ui
+        run: npm run build
+
+      - name: Run Rust unit and SQLite integration tests
+        run: cargo test --workspace --exclude pacergrip-app
+
+      - name: Run Clippy static checks
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build macOS .app bundle & DMG
+        run: ./ui/node_modules/.bin/tauri build --target ${{ matrix.target }} --bundles dmg,app
+
+      - name: Collect macOS DMG artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist-macos
+          shopt -s nullglob
+          DMGS=(target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          if [ ${#DMGS[@]} -eq 0 ]; then
+            echo "No DMG produced under target/${{ matrix.target }}/release/bundle/dmg/" >&2
+            exit 1
+          fi
+          cp "${DMGS[@]}" dist-macos/
+          ls -lh dist-macos
+
+      - name: Upload macOS build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pacer-macos-${{ matrix.arch_label }}
+          path: pacergrip/dist-macos/*.dmg
+          retention-days: 30
+          if-no-files-found: error
