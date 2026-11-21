@@ -61,6 +61,7 @@ import {
   parseMarkdownSegments,
   type SqlSnippet,
 } from './utils/sqlTools';
+import { matchesCombo, useKeymap } from './utils/keymap';
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
 import DatabaseTree from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
@@ -96,6 +97,7 @@ interface EditorTab {
 }
 
 const { t, locale, toggleLocale } = useI18n();
+const keymap = useKeymap();
 
 // Theme (Darcula Dark default, IntelliJ Light, Mung Bean Eye-Care)
 export type AppTheme = 'dark' | 'light' | 'eyecare';
@@ -136,6 +138,22 @@ const openMenu = ref<'project' | 'file' | 'edit' | 'database' | 'tools' | 'help'
   null,
 );
 const showDemoManual = ref<boolean>(localStorage.getItem('pacer.hideDemoManual') !== '1');
+const editorFontSize = ref<number>(
+  Math.max(11, Math.min(22, Number(localStorage.getItem('pacer.editorFontSize')) || 13)),
+);
+const editorWordWrap = ref<boolean>(localStorage.getItem('pacer.editorWordWrap') === '1');
+
+function setEditorFontSize(next: number) {
+  const clamped = Math.max(11, Math.min(22, next));
+  editorFontSize.value = clamped;
+  localStorage.setItem('pacer.editorFontSize', String(clamped));
+}
+
+function toggleEditorWordWrap() {
+  editorWordWrap.value = !editorWordWrap.value;
+  localStorage.setItem('pacer.editorWordWrap', editorWordWrap.value ? '1' : '0');
+  setStatus(editorWordWrap.value ? '已开启编辑器自动换行' : '已关闭编辑器自动换行');
+}
 
 function setShowDemoManual(visible: boolean) {
   showDemoManual.value = visible;
@@ -421,7 +439,7 @@ const activeServiceTab = ref<'result' | 'output' | 'ddl' | 'history' | 'problems
 const resultTabs = ref<ResultTabItem[]>([]);
 const activeResultTabId = ref<string>('');
 const resultGridRef = ref<InstanceType<typeof ResultGrid> | null>(null);
-const logsByProject = reactive<Record<string, ConsoleLogEntry[]>>({});
+const consoleLogs = ref<ConsoleLogEntry[]>([]);
 const ddlText = ref<string>('');
 const ddlTitle = ref<string>('');
 const historyEntries = ref<QueryHistoryEntry[]>([]);
@@ -429,10 +447,6 @@ const astAnalysis = ref<ScriptAnalysis | null>(null);
 const busy = ref(false);
 const statusMessage = ref('就绪 · 支持多项目多数据源管理、DBeaver 导入、结果集直接修改与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
-
-const activeProjectLogs = computed<ConsoleLogEntry[]>(
-  () => logsByProject[activeProjectId.value] ?? [],
-);
 
 // Modals State
 const activeModal = ref<ActiveModalKind>('none');
@@ -444,6 +458,8 @@ const dangerContext = ref<DangerModalContext | null>(null);
 const pendingDangerAction = ref<(() => Promise<void>) | null>(null);
 const passwordProfile = ref<ConnectionProfile | null>(null);
 const pendingAfterPassword = ref<(() => Promise<void>) | null>(null);
+const pendingCloseTabId = ref<string | null>(null);
+const unsavedContext = ref<{ title: string; path: string | null } | null>(null);
 
 const encodingModalContext = computed<EncodingModalContext | null>(() => {
   const tab = activeTab.value;
@@ -474,12 +490,10 @@ function pushProjectLog(opts: {
   detail?: string;
   durationMs?: number;
 }) {
-  const pid = opts.projectId || activeProjectId.value || 'default-project';
-  if (!logsByProject[pid]) {
-    logsByProject[pid] = [];
-  }
+  const defaultPid = projects.value[0]?.id || 'default-project';
+  const pid = opts.projectId || (opts.profileId ? activeProjectId.value : defaultPid) || defaultPid;
   const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  logsByProject[pid].push({
+  consoleLogs.value.push({
     id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     timestamp: ts,
     projectId: pid,
@@ -491,8 +505,8 @@ function pushProjectLog(opts: {
     detail: opts.detail,
     durationMs: opts.durationMs,
   });
-  if (logsByProject[pid].length > 600) {
-    logsByProject[pid].splice(0, logsByProject[pid].length - 600);
+  if (consoleLogs.value.length > 1200) {
+    consoleLogs.value.splice(0, consoleLogs.value.length - 1200);
   }
 }
 
@@ -505,9 +519,18 @@ function appendLog(line: string, level: ConsoleLogEntry['level'] = 'info', profi
   });
 }
 
-function clearActiveProjectLogs() {
-  logsByProject[activeProjectId.value] = [];
-  setStatus('已清空当前项目的控制台输出日志');
+function clearConsoleLogs(projectId: string) {
+  const defaultPid = projects.value[0]?.id || 'default-project';
+  if (!projectId || projectId === 'ALL') {
+    consoleLogs.value = [];
+    setStatus('已清空全部项目的控制台输出日志');
+  } else {
+    consoleLogs.value = consoleLogs.value.filter(
+      (entry) => (entry.projectId || defaultPid) !== projectId,
+    );
+    const projName = projects.value.find((p) => p.id === projectId)?.name ?? projectId;
+    setStatus(`已清空项目「${projName}」的控制台输出日志`);
+  }
 }
 
 function isTabDirty(tab: EditorTab): boolean {
@@ -796,7 +819,25 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
   }
 }
 
+function connectionsInProjectById(projectId: string): ConnectionProfile[] {
+  const isFirst = projects.value[0]?.id === projectId;
+  return connections.value.filter(
+    (c) => c.projectId === projectId || (isFirst && !c.projectId),
+  );
+}
+
+function syncActiveProjectForProfile(profile: ConnectionProfile) {
+  const pid = profile.projectId || projects.value[0]?.id || 'default-project';
+  if (activeProjectId.value !== pid) {
+    activeProjectId.value = pid;
+    expandedProjects[pid] = true;
+    localStorage.setItem('pacer.activeProjectId', pid);
+    localStorage.setItem('pacer.expandedProjects', JSON.stringify(expandedProjects));
+  }
+}
+
 async function toggleProfileNode(profile: ConnectionProfile) {
+  syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
@@ -809,6 +850,7 @@ async function toggleProfileNode(profile: ConnectionProfile) {
 }
 
 async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
+  syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   selectedDbName.value = dbName;
   if (activeTab.value) {
@@ -846,6 +888,7 @@ async function toggleTableNode(profile: ConnectionProfile, dbName: string, table
 }
 
 async function selectTableNode(profile: ConnectionProfile, dbName: string, tableName: string) {
+  syncActiveProjectForProfile(profile);
   inspectedTable.value = { profileId: profile.id, dbName, tableName };
   if (rightTool.value === null) {
     rightTool.value = 'structure';
@@ -863,6 +906,7 @@ async function handleProfileSelectChange(profileId: string) {
   }
   const prof = connections.value.find((c) => c.id === profileId);
   if (prof) {
+    syncActiveProjectForProfile(prof);
     await loadDatabasesForProfile(prof, true);
   }
 }
@@ -1087,6 +1131,7 @@ async function handleExportDbeaverJson() {
 // ==================== Table Actions ====================
 
 async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tableName: string) {
+  syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   selectedDbName.value = dbName;
   if (activeTab.value) {
@@ -1415,7 +1460,7 @@ async function executeStatementsBatch(
     }
 
     if (newTabs.length > 0) {
-      resultTabs.value = [...newTabs, ...resultTabs.value].slice(0, 12);
+      resultTabs.value = mergeResultTabsWithPins(newTabs);
       activeResultTabId.value = newTabs[0].id;
       activeServiceTab.value = lastError && newTabs[0].columns.length === 0 ? 'output' : 'result';
     }
@@ -1631,7 +1676,7 @@ async function runExplainSql(sql: string) {
         errorMessage: res.errorMessage ?? null,
       },
     };
-    resultTabs.value = [item, ...resultTabs.value].slice(0, 12);
+    resultTabs.value = mergeResultTabsWithPins([item]);
     activeResultTabId.value = tabId;
     activeServiceTab.value = 'result';
     pushProjectLog({
@@ -1683,6 +1728,27 @@ async function refreshHistory() {
     historyEntries.value = await listQueryHistory();
   } catch {
     // non-fatal
+  }
+}
+
+function mergeResultTabsWithPins(incoming: ResultTabItem[]): ResultTabItem[] {
+  const pinnedExisting = resultTabs.value.filter((r) => r.pinned);
+  const unpinnedExisting = resultTabs.value.filter((r) => !r.pinned);
+  const maxUnpinned = Math.max(4, 12 - pinnedExisting.length);
+  return [...pinnedExisting, ...incoming, ...unpinnedExisting].slice(0, pinnedExisting.length + maxUnpinned);
+}
+
+function togglePinResultTab(id: string) {
+  const target = resultTabs.value.find((r) => r.id === id);
+  if (target) {
+    target.pinned = !target.pinned;
+  }
+}
+
+function closeOtherResultTabs(keepId: string) {
+  resultTabs.value = resultTabs.value.filter((r) => r.id === keepId || r.pinned);
+  if (!resultTabs.value.some((r) => r.id === activeResultTabId.value)) {
+    activeResultTabId.value = keepId;
   }
 }
 
@@ -1746,10 +1812,16 @@ function pushClosedTabs(list: EditorTab[]) {
   }
 }
 
-function closeEditorTab(id: string) {
+function closeEditorTab(id: string, force = false) {
   const idx = tabs.value.findIndex((t) => t.id === id);
   if (idx < 0) return;
   const closing = tabs.value[idx];
+  if (!force && closing.path && isTabDirty(closing)) {
+    pendingCloseTabId.value = id;
+    unsavedContext.value = { title: closing.title, path: closing.path };
+    activeModal.value = 'unsaved';
+    return;
+  }
   pushClosedTabs([closing]);
   tabs.value = tabs.value.filter((t) => t.id !== id);
   if (tabs.value.length === 0) {
@@ -1760,6 +1832,33 @@ function closeEditorTab(id: string) {
   if (activeTabId.value === id) {
     const next = tabs.value[Math.max(0, idx - 1)] ?? tabs.value[0];
     if (next) activeTabId.value = next.id;
+  }
+}
+
+async function confirmUnsavedSaveClose() {
+  const targetId = pendingCloseTabId.value;
+  activeModal.value = 'none';
+  pendingCloseTabId.value = null;
+  unsavedContext.value = null;
+  if (!targetId) return;
+  const prevActive = activeTabId.value;
+  activeTabId.value = targetId;
+  await saveActiveTab(false);
+  const stillDirty = tabs.value.find((t) => t.id === targetId && isTabDirty(t));
+  if (!stillDirty) {
+    closeEditorTab(targetId, true);
+  } else if (prevActive && tabs.value.some((t) => t.id === prevActive)) {
+    activeTabId.value = prevActive;
+  }
+}
+
+function confirmUnsavedDiscardClose() {
+  const targetId = pendingCloseTabId.value;
+  activeModal.value = 'none';
+  pendingCloseTabId.value = null;
+  unsavedContext.value = null;
+  if (targetId) {
+    closeEditorTab(targetId, true);
   }
 }
 
@@ -2209,22 +2308,22 @@ function removeCustomSnippet(id: string) {
 
 const searchItems = computed<SearchEverywhereItem[]>(() => {
   const items: SearchEverywhereItem[] = [
-    { id: 'act-open-file', category: 'action', label: t('openFile'), detail: '打开本地 Markdown / SQL 文件并检测编码', badge: 'Ctrl+O' },
+    { id: 'act-open-file', category: 'action', label: t('openFile'), detail: '打开本地 Markdown / SQL 文件并检测编码', badge: keymap.getDisplay('openFile') },
     { id: 'act-open-folder', category: 'action', label: t('openFolder'), detail: '挂载本地目录到文件资源管理器', badge: '文件' },
     { id: 'act-demo-md', category: 'action', label: t('openDemoMd'), detail: '体验 Markdown 内联 CodeLens 与选中执行 SQL', badge: '示例' },
     { id: 'act-new-project', category: 'action', label: t('newProject'), detail: '新建多数据源工作区项目（共享统一控制台日志）', badge: '项目' },
     { id: 'act-dock-files', category: 'action', label: `将本地文件面板移至${filesDockSide.value === 'right' ? '左侧' : '右侧'}`, detail: '自由配置本地文件与脚本停靠在左侧或右侧', badge: '布局' },
-    { id: 'act-locate-file', category: 'action', label: '在文件树中定位当前打开的文件', detail: '自动展开目录树并滚动高亮当前文档', badge: '定位' },
+    { id: 'act-locate-file', category: 'action', label: '在文件树中定位当前打开的文件', detail: '自动展开目录树并滚动高亮当前文档', badge: keymap.getDisplay('locateFile') },
     { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
-    { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: 'Ctrl+N' },
-    { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: 'Ctrl+Alt+L' },
+    { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: keymap.getDisplay('newConsole') },
+    { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: keymap.getDisplay('formatSql') },
     { id: 'act-theme-dark', category: 'action', label: `切换主题：${t('themeDark')}`, detail: '经典深色 Darcula 界面与编辑器配色', badge: '主题' },
     { id: 'act-theme-light', category: 'action', label: `切换主题：${t('themeLight')}`, detail: '明亮清爽 IntelliJ Light 界面与编辑器配色', badge: '主题' },
     { id: 'act-theme-eyecare', category: 'action', label: `切换主题：${t('themeEyecare')}`, detail: '柔和绿豆沙护眼色（#CCE8CF），适合长时间阅读', badge: '护眼' },
     { id: 'act-lang', category: 'action', label: `切换界面语言 (${locale.value === 'zh-CN' ? 'English' : '简体中文'})`, detail: '中英文界面即时切换', badge: 'i18n' },
     { id: 'act-encoding', category: 'action', label: t('encodingModalTitle'), detail: '重新解码 GBK/UTF-8 BOM 或转换保存编码', badge: '编码' },
-    { id: 'act-shortcuts', category: 'action', label: t('shortcutsTitle'), detail: '查看全部 DataGrip 兼容快捷键', badge: '帮助' },
+    { id: 'act-shortcuts', category: 'action', label: '快捷键配置 (Keymap)', detail: '自定义修改所有菜单与编辑器快捷键，支持 IDEA / VS Code 预设', badge: keymap.getDisplay('openKeymap') },
   ];
 
   for (const prof of connections.value) {
@@ -2319,11 +2418,12 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
   }
 }
 
-// ==================== IntelliJ IDEA-Consistent Global Keyboard Shortcuts ====================
+// ==================== Configurable Keymap Global Dispatcher ====================
 let lastShiftTapAt = 0;
 let otherKeyDuringShift = false;
 
 function onGlobalKeyup(e: KeyboardEvent) {
+  if (!keymap.doubleShiftSearch.value || activeModal.value === 'shortcuts') return;
   if (e.key === 'Shift' && !otherKeyDuringShift) {
     const now = Date.now();
     if (now - lastShiftTapAt < 350) {
@@ -2342,11 +2442,16 @@ function onGlobalKeydown(e: KeyboardEvent) {
     otherKeyDuringShift = false;
   }
 
+  // While recording inside the Keymap Configurator modal, let the modal capture raw keys cleanly
+  if (activeModal.value === 'shortcuts') {
+    return;
+  }
+
   const mod = e.ctrlKey || e.metaKey;
   const keyLow = e.key.toLowerCase();
 
-  // Close current SQL / file editor tab (IDEA Ctrl+F4 & modern Ctrl+W)
-  if ((mod && !e.shiftKey && !e.altKey && keyLow === 'w') || (mod && e.key === 'F4')) {
+  // Close current SQL / file editor tab (configurable + IDEA Ctrl+F4 fallback)
+  if (matchesCombo(e, keymap.getCombo('closeTab')) || (mod && e.key === 'F4')) {
     e.preventDefault();
     e.stopPropagation();
     if (activeModal.value !== 'none') {
@@ -2357,64 +2462,134 @@ function onGlobalKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // Reopen last closed tab (Ctrl+Shift+T)
-  if (mod && e.shiftKey && keyLow === 't') {
+  if (matchesCombo(e, keymap.getCombo('reopenTab'))) {
     e.preventDefault();
     reopenLastClosedTab();
     return;
   }
 
-  // Search Everywhere / Find Action (Ctrl+K or IDEA Ctrl+Shift+A)
-  if ((mod && keyLow === 'k') || (mod && e.shiftKey && keyLow === 'a')) {
+  if (
+    matchesCombo(e, keymap.getCombo('searchEverywhere')) ||
+    (mod && e.shiftKey && keyLow === 'a')
+  ) {
     e.preventDefault();
     activeModal.value = activeModal.value === 'search' ? 'none' : 'search';
     return;
   }
 
-  // New Query Console (Ctrl+N or DataGrip Ctrl+Shift+L)
-  if ((mod && !e.shiftKey && keyLow === 'n') || (mod && e.shiftKey && keyLow === 'l')) {
+  if (matchesCombo(e, keymap.getCombo('openKeymap'))) {
+    e.preventDefault();
+    activeModal.value = 'shortcuts';
+    return;
+  }
+
+  if (
+    matchesCombo(e, keymap.getCombo('newConsole')) ||
+    (mod && e.shiftKey && keyLow === 'l')
+  ) {
     e.preventDefault();
     createNewConsoleTab('');
     return;
   }
 
-  // Open File (Ctrl+O) & Save / Save As (Ctrl+S / Ctrl+Shift+S)
-  if (mod && keyLow === 'o') {
+  if (matchesCombo(e, keymap.getCombo('openFile'))) {
     e.preventDefault();
     void openFileFromDialog();
     return;
   }
-  if (mod && keyLow === 's') {
+
+  if (matchesCombo(e, keymap.getCombo('saveFileAs'))) {
     e.preventDefault();
-    void saveActiveTab(e.shiftKey);
+    void saveActiveTab(true);
     return;
   }
 
-  // IDEA Tool Window Shortcuts (Alt+1 Database, Alt+2 Files, Alt+4 Console/Services)
-  if (e.altKey && !mod && !e.shiftKey) {
-    if (e.key === '1') {
+  if (matchesCombo(e, keymap.getCombo('saveFile'))) {
+    e.preventDefault();
+    e.stopPropagation();
+    void saveActiveTab(false);
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('locateFile'))) {
+    e.preventDefault();
+    void locateActiveFileInTree();
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('toggleDbPanel'))) {
+    e.preventDefault();
+    toggleLeftTool('database');
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('toggleFilesPanel'))) {
+    e.preventDefault();
+    toggleFilesPanel();
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('toggleBottomPanel'))) {
+    e.preventDefault();
+    bottomVisible.value = !bottomVisible.value;
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('prevTab'))) {
+    e.preventDefault();
+    switchAdjacentTab(-1);
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('nextTab'))) {
+    e.preventDefault();
+    switchAdjacentTab(1);
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('zoomIn'))) {
+    e.preventDefault();
+    setEditorFontSize(editorFontSize.value + 1);
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('zoomOut'))) {
+    e.preventDefault();
+    setEditorFontSize(editorFontSize.value - 1);
+    return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('zoomReset'))) {
+    e.preventDefault();
+    setEditorFontSize(13);
+    return;
+  }
+
+  const targetEl = e.target as HTMLElement | null;
+  const inEditor = Boolean(targetEl?.closest?.('.cm-editor'));
+  const inInput =
+    targetEl instanceof HTMLInputElement ||
+    targetEl instanceof HTMLTextAreaElement ||
+    targetEl instanceof HTMLSelectElement;
+  if (activeModal.value === 'none' && !inEditor && !inInput) {
+    if (matchesCombo(e, keymap.getCombo('runCurrent'))) {
       e.preventDefault();
-      toggleLeftTool('database');
+      void runActiveEditor(false);
       return;
     }
-    if (e.key === '2') {
+    if (matchesCombo(e, keymap.getCombo('runAll'))) {
       e.preventDefault();
-      toggleFilesPanel();
+      void runActiveEditor(true);
       return;
     }
-    if (e.key === '4' || e.key === '8') {
+    if (matchesCombo(e, keymap.getCombo('explainSql'))) {
       e.preventDefault();
-      bottomVisible.value = !bottomVisible.value;
+      void runExplainActive();
       return;
     }
-    if (e.key === 'ArrowLeft') {
+    if (matchesCombo(e, keymap.getCombo('formatSql'))) {
       e.preventDefault();
-      switchAdjacentTab(-1);
-      return;
-    }
-    if (e.key === 'ArrowRight') {
-      e.preventDefault();
-      switchAdjacentTab(1);
+      void formatActiveSql();
       return;
     }
   }
@@ -2477,6 +2652,132 @@ function openImportModalForProject(targetProjectId?: string) {
   activeModal.value = 'import';
 }
 
+// ==================== Workspace Tabs Session Persistence ====================
+const SESSION_TABS_KEY = 'pacer.session.tabs.v1';
+
+interface SavedSessionTab {
+  title: string;
+  path: string | null;
+  fileKind: string;
+  content?: string;
+  profileId: string;
+  dbName: string;
+  mdViewMode: 'source' | 'split' | 'preview';
+  readOnly: boolean;
+}
+
+let sessionSaveTimer: number | null = null;
+function scheduleSaveSession() {
+  if (sessionSaveTimer !== null) window.clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = window.setTimeout(() => {
+    try {
+      const payload = {
+        activeIndex: tabs.value.findIndex((t) => t.id === activeTabId.value),
+        selectedProfileId: selectedProfileId.value,
+        selectedDbName: selectedDbName.value,
+        tabs: tabs.value.slice(0, 20).map(
+          (t): SavedSessionTab => ({
+            title: t.title,
+            path: t.path,
+            fileKind: t.fileKind,
+            content: t.path ? undefined : t.content.slice(0, 50000),
+            profileId: t.profileId,
+            dbName: t.dbName,
+            mdViewMode: t.mdViewMode,
+            readOnly: t.readOnly,
+          }),
+        ),
+      };
+      localStorage.setItem(SESSION_TABS_KEY, JSON.stringify(payload));
+    } catch {
+      // non-fatal
+    }
+  }, 350);
+}
+
+async function restoreEditorSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_TABS_KEY);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as {
+      activeIndex?: number;
+      selectedProfileId?: string;
+      selectedDbName?: string;
+      tabs?: SavedSessionTab[];
+    };
+    if (saved.selectedProfileId) selectedProfileId.value = saved.selectedProfileId;
+    if (saved.selectedDbName) selectedDbName.value = saved.selectedDbName;
+    if (!Array.isArray(saved.tabs)) return;
+
+    const restored: EditorTab[] = [];
+    for (let i = 0; i < saved.tabs.length; i++) {
+      const s = saved.tabs[i];
+      if (s.path && isTauriRuntime()) {
+        try {
+          const dto = await openTextFile(s.path);
+          restored.push({
+            id: `restored-${Date.now()}-${i}`,
+            title: dto.name,
+            path: dto.path,
+            fileKind: dto.fileKind,
+            content: dto.content,
+            savedContent: dto.content,
+            encoding: dto.encoding,
+            hasBom: dto.hasBom,
+            lineEnding: dto.lineEnding === 'CRLF' ? 'CRLF' : 'LF',
+            byteSize: dto.byteSize,
+            readOnly: Boolean(s.readOnly),
+            profileId: s.profileId || selectedProfileId.value || connections.value[0]?.id || '',
+            dbName: s.dbName || '',
+            mdViewMode: s.mdViewMode || 'split',
+            cursor: createEmptyCursor(dto.content),
+          });
+        } catch {
+          // File may have been moved/deleted; skip silently
+        }
+      } else if (!s.path) {
+        const content = s.content ?? '';
+        consoleCounter += 1;
+        restored.push({
+          id: `restored-console-${Date.now()}-${i}`,
+          title: s.title || `console_${consoleCounter}.sql`,
+          path: null,
+          fileKind: s.fileKind || 'sql',
+          content,
+          savedContent: content,
+          encoding: 'UTF-8',
+          hasBom: false,
+          lineEnding: 'LF',
+          byteSize: estimateUtf8Bytes(content),
+          readOnly: Boolean(s.readOnly),
+          profileId: s.profileId || selectedProfileId.value || connections.value[0]?.id || '',
+          dbName: s.dbName || '',
+          mdViewMode: 'source',
+          cursor: createEmptyCursor(content),
+        });
+      }
+    }
+    if (saved.tabs.length === 0) {
+      tabs.value = [];
+      activeTabId.value = '';
+    } else if (restored.length > 0) {
+      tabs.value = restored;
+      const idx = Math.max(0, Math.min(saved.activeIndex ?? 0, restored.length - 1));
+      activeTabId.value = restored[idx].id;
+    }
+  } catch {
+    // non-fatal
+  }
+}
+
+watch(
+  [tabs, activeTabId, selectedProfileId, selectedDbName],
+  () => {
+    scheduleSaveSession();
+  },
+  { deep: true },
+);
+
 watch(activeTabId, () => {
   scheduleAstInspect();
 });
@@ -2488,6 +2789,7 @@ onMounted(async () => {
   window.addEventListener('click', onGlobalClick);
 
   await refreshProjectsAndConnections();
+  await restoreEditorSession();
   await refreshHistory();
   if (isTauriRuntime()) {
     extensions.value = await listExtensions().catch(() => []);
@@ -2588,23 +2890,23 @@ onBeforeUnmount(() => {
             <div v-if="openMenu === 'file'" class="dropdown-menu">
               <button class="dropdown-item" @click="openMenu = null; openFileFromDialog()">
                 <span>{{ t('openFile') }}</span>
-                <span class="shortcut-hint">Ctrl+O</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('openFile') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; mountFolderDialog()">
                 <span>{{ t('openFolder') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; createNewConsoleTab('')">
                 <span>{{ t('newConsole') }}</span>
-                <span class="shortcut-hint">Ctrl+N</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('newConsole') }}</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; saveActiveTab(false)">
                 <span>{{ t('saveFile') }}</span>
-                <span class="shortcut-hint">Ctrl+S</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('saveFile') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; saveActiveTab(true)">
                 <span>{{ t('saveFileAs') }}</span>
-                <span class="shortcut-hint">Ctrl+Shift+S</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('saveFileAs') }}</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'encoding'">
@@ -2628,7 +2930,7 @@ onBeforeUnmount(() => {
             <div v-if="openMenu === 'edit'" class="dropdown-menu">
               <button class="dropdown-item" @click="openMenu = null; formatActiveSql()">
                 <span>{{ t('formatSql') }}</span>
-                <span class="shortcut-hint">Ctrl+Alt+L</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('formatSql') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; saveCurrentAsSnippet()">
                 <span>保存当前 SQL 为代码片段</span>
@@ -2683,12 +2985,20 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="openMenu === 'tools'" class="dropdown-menu">
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'search'">
-                <span>{{ t('searchEverywhere') }}</span>
-                <span class="shortcut-hint">双击 Shift / Ctrl+K</span>
+                <span>随处搜索 / 查找操作</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('searchEverywhere') }}</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; activeModal = 'shortcuts'">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <IdeIcon name="keyboard" :size="13" />
+                  <span>快捷键配置 (Keymap)...</span>
+                </span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('openKeymap') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; toggleFilesDockSide()">
                 <span>本地文件面板停靠：移至{{ filesDockSide === 'right' ? '左侧' : '右侧' }}</span>
               </button>
+              <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; applyTheme('dark')">
                 <span style="display: inline-flex; align-items: center; gap: 6px">
                   <span class="theme-swatch" style="background: #1e1f22" />
@@ -2731,7 +3041,8 @@ onBeforeUnmount(() => {
             </button>
             <div v-if="openMenu === 'help'" class="dropdown-menu">
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'shortcuts'">
-                <span>{{ t('shortcutsTitle') }}</span>
+                <span>快捷键配置 (Keymap)...</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('openKeymap') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; openDemoMarkdownHandbook()">
                 <span>{{ t('openDemoMd') }}</span>
@@ -2756,13 +3067,26 @@ onBeforeUnmount(() => {
           />
           <select
             :value="activeTab?.profileId || selectedProfileId"
-            title="当前项目下执行数据源"
+            title="执行数据源（按左侧项目树分组展示全部数据源）"
             @change="handleProfileSelectChange(($event.target as HTMLSelectElement).value)"
           >
             <option value="">{{ t('noConnectionSelected') }}</option>
-            <option v-for="prof in projectConnections" :key="prof.id" :value="prof.id">
-              {{ prof.name }} [{{ prof.env }}]
-            </option>
+            <template v-if="projects.length > 1">
+              <optgroup v-for="proj in projects" :key="proj.id" :label="proj.name">
+                <option
+                  v-for="prof in connectionsInProjectById(proj.id)"
+                  :key="prof.id"
+                  :value="prof.id"
+                >
+                  {{ prof.name }} [{{ prof.env }}]
+                </option>
+              </optgroup>
+            </template>
+            <template v-else>
+              <option v-for="prof in connections" :key="prof.id" :value="prof.id">
+                {{ prof.name }} [{{ prof.env }}]
+              </option>
+            </template>
           </select>
 
           <span class="run-widget-sep" />
@@ -2783,7 +3107,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn run-btn"
             :disabled="busy || !activeProfile || !activeTab"
-            :title="activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runCurrent')"
+            :title="`${activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runCurrent')} (${keymap.getDisplay('runCurrent')})`"
             @click="runActiveEditor(false)"
           >
             <IdeIcon name="run" :size="13" />
@@ -2795,7 +3119,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             :disabled="busy || !activeProfile || !activeTab"
-            :title="t('runAll') + ' (Ctrl+Shift+Enter)'"
+            :title="`${t('runAll')} (${keymap.getDisplay('runAll')})`"
             @click="runActiveEditor(true)"
           >
             <IdeIcon name="run-all" :size="13" color="var(--run-green-bright)" />
@@ -2804,7 +3128,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             :disabled="busy || !activeProfile || !activeTab"
-            :title="t('explainBtn')"
+            :title="`${t('explainBtn')} (${keymap.getDisplay('explainSql')})`"
             @click="runExplainActive"
           >
             <IdeIcon name="explain" :size="14" />
@@ -2813,7 +3137,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             :disabled="busy || !activeTab || isMarkdownTab"
-            :title="t('formatSql') + ' (Ctrl+Alt+L)'"
+            :title="`${t('formatSql')} (${keymap.getDisplay('formatSql')})`"
             @click="formatActiveSql"
           >
             <IdeIcon name="format" :size="14" />
@@ -2843,9 +3167,20 @@ onBeforeUnmount(() => {
 
       <!-- Right Global Actions -->
       <div class="header-right">
-        <button class="icon-btn" :title="'随处搜索 (双击 Shift / Ctrl+K)'" @click="activeModal = 'search'">
+        <button
+          class="icon-btn"
+          :title="`随处搜索 (双击 Shift / ${keymap.getDisplay('searchEverywhere')})`"
+          @click="activeModal = 'search'"
+        >
           <IdeIcon name="search" :size="14" />
           <span class="shortcut-hint">Shift×2</span>
+        </button>
+        <button
+          class="icon-btn"
+          :title="`快捷键配置 Keymap (${keymap.getDisplay('openKeymap')})`"
+          @click="activeModal = 'shortcuts'"
+        >
+          <IdeIcon name="keyboard" :size="14" />
         </button>
         <div class="menu-trigger" @click.stop>
           <button
@@ -3113,7 +3448,7 @@ onBeforeUnmount(() => {
             <span v-if="isTabDirty(tab)" class="dirty-dot" title="未保存更改" />
             <button
               class="tab-close-btn"
-              title="关闭标签页 (Ctrl+W / Ctrl+F4)"
+              :title="`关闭标签页 (${keymap.getDisplay('closeTab')} / Ctrl+F4)`"
               @click.stop="closeEditorTab(tab.id)"
             >
               <IdeIcon name="close" :size="11" />
@@ -3123,7 +3458,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             style="margin: 3px 4px"
-            :title="`${t('newConsole')} (Ctrl+N)`"
+            :title="`${t('newConsole')} (${keymap.getDisplay('newConsole')})`"
             @click="createNewConsoleTab('')"
           >
             <IdeIcon name="plus" :size="14" />
@@ -3131,7 +3466,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             style="margin: 3px 2px"
-            :title="`${t('openFile')} (Ctrl+O)`"
+            :title="`${t('openFile')} (${keymap.getDisplay('openFile')})`"
             @click="openFileFromDialog"
           >
             <IdeIcon name="folder-open" :size="14" />
@@ -3161,7 +3496,7 @@ onBeforeUnmount(() => {
               @click="runActiveEditor(false)"
             >
               <IdeIcon name="run" :size="11" />
-              {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · Ctrl+Enter)
+              {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · {{ keymap.getDisplay('runCurrent') }})
             </button>
 
             <template v-if="isMarkdownTab">
@@ -3279,10 +3614,13 @@ onBeforeUnmount(() => {
               :engine-key="activeEngineKey"
               :theme="theme"
               :read-only="activeTab.readOnly"
+              :font-size="editorFontSize"
+              :word-wrap="editorWordWrap"
               :schema-map="activeSchemaMap"
               @update:model-value="updateTabContent"
               @cursor-change="handleCursorChange"
               @run-shortcut="runActiveEditor"
+              @explain-shortcut="runExplainActive"
               @save-shortcut="saveActiveTab(false)"
               @format-shortcut="formatActiveSql"
               @run-md-block="runMarkdownBlock"
@@ -3375,13 +3713,13 @@ onBeforeUnmount(() => {
           </div>
           <div class="editor-empty-shortcuts">
             <span>新建查询控制台</span>
-            <span><kbd>Ctrl</kbd> + <kbd>N</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></span>
+            <span><kbd>{{ keymap.getDisplay('newConsole') }}</kbd></span>
             <span>打开 .md / .sql 文件</span>
-            <span><kbd>Ctrl</kbd> + <kbd>O</kbd></span>
+            <span><kbd>{{ keymap.getDisplay('openFile') }}</kbd></span>
             <span>恢复刚关闭的标签页</span>
-            <span><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></span>
-            <span>随处搜索</span>
-            <span><kbd>双击 Shift</kbd> / <kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+            <span><kbd>{{ keymap.getDisplay('reopenTab') }}</kbd></span>
+            <span>随处搜索 / 快捷键配置</span>
+            <span><kbd>{{ keymap.getDisplay('searchEverywhere') }}</kbd> / <kbd>{{ keymap.getDisplay('openKeymap') }}</kbd></span>
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <button class="btn btn-primary btn-sm" @click="createNewConsoleTab('')">
@@ -3422,7 +3760,7 @@ onBeforeUnmount(() => {
             :result-tabs="resultTabs"
             :active-result-tab-id="activeResultTabId"
             :active-service-tab="activeServiceTab"
-            :console-logs="activeProjectLogs"
+            :console-logs="consoleLogs"
             :ddl-text="ddlText"
             :ddl-title="ddlTitle"
             :history-entries="historyEntries"
@@ -3430,9 +3768,11 @@ onBeforeUnmount(() => {
             @update:active-service-tab="activeServiceTab = $event"
             @update:active-result-tab-id="activeResultTabId = $event"
             @close-result-tab="closeResultTab"
+            @toggle-pin-result-tab="togglePinResultTab"
+            @close-other-result-tabs="closeOtherResultTabs"
             @load-history-sql="loadHistorySqlIntoEditor"
             @preview-grid-mutations="handlePreviewGridMutations"
-            @clear-console-logs="clearActiveProjectLogs"
+            @clear-console-logs="clearConsoleLogs"
             @run-console-sql="handleRunConsoleQuickSql"
             @send-sql-to-editor="createNewConsoleTab($event)"
             @notify="setStatus($event)"
@@ -3767,6 +4107,30 @@ onBeforeUnmount(() => {
 
         <span class="status-divider" />
 
+        <!-- Word Wrap Toggle -->
+        <button
+          class="status-widget"
+          :style="editorWordWrap ? { color: 'var(--accent)', fontWeight: 600 } : undefined"
+          title="点击切换编辑器自动换行"
+          @click="toggleEditorWordWrap"
+        >
+          <IdeIcon name="wrap" :size="12" />
+          {{ editorWordWrap ? '已换行' : '不换行' }}
+        </button>
+
+        <span class="status-divider" />
+
+        <!-- Font Size Widget -->
+        <button
+          class="status-widget"
+          :title="`编辑器字号（${keymap.getDisplay('zoomIn')} / ${keymap.getDisplay('zoomOut')} 调整，点击重置 13px）`"
+          @click="setEditorFontSize(13)"
+        >
+          {{ editorFontSize }}px
+        </button>
+
+        <span class="status-divider" />
+
         <!-- Dialect / File Kind -->
         <span class="status-widget" style="cursor: default">
           {{ activeDialectLabel }}
@@ -3797,10 +4161,15 @@ onBeforeUnmount(() => {
       :encoding-context="encodingModalContext"
       :danger-context="dangerContext"
       :password-profile="passwordProfile"
+      :unsaved-context="unsavedContext"
       :search-items="searchItems"
       :exported-json="exportedJson"
       :busy="busy"
-      @close="activeModal = 'none'"
+      @close="
+        pendingCloseTabId = null;
+        unsavedContext = null;
+        activeModal = 'none';
+      "
       @save-project="handleSaveProject"
       @delete-project="handleDeleteProject"
       @execute-grid-sql="handleExecuteGridSql"
@@ -3813,6 +4182,8 @@ onBeforeUnmount(() => {
       @confirm-danger="confirmDangerExecution"
       @submit-password="handleSubmitPassword"
       @select-search-item="handleSelectSearchItem"
+      @unsaved-save-close="confirmUnsavedSaveClose"
+      @unsaved-discard-close="confirmUnsavedDiscardClose"
       @notify="setStatus($event)"
     />
 
@@ -3831,7 +4202,7 @@ onBeforeUnmount(() => {
         "
       >
         <span>关闭</span>
-        <span class="shortcut-hint">Ctrl+W</span>
+        <span class="shortcut-hint">{{ keymap.getDisplay('closeTab') }}</span>
       </button>
       <button
         class="dropdown-item"
@@ -3892,7 +4263,7 @@ onBeforeUnmount(() => {
         "
       >
         <span>恢复刚关闭的标签页</span>
-        <span class="shortcut-hint">Ctrl+Shift+T</span>
+        <span class="shortcut-hint">{{ keymap.getDisplay('reopenTab') }}</span>
       </button>
       <template v-if="tabCtxTab.path">
         <div class="dropdown-sep" />

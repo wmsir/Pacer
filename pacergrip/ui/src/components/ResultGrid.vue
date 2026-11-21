@@ -29,6 +29,7 @@ export interface ResultTabItem {
   engineKey: string;
   dbName: string;
   readOnly: boolean;
+  pinned?: boolean;
   sourceTable: string | null;
   availableTables: string[];
   primaryKeys: string[];
@@ -86,9 +87,11 @@ const emit = defineEmits<{
   (e: 'update:activeServiceTab', tab: 'result' | 'output' | 'ddl' | 'history' | 'problems'): void;
   (e: 'update:activeResultTabId', id: string): void;
   (e: 'close-result-tab', id: string): void;
+  (e: 'toggle-pin-result-tab', id: string): void;
+  (e: 'close-other-result-tabs', id: string): void;
   (e: 'load-history-sql', entry: QueryHistoryEntry): void;
   (e: 'preview-grid-mutations', payload: GridMutationPreviewPayload): void;
-  (e: 'clear-console-logs'): void;
+  (e: 'clear-console-logs', projectId: string): void;
   (e: 'run-console-sql', sql: string): void;
   (e: 'send-sql-to-editor', sql: string): void;
   (e: 'notify', message: string): void;
@@ -543,6 +546,104 @@ function doCopyInsertSql() {
   void copyText(toInsertSql(tableName, res.columns, displayedRows.value.map((r) => r.row)));
 }
 
+const activeStatsColumn = computed(() => {
+  const res = currentResult.value;
+  if (!res || res.columns.length === 0) return '';
+  if (selectedColName.value && res.columns.includes(selectedColName.value)) {
+    return selectedColName.value;
+  }
+  return res.columns[0];
+});
+
+const columnStats = computed(() => {
+  const col = activeStatsColumn.value;
+  if (!col) return null;
+  const rows = displayedRows.value;
+  let nonNull = 0;
+  const distinctSet = new Set<string>();
+  const nums: number[] = [];
+  for (const item of rows) {
+    const val = item.row[col];
+    if (val === null || val === undefined) continue;
+    nonNull += 1;
+    const strVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
+    distinctSet.add(strVal);
+    if (typeof val === 'number' && Number.isFinite(val)) {
+      nums.push(val);
+    } else if (typeof val === 'string' && /^-?\d+(\.\d+)?$/.test(val.trim())) {
+      const parsed = Number(val.trim());
+      if (Number.isFinite(parsed) && val.trim().length <= 15) {
+        nums.push(parsed);
+      }
+    }
+  }
+  const allNumeric = nonNull > 0 && nums.length === nonNull;
+  let sum = 0;
+  let min = 0;
+  let max = 0;
+  if (allNumeric) {
+    min = nums[0];
+    max = nums[0];
+    for (const n of nums) {
+      sum += n;
+      if (n < min) min = n;
+      if (n > max) max = n;
+    }
+  }
+  return {
+    column: col,
+    total: rows.length,
+    nonNull,
+    distinct: distinctSet.size,
+    isNumeric: allNumeric,
+    sum: Number(sum.toFixed(4)),
+    avg: allNumeric ? Number((sum / nums.length).toFixed(4)) : 0,
+    min,
+    max,
+  };
+});
+
+function formatSqlInLiteral(val: unknown): string {
+  if (typeof val === 'number' && Number.isFinite(val)) return String(val);
+  const raw = typeof val === 'object' ? JSON.stringify(val) : String(val);
+  return `'${raw.replace(/'/g, "''")}'`;
+}
+
+function doCopyColumnInSql() {
+  const col = activeStatsColumn.value;
+  if (!col) return;
+  const seen = new Set<string>();
+  const formatted: string[] = [];
+  for (const item of displayedRows.value) {
+    const val = item.row[col];
+    if (val === null || val === undefined) continue;
+    const token = formatSqlInLiteral(val);
+    if (!seen.has(token)) {
+      seen.add(token);
+      formatted.push(token);
+    }
+  }
+  if (formatted.length === 0) {
+    emit('notify', `列「${col}」暂无非空值可复制`);
+    return;
+  }
+  const clause = `(${formatted.join(', ')})`;
+  void navigator.clipboard
+    .writeText(clause)
+    .then(() => emit('notify', `已复制列 ${col} 的 IN 条件（共 ${formatted.length} 项）`))
+    .catch(() => emit('notify', '剪贴板复制失败'));
+}
+
+function doCopySelectedRowJson() {
+  const item = displayedRows.value.find((r) => r.origIdx === selectedRowOrigIdx.value);
+  const row = item?.row;
+  if (!row) {
+    emit('notify', '请先点击选择结果集中的任意一行');
+    return;
+  }
+  void copyText(JSON.stringify(row, null, 2));
+}
+
 async function copyText(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -552,42 +653,83 @@ async function copyText(text: string) {
   }
 }
 
-// ==================== Unified Project Output Console ====================
-const logSourceFilter = ref<string>('ALL');
+// ==================== Shared Project Helpers (Matches Left Database Explorer) ====================
+const defaultProjectId = computed(() => props.projects[0]?.id || 'default-project');
+
+function connectionProjectId(conn: ConnectionProfile): string {
+  return conn.projectId || defaultProjectId.value;
+}
+
+function connectionsInProject(pid: string): ConnectionProfile[] {
+  return props.connections.filter((c) => connectionProjectId(c) === pid);
+}
+
+function projectNameById(pid?: string | null): string {
+  if (!pid) return props.projects[0]?.name ?? '默认项目';
+  return props.projects.find((p) => p.id === pid)?.name ?? '默认项目';
+}
+
+function projectColorById(pid?: string | null): string {
+  if (!pid) return props.projects[0]?.color || 'var(--accent)';
+  return props.projects.find((p) => p.id === pid)?.color || 'var(--accent)';
+}
+
+// ==================== Unified Output Console (Default: ALL Projects) ====================
+const logProjectFilter = ref<string>('ALL');
+const logProfileFilter = ref<string>('ALL');
 const logOnlyErrors = ref<boolean>(false);
 const logSearchText = ref<string>('');
 const quickConsoleSql = ref<string>('');
 const consoleScrollEl = ref<HTMLDivElement | null>(null);
 
-const errorLogCount = computed(
-  () => props.consoleLogs.filter((l) => l.level === 'error').length,
+const logScopedEntries = computed(() =>
+  props.consoleLogs.filter((entry) => {
+    const pid = entry.projectId || defaultProjectId.value;
+    if (logProjectFilter.value !== 'ALL' && pid !== logProjectFilter.value) return false;
+    if (logProfileFilter.value !== 'ALL' && entry.profileId !== logProfileFilter.value) return false;
+    return true;
+  }),
 );
 
-const logSourceOptions = computed(() => {
-  const set = new Set<string>();
-  for (const item of props.consoleLogs) {
-    if (item.profileName) set.add(item.profileName);
-  }
-  return [...set];
-});
+const errorLogCount = computed(
+  () => logScopedEntries.value.filter((l) => l.level === 'error').length,
+);
 
 const filteredConsoleLogs = computed(() => {
   const q = logSearchText.value.trim().toLowerCase();
-  return props.consoleLogs.filter((entry) => {
+  return logScopedEntries.value.filter((entry) => {
     if (logOnlyErrors.value && entry.level !== 'error') return false;
-    if (logSourceFilter.value !== 'ALL' && entry.profileName !== logSourceFilter.value) return false;
     if (q) {
-      const hay = `${entry.profileName} ${entry.dbName ?? ''} ${entry.summary} ${entry.detail ?? ''}`.toLowerCase();
+      const hay = `${projectNameById(entry.projectId)} ${entry.profileName} ${entry.dbName ?? ''} ${entry.summary} ${entry.detail ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
 });
 
+watch([logProjectFilter, () => props.projects, () => props.connections], () => {
+  if (
+    logProjectFilter.value !== 'ALL' &&
+    !props.projects.some((p) => p.id === logProjectFilter.value)
+  ) {
+    logProjectFilter.value = 'ALL';
+  }
+  if (logProfileFilter.value !== 'ALL') {
+    const visibleConns =
+      logProjectFilter.value === 'ALL'
+        ? props.connections
+        : connectionsInProject(logProjectFilter.value);
+    if (!visibleConns.some((c) => c.id === logProfileFilter.value)) {
+      logProfileFilter.value = 'ALL';
+    }
+  }
+});
+
 function formatLogEntryAsText(entry: ConsoleLogEntry): string {
+  const proj = projectNameById(entry.projectId);
   const scope = entry.dbName ? `${entry.profileName}/${entry.dbName}` : entry.profileName;
   const tag = entry.level.toUpperCase();
-  const head = `[${entry.timestamp}] [${tag}] [${scope}] ${entry.summary}`;
+  const head = `[${entry.timestamp}] [${tag}] [${proj} · ${scope}] ${entry.summary}`;
   return entry.detail ? `${head}\n${entry.detail}` : head;
 }
 
@@ -598,12 +740,12 @@ function copyAllFilteredLogs() {
 }
 
 function copyOnlyErrorLogs() {
-  const text = props.consoleLogs
+  const text = logScopedEntries.value
     .filter((e) => e.level === 'error')
     .map(formatLogEntryAsText)
     .join('\n\n');
   if (!text) {
-    emit('notify', '当前项目暂无报错日志');
+    emit('notify', '当前筛选范围内暂无报错日志');
     return;
   }
   void copyText(text);
@@ -628,7 +770,7 @@ watch(
   },
 );
 
-// ==================== History Filtering (Project + DataSource + Status + Search) ====================
+// ==================== History Filtering (Consistent with Left Project Tree) ====================
 const historyProjectFilter = ref<string>('ALL');
 const historyProfileFilter = ref<string>('ALL');
 const historyStatusFilter = ref<'ALL' | 'OK' | 'ERR'>('ALL');
@@ -637,63 +779,57 @@ const historySearchText = ref<string>('');
 function resolveHistoryProjectId(entry: QueryHistoryEntry): string {
   if (entry.projectId) return entry.projectId;
   const conn = props.connections.find((c) => c.id === entry.profileId);
-  return conn?.projectId || props.projects[0]?.id || 'default-project';
+  return conn?.projectId || defaultProjectId.value;
 }
 
-function projectNameById(pid: string): string {
-  return props.projects.find((p) => p.id === pid)?.name ?? '默认项目';
-}
-
-const historyProfileOptions = computed(() => {
-  const effectiveProj =
-    historyProjectFilter.value === 'CURRENT'
-      ? props.activeProjectId
-      : historyProjectFilter.value;
-
+const legacyHistoryProfiles = computed(() => {
+  const activeIds = new Set(props.connections.map((c) => c.id));
   const map = new Map<string, string>();
-  for (const conn of props.connections) {
-    const pid = conn.projectId || props.projects[0]?.id || 'default-project';
-    if (effectiveProj === 'ALL' || pid === effectiveProj) {
-      map.set(conn.id, conn.name);
-    }
-  }
   for (const h of props.historyEntries) {
+    if (activeIds.has(h.profileId)) continue;
     const pid = resolveHistoryProjectId(h);
-    if (effectiveProj === 'ALL' || pid === effectiveProj) {
+    if (historyProjectFilter.value === 'ALL' || pid === historyProjectFilter.value) {
       if (!map.has(h.profileId)) {
-        map.set(h.profileId, h.profileName);
+        map.set(h.profileId, `${h.profileName} (已移除)`);
       }
     }
   }
   return [...map.entries()].map(([id, name]) => ({ id, name }));
 });
 
-watch(historyProjectFilter, () => {
+watch([historyProjectFilter, () => props.projects, () => props.connections], () => {
   if (
-    historyProfileFilter.value !== 'ALL' &&
-    !historyProfileOptions.value.some((p) => p.id === historyProfileFilter.value)
+    historyProjectFilter.value !== 'ALL' &&
+    !props.projects.some((p) => p.id === historyProjectFilter.value)
   ) {
-    historyProfileFilter.value = 'ALL';
+    historyProjectFilter.value = 'ALL';
+  }
+  if (historyProfileFilter.value !== 'ALL') {
+    const activeVisible =
+      historyProjectFilter.value === 'ALL'
+        ? props.connections
+        : connectionsInProject(historyProjectFilter.value);
+    const hasMatch =
+      activeVisible.some((c) => c.id === historyProfileFilter.value) ||
+      legacyHistoryProfiles.value.some((c) => c.id === historyProfileFilter.value);
+    if (!hasMatch) {
+      historyProfileFilter.value = 'ALL';
+    }
   }
 });
 
 const filteredHistoryEntries = computed(() => {
-  const effectiveProj =
-    historyProjectFilter.value === 'CURRENT'
-      ? props.activeProjectId
-      : historyProjectFilter.value;
   const q = historySearchText.value.trim().toLowerCase();
-
   return props.historyEntries.filter((item) => {
     const pid = resolveHistoryProjectId(item);
-    if (effectiveProj !== 'ALL' && pid !== effectiveProj) return false;
+    if (historyProjectFilter.value !== 'ALL' && pid !== historyProjectFilter.value) return false;
     if (historyProfileFilter.value !== 'ALL' && item.profileId !== historyProfileFilter.value) {
       return false;
     }
     if (historyStatusFilter.value === 'OK' && !item.success) return false;
     if (historyStatusFilter.value === 'ERR' && item.success) return false;
     if (q) {
-      const hay = `${item.profileName} ${item.database ?? ''} ${item.sql} ${item.errorMessage ?? ''}`.toLowerCase();
+      const hay = `${projectNameById(pid)} ${item.profileName} ${item.database ?? ''} ${item.sql} ${item.errorMessage ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -760,16 +896,39 @@ const astWarnings = computed(
         </button>
       </div>
 
-      <div v-if="resultTabs.length > 1 && activeServiceTab === 'result'" style="display: flex; gap: 4px">
+      <div v-if="resultTabs.length >= 1 && activeServiceTab === 'result'" style="display: flex; gap: 4px; align-items: center; overflow-x: auto">
         <button
           v-for="rt in resultTabs"
           :key="rt.id"
           class="btn btn-sm"
           :class="{ 'btn-primary': rt.id === activeResultTabId }"
+          style="display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0"
           @click="emit('update:activeResultTabId', rt.id)"
         >
-          {{ rt.title }}
-          <span style="margin-left: 4px; opacity: 0.8" @click.stop="emit('close-result-tab', rt.id)">×</span>
+          <span
+            class="pin-badge"
+            :class="{ pinned: rt.pinned }"
+            :title="rt.pinned ? '取消固定结果页' : '固定结果页（不被后续查询覆盖）'"
+            @click.stop="emit('toggle-pin-result-tab', rt.id)"
+          >
+            <IdeIcon name="pin" :size="11" />
+          </span>
+          <span>{{ rt.title }}</span>
+          <span
+            style="margin-left: 2px; opacity: 0.8"
+            title="关闭该结果页"
+            @click.stop="emit('close-result-tab', rt.id)"
+          >
+            ×
+          </span>
+        </button>
+        <button
+          v-if="resultTabs.length > 1 && currentResult"
+          class="icon-btn compact"
+          title="关闭其他未固定的结果页"
+          @click="emit('close-other-result-tabs', currentResult.id)"
+        >
+          清其他
         </button>
       </div>
     </div>
@@ -886,6 +1045,20 @@ const astWarnings = computed(
             </div>
 
             <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap">
+              <button
+                class="btn btn-sm"
+                title="复制当前列为 SQL IN (...) 条件列表"
+                @click="doCopyColumnInSql"
+              >
+                复制列 IN (...)
+              </button>
+              <button
+                class="btn btn-sm"
+                title="复制选中行为 JSON 对象"
+                @click="doCopySelectedRowJson"
+              >
+                复制行 JSON
+              </button>
               <button class="btn btn-sm" @click="doExportCsv">{{ t('exportCsv') }}</button>
               <button class="btn btn-sm" @click="doExportJson">{{ t('exportJson') }}</button>
               <button class="btn btn-sm" @click="doCopyMarkdown">{{ t('copyMarkdown') }}</button>
@@ -1087,6 +1260,25 @@ const astWarnings = computed(
               </div>
             </div>
           </div>
+
+          <!-- Instant Column Summary Stats Bar -->
+          <div v-if="columnStats" class="grid-stats-bar">
+            <div style="display: flex; align-items: center; gap: 12px">
+              <span>
+                列统计 <strong style="color: var(--text-primary); font-family: var(--font-mono)">{{ columnStats.column }}</strong>
+              </span>
+              <span>行数: <strong>{{ columnStats.total }}</strong></span>
+              <span>非空: <strong>{{ columnStats.nonNull }}</strong></span>
+              <span>去重: <strong>{{ columnStats.distinct }}</strong></span>
+              <template v-if="columnStats.isNumeric">
+                <span>SUM: <strong>{{ columnStats.sum }}</strong></span>
+                <span>AVG: <strong>{{ columnStats.avg }}</strong></span>
+                <span>MIN: <strong>{{ columnStats.min }}</strong></span>
+                <span>MAX: <strong>{{ columnStats.max }}</strong></span>
+              </template>
+            </div>
+            <span style="opacity: 0.78">提示：点击列名排序 · 双击单元格直接修改 · 点击「复制列 IN (...)」快速生成查询条件</span>
+          </div>
         </template>
       </template>
 
@@ -1094,17 +1286,45 @@ const astWarnings = computed(
       <template v-else-if="activeServiceTab === 'output'">
         <div class="console-toolbar">
           <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
-            <span class="pill pill-neutral">项目控制台: {{ activeProjectName }}</span>
+            <select
+              v-model="logProjectFilter"
+              class="field"
+              style="width: auto; max-width: 175px; padding: 2px 6px; font-size: 11.5px"
+              title="按项目筛选控制台日志（默认全部项目）"
+            >
+              <option value="ALL">全部项目</option>
+              <option v-for="proj in projects" :key="proj.id" :value="proj.id">
+                {{ proj.name }}
+              </option>
+            </select>
 
             <select
-              v-model="logSourceFilter"
+              v-model="logProfileFilter"
               class="field"
-              style="width: auto; max-width: 185px; padding: 2px 6px; font-size: 11.5px"
+              style="width: auto; max-width: 195px; padding: 2px 6px; font-size: 11.5px"
+              title="按数据源筛选控制台日志"
             >
-              <option value="ALL">{{ t('allSourcesInProject') }}</option>
-              <option v-for="src in logSourceOptions" :key="src" :value="src">
-                {{ src }}
-              </option>
+              <option value="ALL">全部数据源</option>
+              <template v-if="logProjectFilter === 'ALL' && projects.length > 1">
+                <optgroup v-for="proj in projects" :key="proj.id" :label="proj.name">
+                  <option
+                    v-for="conn in connectionsInProject(proj.id)"
+                    :key="conn.id"
+                    :value="conn.id"
+                  >
+                    {{ conn.name }}
+                  </option>
+                </optgroup>
+              </template>
+              <template v-else>
+                <option
+                  v-for="conn in logProjectFilter === 'ALL' ? connections : connectionsInProject(logProjectFilter)"
+                  :key="conn.id"
+                  :value="conn.id"
+                >
+                  {{ conn.name }}
+                </option>
+              </template>
             </select>
 
             <button
@@ -1130,7 +1350,11 @@ const astWarnings = computed(
             <button class="btn btn-sm btn-danger" :disabled="errorLogCount === 0" @click="copyOnlyErrorLogs">
               <IdeIcon name="copy" :size="12" /> {{ t('copyErrorLogs') }}
             </button>
-            <button class="btn btn-sm" :disabled="consoleLogs.length === 0" @click="emit('clear-console-logs')">
+            <button
+              class="btn btn-sm"
+              :disabled="logScopedEntries.length === 0"
+              @click="emit('clear-console-logs', logProjectFilter)"
+            >
               <IdeIcon name="trash" :size="12" /> {{ t('clearLogs') }}
             </button>
           </div>
@@ -1138,7 +1362,7 @@ const astWarnings = computed(
 
         <div ref="consoleScrollEl" class="console-output-area">
           <div v-if="filteredConsoleLogs.length === 0" class="empty-state" style="padding: 12px 4px">
-            当前项目尚无匹配的控制台执行日志。同一项目下任意数据源的 SQL 执行、结果集修改提交与报错都会汇总展示在这里，支持鼠标划选复制与一键复制。
+            当前筛选范围内尚无控制台执行日志。所有项目及数据源的 SQL 执行、结果集修改提交与报错都会汇总展示在这里，支持鼠标划选与一键复制。
           </div>
 
           <div
@@ -1149,6 +1373,13 @@ const astWarnings = computed(
           >
             <div class="log-entry-head">
               <span class="log-ts">[{{ entry.timestamp }}]</span>
+              <span class="pill pill-neutral" style="display: inline-flex; align-items: center; gap: 4px">
+                <span
+                  class="project-dot"
+                  :style="{ background: projectColorById(entry.projectId), width: '6px', height: '6px' }"
+                />
+                {{ projectNameById(entry.projectId) }}
+              </span>
               <span class="log-source-badge">
                 {{ entry.dbName ? `${entry.profileName} / ${entry.dbName}` : entry.profileName }}
               </span>
@@ -1224,23 +1455,42 @@ const astWarnings = computed(
               v-model="historyProjectFilter"
               class="field"
               style="width: auto; max-width: 175px; padding: 2px 6px; font-size: 11.5px"
-              title="按项目筛选执行历史"
+              title="按项目筛选执行历史（与左侧项目列表一致）"
             >
               <option value="ALL">全部项目</option>
-              <option value="CURRENT">当前项目 ({{ activeProjectName }})</option>
               <option v-for="proj in projects" :key="proj.id" :value="proj.id">
-                项目: {{ proj.name }}
+                {{ proj.name }}
               </option>
             </select>
 
             <select
               v-model="historyProfileFilter"
               class="field"
-              style="width: auto; max-width: 185px; padding: 2px 6px; font-size: 11.5px"
+              style="width: auto; max-width: 195px; padding: 2px 6px; font-size: 11.5px"
               title="按数据源筛选执行历史"
             >
               <option value="ALL">全部数据源</option>
-              <option v-for="opt in historyProfileOptions" :key="opt.id" :value="opt.id">
+              <template v-if="historyProjectFilter === 'ALL' && projects.length > 1">
+                <optgroup v-for="proj in projects" :key="proj.id" :label="proj.name">
+                  <option
+                    v-for="conn in connectionsInProject(proj.id)"
+                    :key="conn.id"
+                    :value="conn.id"
+                  >
+                    {{ conn.name }}
+                  </option>
+                </optgroup>
+              </template>
+              <template v-else>
+                <option
+                  v-for="conn in historyProjectFilter === 'ALL' ? connections : connectionsInProject(historyProjectFilter)"
+                  :key="conn.id"
+                  :value="conn.id"
+                >
+                  {{ conn.name }}
+                </option>
+              </template>
+              <option v-for="opt in legacyHistoryProfiles" :key="opt.id" :value="opt.id">
                 {{ opt.name }}
               </option>
             </select>

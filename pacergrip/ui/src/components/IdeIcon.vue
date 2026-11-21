@@ -50,7 +50,10 @@ export type IdeIconName =
   | 'db-sqlite'
   | 'db-generic'
   | 'leaf'
-  | 'clock';
+  | 'clock'
+  | 'keyboard'
+  | 'pin'
+  | 'wrap';
 
 withDefaults(
   defineProps<{
@@ -332,7 +335,9 @@ withDefaults(
     </template>
 
     <template v-else-if="name === 'collapse-all'">
-      <path d="M5.2 4.4L8 7.2L10.8 4.4M5.2 11.6L8 8.8L10.8 11.6" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round" />
+      <rect x="2.6" y="3.8" width="9.2" height="9.2" rx="1.4" stroke="currentColor" stroke-width="1.3" />
+      <path d="M5 8.4H9.4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
+      <path d="M5.2 2.2H12.2C13 2.2 13.6 2.8 13.6 3.6V10.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.65" />
     </template>
 
     <template v-else-if="name === 'close'">
@@ -386,6 +391,19 @@ withDefaults(
     <template v-else-if="name === 'clock'">
       <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.35" />
       <path d="M8 4.8V8.2L10.4 9.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+    </template>
+
+    <template v-else-if="name === 'keyboard'">
+      <rect x="1.8" y="3.6" width="12.4" height="8.8" rx="1.6" stroke="currentColor" stroke-width="1.3" />
+      <path d="M4.2 6.4H5.4M7.2 6.4H8.4M10.2 6.4H11.6M4.2 8.8H5.8M7.6 8.8H8.8M10.6 8.8H11.6M5.2 10.7H10.8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
+    </template>
+
+    <template v-else-if="name === 'pin'">
+      <path d="M9.8 2.4L13.6 6.2L12 7.8L10.6 7.2L8 9.8V11.8L6.8 13L4.9 11.1L2.4 13.6M4.9 11.1L3 9.2L4.2 8H6.2L8.8 5.4L8.2 4L9.8 2.4Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" />
+    </template>
+
+    <template v-else-if="name === 'wrap'">
+      <path d="M2.5 4H13.5M2.5 8H11.2C12.5 8 13.5 8.9 13.5 10.1C13.5 11.3 12.5 12.2 11.2 12.2H8.4M10 10.6L8.2 12.2L10 13.8M2.5 12.2H5.6" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" />
     </template>
   </svg>
 </template>

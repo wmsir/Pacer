@@ -55,6 +55,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 
 import type { MarkdownSqlBlock } from '../api/ipc';
 import { extractMarkdownSqlBlocksLocal } from '../utils/sqlTools';
+import { comboToCodeMirrorKey, useKeymap } from '../utils/keymap';
 
 export interface EditorCursorTelemetry {
   line: number;
@@ -73,6 +74,8 @@ const props = defineProps<{
   engineKey: string;
   theme: 'dark' | 'light' | 'eyecare';
   readOnly?: boolean;
+  fontSize?: number;
+  wordWrap?: boolean;
   schemaMap?: Record<string, string[]>;
   runLabel?: string;
   explainLabel?: string;
@@ -83,6 +86,7 @@ const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void;
   (e: 'cursor-change', telemetry: EditorCursorTelemetry): void;
   (e: 'run-shortcut', all: boolean): void;
+  (e: 'explain-shortcut'): void;
   (e: 'save-shortcut'): void;
   (e: 'format-shortcut'): void;
   (e: 'run-md-block', block: MarkdownSqlBlock): void;
@@ -90,6 +94,7 @@ const emit = defineEmits<{
   (e: 'open-md-block-console', block: MarkdownSqlBlock): void;
 }>();
 
+const userKeymap = useKeymap();
 const hostEl = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 let syncingFromProp = false;
@@ -98,6 +103,9 @@ const langCompartment = new Compartment();
 const themeCompartment = new Compartment();
 const readOnlyCompartment = new Compartment();
 const lensCompartment = new Compartment();
+const keymapCompartment = new Compartment();
+const fontCompartment = new Compartment();
+const wrapCompartment = new Compartment();
 
 class MarkdownSqlLensWidget extends WidgetType {
   constructor(
@@ -348,61 +356,59 @@ function emitCursorTelemetry(state: EditorState) {
   });
 }
 
+function buildCustomKeymapExtension() {
+  const b = userKeymap.bindings;
+  const entries: Array<{ key: string; run: (v: EditorView) => boolean }> = [];
+  const add = (combo: string, run: (v: EditorView) => boolean) => {
+    const cmKey = comboToCodeMirrorKey(combo);
+    if (cmKey) entries.push({ key: cmKey, run });
+  };
+  add(b.runCurrent, () => {
+    emit('run-shortcut', false);
+    return true;
+  });
+  add(b.runAll, () => {
+    emit('run-shortcut', true);
+    return true;
+  });
+  add(b.explainSql, () => {
+    emit('explain-shortcut');
+    return true;
+  });
+  add(b.saveFile, () => {
+    emit('save-shortcut');
+    return true;
+  });
+  add(b.formatSql, () => {
+    emit('format-shortcut');
+    return true;
+  });
+  add(b.toggleComment, toggleLineComment);
+  add(b.duplicateLine, copyLineDown);
+  add(b.deleteLine, deleteLine);
+  add(b.findReplace, openSearchPanel);
+  return keymap.of(entries);
+}
+
+function buildFontExtension() {
+  const sz = Math.max(10, Math.min(26, props.fontSize ?? 13));
+  return EditorView.theme({
+    '.cm-content': { fontSize: `${sz}px` },
+    '.cm-gutters': { fontSize: `${Math.max(10, sz - 1)}px` },
+  });
+}
+
+function buildWrapExtension() {
+  return props.wordWrap ? EditorView.lineWrapping : [];
+}
+
 onMounted(() => {
   if (!hostEl.value) return;
-
-  const customKeys = keymap.of([
-    {
-      key: 'Mod-Enter',
-      run: () => {
-        emit('run-shortcut', false);
-        return true;
-      },
-    },
-    {
-      key: 'Mod-Shift-Enter',
-      run: () => {
-        emit('run-shortcut', true);
-        return true;
-      },
-    },
-    {
-      key: 'Mod-s',
-      run: () => {
-        emit('save-shortcut');
-        return true;
-      },
-    },
-    {
-      key: 'Ctrl-Alt-l',
-      run: () => {
-        emit('format-shortcut');
-        return true;
-      },
-    },
-    // IntelliJ IDEA / DataGrip editor shortcuts
-    {
-      key: 'Mod-/',
-      run: toggleLineComment,
-    },
-    {
-      key: 'Mod-d',
-      run: copyLineDown,
-    },
-    {
-      key: 'Mod-y',
-      run: deleteLine,
-    },
-    {
-      key: 'Mod-r',
-      run: openSearchPanel,
-    },
-  ]);
 
   const state = EditorState.create({
     doc: props.modelValue,
     extensions: [
-      customKeys,
+      keymapCompartment.of(buildCustomKeymapExtension()),
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
@@ -429,6 +435,8 @@ onMounted(() => {
       themeCompartment.of(buildThemeExtension()),
       readOnlyCompartment.of(EditorState.readOnly.of(Boolean(props.readOnly))),
       lensCompartment.of(buildMarkdownLensExtension()),
+      fontCompartment.of(buildFontExtension()),
+      wrapCompartment.of(buildWrapExtension()),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !syncingFromProp) {
           emit('update:modelValue', update.state.doc.toString());
@@ -503,6 +511,37 @@ watch(
     if (!view) return;
     view.dispatch({
       effects: lensCompartment.reconfigure(buildMarkdownLensExtension()),
+    });
+  },
+);
+
+watch(
+  () => ({ ...userKeymap.bindings }),
+  () => {
+    if (!view) return;
+    view.dispatch({
+      effects: keymapCompartment.reconfigure(buildCustomKeymapExtension()),
+    });
+  },
+  { deep: true },
+);
+
+watch(
+  () => props.fontSize,
+  () => {
+    if (!view) return;
+    view.dispatch({
+      effects: fontCompartment.reconfigure(buildFontExtension()),
+    });
+  },
+);
+
+watch(
+  () => props.wordWrap,
+  () => {
+    if (!view) return;
+    view.dispatch({
+      effects: wrapCompartment.reconfigure(buildWrapExtension()),
     });
   },
 );

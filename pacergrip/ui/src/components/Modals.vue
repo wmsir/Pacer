@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useI18n } from '../i18n';
 import {
   discoverDbeaver,
@@ -19,6 +19,16 @@ import {
 import type { GridMutationPreviewPayload } from './ResultGrid.vue';
 import IdeIcon from './IdeIcon.vue';
 import { formatBytes } from '../utils/sqlTools';
+import {
+  SHORTCUT_ACTIONS,
+  SHORTCUT_CATEGORY_LABELS,
+  eventToCombo,
+  formatComboDisplay,
+  useKeymap,
+  type ShortcutActionDef,
+  type ShortcutActionId,
+  type ShortcutCategory,
+} from '../utils/keymap';
 
 export type ActiveModalKind =
   | 'none'
@@ -30,7 +40,8 @@ export type ActiveModalKind =
   | 'danger'
   | 'search'
   | 'password'
-  | 'shortcuts';
+  | 'shortcuts'
+  | 'unsaved';
 
 export interface EncodingModalContext {
   title: string;
@@ -85,6 +96,7 @@ const props = defineProps<{
   encodingContext: EncodingModalContext | null;
   dangerContext: DangerModalContext | null;
   passwordProfile: ConnectionProfile | null;
+  unsavedContext?: { title: string; path: string | null } | null;
   searchItems: SearchEverywhereItem[];
   exportedJson: string;
   busy: boolean;
@@ -104,6 +116,8 @@ const emit = defineEmits<{
   (e: 'confirm-danger'): void;
   (e: 'submit-password', profileId: string, password: string): void;
   (e: 'select-search-item', item: SearchEverywhereItem): void;
+  (e: 'unsaved-save-close'): void;
+  (e: 'unsaved-discard-close'): void;
   (e: 'notify', message: string): void;
 }>();
 
@@ -784,6 +798,11 @@ const searchInputRef = ref<HTMLInputElement | null>(null);
 watch(
   () => props.activeModal,
   async (modal) => {
+    if (modal !== 'shortcuts') {
+      cancelRecordingKey();
+    } else {
+      keymapSearch.value = '';
+    }
     if (modal === 'import') {
       await scanLocalDbeaver();
     } else if (modal === 'password') {
@@ -841,43 +860,89 @@ function onSearchKeydown(e: KeyboardEvent) {
   }
 }
 
-const shortcutRows = computed(() =>
-  locale.value === 'zh-CN'
-    ? [
-        { key: 'Ctrl + Enter', desc: '执行选中 SQL；无选区时执行光标所在 SQL 语句或 Markdown SQL 块 (IDEA)' },
-        { key: 'Ctrl + Shift + Enter', desc: '顺序执行当前脚本的全部语句 / 当前 Markdown 的全部 SQL 块' },
-        { key: 'Ctrl + W / Ctrl + F4', desc: '关闭当前 SQL / 文件编辑标签页 (IDEA)' },
-        { key: 'Ctrl + Shift + T', desc: '恢复最近关闭的 SQL / 文件标签页' },
-        { key: '双击 Shift / Ctrl + Shift + A / Ctrl + K', desc: '随处搜索 / 查找操作 (Search Everywhere · IDEA)' },
-        { key: 'Ctrl + Alt + L', desc: '一键格式化当前 SQL 语句 (IDEA Reformat)' },
-        { key: 'Ctrl + /', desc: '注释 / 取消注释当前行或选区 (-- SQL 注释 · IDEA)' },
-        { key: 'Ctrl + D', desc: '向下复制当前行 (Duplicate Line · IDEA)' },
-        { key: 'Ctrl + Y', desc: '删除当前行 (Delete Line · IDEA)' },
-        { key: 'Ctrl + F / Ctrl + R', desc: '在编辑器内查找 / 查找并替换 (IDEA)' },
-        { key: 'Alt + ← / Alt + →', desc: '切换上一个 / 下一个 SQL 编辑标签页 (IDEA)' },
-        { key: 'Alt + 1 / Alt + 2 / Alt + 4', desc: '展开或收起 数据库面板 / 本地文件面板 / 底部控制台 (IDEA)' },
-        { key: 'Ctrl + O', desc: '打开本地 .md / .sql 文件（自动检测编码与行尾符）' },
-        { key: 'Ctrl + S / Ctrl + Shift + S', desc: '保存当前文件 / 另存为' },
-        { key: 'Ctrl + N / Ctrl + Shift + L', desc: '新建 SQL 查询控制台标签页' },
-      ]
-    : [
-        { key: 'Ctrl + Enter', desc: 'Execute selected SQL, enclosing Markdown SQL fence, or statement at cursor' },
-        { key: 'Ctrl + Shift + Enter', desc: 'Execute all statements or all SQL blocks in Markdown' },
-        { key: 'Ctrl + W / Ctrl + F4', desc: 'Close active SQL / file editor tab (IDEA)' },
-        { key: 'Ctrl + Shift + T', desc: 'Reopen last closed editor tab' },
-        { key: 'Double Shift / Ctrl + Shift + A / Ctrl + K', desc: 'Search Everywhere / Find Action (IDEA)' },
-        { key: 'Ctrl + Alt + L', desc: 'Reformat SQL (IDEA)' },
-        { key: 'Ctrl + /', desc: 'Toggle line comment (IDEA)' },
-        { key: 'Ctrl + D', desc: 'Duplicate line (IDEA)' },
-        { key: 'Ctrl + Y', desc: 'Delete line (IDEA)' },
-        { key: 'Ctrl + F / Ctrl + R', desc: 'Find / Find & Replace in editor (IDEA)' },
-        { key: 'Alt + Left / Alt + Right', desc: 'Switch previous / next editor tab (IDEA)' },
-        { key: 'Alt + 1 / Alt + 2 / Alt + 4', desc: 'Toggle Database / Files / Services tool windows (IDEA)' },
-        { key: 'Ctrl + O', desc: 'Open local .md / .sql file' },
-        { key: 'Ctrl + S / Ctrl + Shift + S', desc: 'Save / Save As' },
-        { key: 'Ctrl + N', desc: 'New Query Console tab' },
-      ],
-);
+// ==================== Interactive Keymap Configurator ====================
+const userKeymap = useKeymap();
+const keymapSearch = ref('');
+const keymapCategory = ref<'ALL' | ShortcutCategory>('ALL');
+const recordingActionId = ref<ShortcutActionId | null>(null);
+const keymapConflict = ref<{
+  targetId: ShortcutActionId;
+  combo: string;
+  conflictWith: ShortcutActionDef;
+} | null>(null);
+
+const filteredKeymapActions = computed(() => {
+  const q = keymapSearch.value.trim().toLowerCase();
+  return SHORTCUT_ACTIONS.filter((act) => {
+    if (keymapCategory.value !== 'ALL' && act.category !== keymapCategory.value) return false;
+    if (q) {
+      const bound = userKeymap.getDisplay(act.id).toLowerCase();
+      const hay = `${act.labelZh} ${act.labelEn} ${bound}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+});
+
+function handleKeymapCaptureKeydown(e: KeyboardEvent) {
+  if (!recordingActionId.value) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (e.key === 'Escape') {
+    cancelRecordingKey();
+    return;
+  }
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    const id = recordingActionId.value;
+    userKeymap.clearBinding(id);
+    cancelRecordingKey();
+    emit('notify', '已清空该功能快捷键');
+    return;
+  }
+
+  const combo = eventToCombo(e);
+  if (!combo) return;
+
+  const targetId = recordingActionId.value;
+  const conflict = userKeymap.findConflict(combo, targetId);
+  if (conflict) {
+    keymapConflict.value = { targetId, combo, conflictWith: conflict };
+    window.removeEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
+    recordingActionId.value = null;
+    return;
+  }
+
+  userKeymap.setBinding(targetId, combo);
+  cancelRecordingKey();
+  emit('notify', `已更新快捷键: ${formatComboDisplay(combo)}`);
+}
+
+function startRecordingKey(actionId: ShortcutActionId) {
+  keymapConflict.value = null;
+  recordingActionId.value = actionId;
+  window.removeEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
+  window.addEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
+}
+
+function cancelRecordingKey() {
+  recordingActionId.value = null;
+  keymapConflict.value = null;
+  window.removeEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
+}
+
+function applyConflictOverwrite() {
+  if (!keymapConflict.value) return;
+  const { targetId, combo, conflictWith } = keymapConflict.value;
+  userKeymap.clearBinding(conflictWith.id);
+  userKeymap.setBinding(targetId, combo);
+  keymapConflict.value = null;
+  emit('notify', `已覆盖并绑定快捷键 ${formatComboDisplay(combo)}`);
+}
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
+});
 </script>
 
 <template>
@@ -1731,39 +1796,240 @@ const shortcutRows = computed(() =>
     </div>
   </div>
 
-  <!-- 7. Keyboard Shortcuts Reference Modal -->
+  <!-- 7. Interactive Keymap Configuration Modal -->
   <div
     v-else-if="activeModal === 'shortcuts'"
     class="modal-backdrop"
-    @click.self="emit('close')"
+    @click.self="
+      cancelRecordingKey();
+      emit('close');
+    "
   >
-    <div class="modal-card" style="width: min(600px, 92vw)">
+    <div class="modal-card" style="width: min(760px, 94vw)">
       <div class="modal-header">
-        <span>⌨ {{ t('shortcutsTitle') }}</span>
-        <button class="icon-btn compact" @click="emit('close')">×</button>
+        <span style="display: inline-flex; align-items: center; gap: 7px">
+          <IdeIcon name="keyboard" :size="16" />
+          <span>快捷键配置 (Keymap) · 点击快捷键即可自定义录制</span>
+        </span>
+        <button
+          class="icon-btn compact"
+          @click="
+            cancelRecordingKey();
+            emit('close');
+          "
+        >
+          ×
+        </button>
       </div>
 
-      <table class="dg-grid" style="border: 1px solid var(--border)">
-        <thead>
-          <tr>
-            <th style="width: 190px">快捷键</th>
-            <th>功能说明</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="row in shortcutRows" :key="row.key">
-            <td>
-              <span class="pill pill-neutral" style="font-family: var(--font-mono)">
-                {{ row.key }}
-              </span>
-            </td>
-            <td style="white-space: normal; font-family: var(--font-ui)">{{ row.desc }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- Preset & Search Controls -->
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          flex-wrap: wrap;
+          margin-bottom: 10px;
+        "
+      >
+        <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+          <input
+            v-model="keymapSearch"
+            class="field"
+            style="width: 210px; padding: 4px 8px"
+            placeholder="搜索功能名称或快捷键..."
+          />
+          <button
+            class="btn btn-sm"
+            :class="{ 'btn-primary': userKeymap.activePreset.value === 'idea' }"
+            @click="
+              userKeymap.applyPreset('idea');
+              emit('notify', '已切换为 IDEA / DataGrip 默认快捷键方案');
+            "
+          >
+            IDEA / DataGrip 默认
+          </button>
+          <button
+            class="btn btn-sm"
+            :class="{ 'btn-primary': userKeymap.activePreset.value === 'vscode' }"
+            @click="
+              userKeymap.applyPreset('vscode');
+              emit('notify', '已切换为 VS Code / DBeaver 快捷方案');
+            "
+          >
+            VS Code / DBeaver
+          </button>
+        </div>
 
-      <div style="display: flex; justify-content: flex-end; margin-top: 12px">
-        <button class="btn btn-primary" @click="emit('close')">{{ t('btnClose') }}</button>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <label
+            style="
+              display: inline-flex;
+              align-items: center;
+              gap: 5px;
+              font-size: 11.5px;
+              color: var(--text-secondary);
+              cursor: pointer;
+            "
+          >
+            <input
+              type="checkbox"
+              :checked="userKeymap.doubleShiftSearch.value"
+              @change="userKeymap.setDoubleShiftSearch(($event.target as HTMLInputElement).checked)"
+            />
+            <span>双击 Shift 随处搜索</span>
+          </label>
+          <button
+            class="btn btn-sm"
+            @click="
+              userKeymap.resetAllBindings();
+              emit('notify', '已恢复全部默认快捷键');
+            "
+          >
+            恢复默认
+          </button>
+        </div>
+      </div>
+
+      <!-- Category Filter Tabs -->
+      <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px">
+        <button
+          class="icon-btn compact"
+          :class="{ active: keymapCategory === 'ALL' }"
+          @click="keymapCategory = 'ALL'"
+        >
+          全部 ({{ SHORTCUT_ACTIONS.length }})
+        </button>
+        <button
+          v-for="(meta, catKey) in SHORTCUT_CATEGORY_LABELS"
+          :key="catKey"
+          class="icon-btn compact"
+          :class="{ active: keymapCategory === catKey }"
+          @click="keymapCategory = catKey"
+        >
+          {{ locale === 'zh-CN' ? meta.zh : meta.en }}
+        </button>
+      </div>
+
+      <!-- Conflict Prompt Banner -->
+      <div
+        v-if="keymapConflict"
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          padding: 8px 10px;
+          margin-bottom: 10px;
+          border-radius: 6px;
+          background: var(--test-bg);
+          border: 1px solid rgba(224, 168, 46, 0.45);
+          font-size: 12px;
+        "
+      >
+        <span>
+          快捷键 <strong style="font-family: var(--font-mono)">{{ formatComboDisplay(keymapConflict.combo) }}</strong>
+          已被「<strong>{{ keymapConflict.conflictWith.labelZh }}</strong>」占用，是否覆盖？
+        </span>
+        <div style="display: flex; gap: 6px; flex-shrink: 0">
+          <button class="btn btn-sm" @click="keymapConflict = null">取消</button>
+          <button class="btn btn-sm btn-primary" @click="applyConflictOverwrite">
+            覆盖并清空原绑定
+          </button>
+        </div>
+      </div>
+
+      <!-- Action List Table -->
+      <div style="max-height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px">
+        <table class="dg-grid" style="border: none">
+          <thead>
+            <tr>
+              <th>功能说明</th>
+              <th style="width: 105px">分组</th>
+              <th style="width: 205px">当前快捷键</th>
+              <th style="width: 120px">操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="act in filteredKeymapActions" :key="act.id">
+              <td style="white-space: normal; font-family: var(--font-ui)">
+                {{ locale === 'zh-CN' ? act.labelZh : act.labelEn }}
+              </td>
+              <td>
+                <span class="pill pill-neutral">
+                  {{ locale === 'zh-CN' ? SHORTCUT_CATEGORY_LABELS[act.category].zh : SHORTCUT_CATEGORY_LABELS[act.category].en }}
+                </span>
+              </td>
+              <td>
+                <span v-if="recordingActionId === act.id" class="keymap-record-box">
+                  请按下新组合键 (Esc 取消 / Backspace 清空)...
+                </span>
+                <button
+                  v-else
+                  class="pill pill-neutral"
+                  style="
+                    font-family: var(--font-mono);
+                    cursor: pointer;
+                    border: 1px solid var(--border);
+                  "
+                  title="点击录制新快捷键"
+                  @click="startRecordingKey(act.id)"
+                >
+                  {{ userKeymap.getDisplay(act.id) }}
+                </button>
+              </td>
+              <td>
+                <div style="display: flex; align-items: center; gap: 4px">
+                  <button
+                    v-if="recordingActionId === act.id"
+                    class="btn btn-sm"
+                    @click="cancelRecordingKey"
+                  >
+                    取消
+                  </button>
+                  <button
+                    v-else
+                    class="btn btn-sm"
+                    @click="startRecordingKey(act.id)"
+                  >
+                    修改
+                  </button>
+                  <button
+                    v-if="userKeymap.getCombo(act.id) !== act.defaultCombo"
+                    class="btn btn-sm"
+                    title="恢复此项默认快捷键"
+                    @click="userKeymap.resetBinding(act.id)"
+                  >
+                    重置
+                  </button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 12px;
+          font-size: 11px;
+          color: var(--text-secondary);
+        "
+      >
+        <span>提示：点击任意快捷键徽章后直接按组合键即可生效（如 Ctrl+Q、F5、Alt+L），修改立即自动保存。</span>
+        <button
+          class="btn btn-primary"
+          @click="
+            cancelRecordingKey();
+            emit('close');
+          "
+        >
+          {{ t('btnClose') }}
+        </button>
       </div>
     </div>
   </div>
@@ -1976,6 +2242,49 @@ const shortcutRows = computed(() =>
             <IdeIcon name="run" :size="12" /> 确认执行并刷新结果集
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 10. Unsaved Disk Document Close Confirmation Modal -->
+  <div
+    v-else-if="activeModal === 'unsaved' && unsavedContext"
+    class="modal-backdrop"
+    @click.self="emit('close')"
+  >
+    <div class="modal-card" style="width: min(460px, 92vw)">
+      <div class="modal-header" style="color: var(--test)">
+        <span style="display: inline-flex; align-items: center; gap: 6px">
+          <IdeIcon name="warning" :size="16" />
+          <span>保存文件更改？</span>
+        </span>
+        <button class="icon-btn compact" @click="emit('close')">×</button>
+      </div>
+
+      <p style="margin: 0 0 8px; font-size: 12.5px">
+        文档 <strong>{{ unsavedContext.title }}</strong> 包含尚未保存的修改，关闭前是否保存？
+      </p>
+      <p
+        v-if="unsavedContext.path"
+        style="
+          margin: 0 0 14px;
+          font-size: 11px;
+          color: var(--text-secondary);
+          font-family: var(--font-mono);
+          word-break: break-all;
+        "
+      >
+        {{ unsavedContext.path }}
+      </p>
+
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px">
+        <button class="btn" @click="emit('close')">{{ t('btnCancel') }}</button>
+        <button class="btn btn-danger" @click="emit('unsaved-discard-close')">
+          不保存并关闭
+        </button>
+        <button class="btn btn-primary" :disabled="busy" @click="emit('unsaved-save-close')">
+          保存并关闭
+        </button>
       </div>
     </div>
   </div>
