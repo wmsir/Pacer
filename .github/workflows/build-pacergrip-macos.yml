@@ -20,7 +20,7 @@ permissions:
 jobs:
   build-macos:
     name: Build Pacer macOS (${{ matrix.arch_label }})
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix:

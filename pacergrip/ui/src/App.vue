@@ -3440,7 +3440,7 @@ onBeforeUnmount(() => {
           >
             <IdeIcon name="run" :size="13" />
             <span>
-              {{ activeTab?.cursor.selectedText.trim() ? t('runSelected') : '执行' }}
+              {{ activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runShort') }}
             </span>
           </button>
 
@@ -3501,7 +3501,7 @@ onBeforeUnmount(() => {
           @click="activeModal = 'search'"
         >
           <IdeIcon name="search" :size="14" />
-          <span class="shortcut-hint">Shift×2</span>
+          <span class="shortcut-hint search-hint-text">Shift×2</span>
         </button>
         <button
           class="icon-btn"
@@ -3561,7 +3561,7 @@ onBeforeUnmount(() => {
         </button>
         <button class="btn btn-sm" :title="t('newProject')" @click="openProjectModal(null)">
           <IdeIcon name="project-add" :size="14" />
-          <span>新建项目</span>
+          <span>{{ t('newProjectShort') }}</span>
         </button>
         <button class="btn btn-primary btn-sm" @click="openConnectionModal(null)">
           <IdeIcon name="plus" :size="13" />
