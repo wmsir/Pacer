@@ -9,7 +9,7 @@ name = "pacergrip_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "PacerGrip"
+name = "Pacer"
 path = "src/main.rs"
 
 [features]

@@ -522,6 +522,7 @@ pub fn parse_dbeaver_json(
         let profile = ConnectionProfile {
             id: format!("dbeaver-{conn_id}"),
             name,
+            project_id: None,
             source_uuid: Some(conn_id.clone()),
             db_type,
             env,
@@ -694,6 +695,7 @@ pub fn parse_dbeaver_xml(xml_text: &str) -> CoreResult<Vec<ImportedDbeaverConnec
                         profile: ConnectionProfile {
                             id: format!("dbeaver-{cur_id}"),
                             name: cur_name.clone(),
+                            project_id: None,
                             source_uuid: Some(cur_id.clone()),
                             db_type,
                             env,

@@ -1,8 +1,9 @@
-name: Release PacerGrip Windows
+name: Release Pacer Windows
 
 on:
   push:
     tags:
+      - 'pacer-v*'
       - 'pacergrip-v*'
 
 permissions:
@@ -10,7 +11,7 @@ permissions:
 
 jobs:
   release-windows:
-    name: Build & Publish PacerGrip Release (Windows x64)
+    name: Build & Publish Pacer Release (Windows x64)
     runs-on: windows-latest
     defaults:
       run:
@@ -60,11 +61,11 @@ jobs:
       - name: Collect Windows executables & SHA256 checksums
         run: |
           New-Item -ItemType Directory -Force -Path dist-win | Out-Null
-          $portable = "target/release/PacerGrip.exe"
+          $portable = "target/release/Pacer.exe"
           if (-not (Test-Path $portable)) {
             throw "Expected portable executable not found at $portable"
           }
-          Copy-Item $portable "dist-win/PacerGrip-windows-x64-portable.exe"
+          Copy-Item $portable "dist-win/Pacer-windows-x64-portable.exe"
 
           $nsisFiles = Get-ChildItem "target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue
           if (-not $nsisFiles) {
@@ -82,7 +83,7 @@ jobs:
       - name: Upload Release build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: PacerGrip-${{ github.ref_name }}-windows-x64
+          name: Pacer-${{ github.ref_name }}-windows-x64
           path: pacergrip/dist-win/*
           retention-days: 30
           if-no-files-found: error
@@ -90,26 +91,24 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "PacerGrip ${{ github.ref_name }} (Windows x64)"
+          name: "Pacer ${{ github.ref_name }} (Windows x64)"
           draft: false
           prerelease: false
           generate_release_notes: true
           body: |
-            ## PacerGrip `${{ github.ref_name }}` — DataGrip 风格原生数据库 IDE (Windows x64)
+            ## Pacer `${{ github.ref_name }}` — 原生数据库桌面 IDE (Windows x64)
 
             ### 下载说明 / Downloads
-            - **`PacerGrip-windows-x64-portable.exe`**：绿色便携单文件版（无需安装，双击即用）。
-            - **`PacerGrip_*_x64-setup.exe`**：Windows NSIS 安装包（支持简中/英文安装向导，当前用户安装并自动引导安装缺失的 WebView2 Runtime）。
+            - **`Pacer-windows-x64-portable.exe`**：绿色便携单文件版（无需安装，双击即用）。
+            - **`Pacer_*_x64-setup.exe`**：Windows NSIS 安装包（支持简中/英文安装向导，当前用户安装并自动引导安装缺失的 WebView2 Runtime）。
             - **`SHA256SUMS.txt`**：SHA-256 完整性校验文件。
 
             ### 核心特性 / Highlights
-            - **JetBrains DataGrip New UI 桌面工作台**：默认简体中文（支持中英文切换）、Darcula 深色 / IntelliJ 浅色主题、居中 Run Widget、左右工具侧边栏、可拖拽分栏、随处搜索（`Ctrl+K`）。
-            - **Markdown (`.md`) & SQL (`.sql`) 原生集成**：打开本地文件/目录、在 `.md` 中框选任意 SQL 按 `Ctrl+Enter` 直接执行、每个 ```` ```sql ```` 代码块内置 CodeLens 执行条（`▶ 执行 / ⚡ EXPLAIN / ⧉ 控制台打开`）与安全分栏预览。
-            - **专业级状态栏与多编码无乱码**：实时显示光标行列、选区字符/行数、总行数、文件字节数、`CRLF/LF` 与 `UTF-8 / UTF-8 BOM / GBK / UTF-16 LE/BE / Windows-1252` 编码（支持指定编码重读与转码保存）。
-            - **专业级连接配置 & URL 双向绑定**：支持 `Driver`（TiDB / MySQL / PostgreSQL / SQLite 等）、`default / Unix Socket / URL only`、`Host / Port / User / Password / Save (Forever / Until restart / Never) / Database` 与 `URL (Overrides settings above)` 实时双向绑定，支持底栏内联 `Test Connection`（实时显示 `TiDB 6.5.5` 等版本）与 `OK / Cancel / Apply`。
-            - **DBeaver 连接全兼容导入/导出**：支持一键扫描本机 DBeaver 工作区、导入 `data-sources.json` / `.dbp` 项目导出包 / `.dbeaver` 目录 / `.dbeaver-data-sources.xml`（并可选同步读取 `credentials-config.json` 密码），以及导出无密码 DBeaver `data-sources.json`（已移除 DataGrip 连接导入）。
-            - **原生异步 Rust SQL 驱动 (`sqlx`)**：支持 SQLite（内置示例库与示例 `.md` 手册）、TiDB 6.5.5+ / MySQL 5.7/8.0 / MariaDB / OceanBase、PostgreSQL / openGauss / KingbaseES（支持空 Database 集群级连接与 SSL 模式控制）。
-            - **商业级结果集与安全防线**：CodeMirror 6 自动补全、多结果标签页、行列转置、单元格值检视器、CSV/JSON/Markdown/INSERT 导出、表结构与索引检视、高危 SQL 二次确认拦截，以及预留 `pacer-core::extension` 扩展插槽。
+            - **多项目工作区 & 多数据源分组**：支持创建/切换/管理多个项目，单项目下挂载多个数据库数据源，支持数据源跨项目移动与本地目录绑定。
+            - **结果集直接在线修改 & 自动生成 SQL**：双击结果集单元格或使用值检视器直接修改、新增行、标记删除行，自动依据主键（或全列精确匹配）生成对应方言的 `UPDATE / INSERT / DELETE` 语句，预览确认后一键执行并自动刷新结果集。
+            - **项目统一控制台输出（可复制粘贴 + 报错标红）**：同一项目下所有数据源的执行日志、修改提交与错误汇总至同一个项目控制台，报错高亮标红并汇总计数，支持鼠标划选复制、一键复制全部/仅报错日志以及底栏快捷粘贴执行 SQL。
+            - **专业级连接配置 & DBeaver 全兼容导入**：支持 `default / Unix Socket / URL only` 与 `URL (Overrides settings above)` 实时双向绑定、`Save: Forever` 加密持久化、内联 `Test Connection` 以及本机 DBeaver 工作区自动扫描导入（`data-sources.json` / `.dbp` / `credentials-config.json` / `.xml`）。
+            - **Markdown (`.md`) 选中执行 SQL & 多编码无乱码状态栏**：支持打开 `.md/.sql`、框选 SQL 按 `Ctrl+Enter` 直接执行、可关闭示例手册快捷按钮，底部状态栏实时显示光标行列、总行数、文件大小、`CRLF/LF` 与 `UTF-8 / UTF-8 BOM / GBK / UTF-16` 编码。
 
             **运行环境 / System Requirement**：Windows 10 / 11 (x64)。
           files: pacergrip/dist-win/*

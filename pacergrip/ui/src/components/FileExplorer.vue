@@ -8,6 +8,7 @@ const props = defineProps<{
   mountedDir: string;
   entries: WorkspaceFileEntry[];
   recentFiles: string[];
+  showDemoManual?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -91,7 +92,7 @@ function baseName(p: string): string {
         <button class="btn btn-primary btn-sm" @click="emit('open-file-dialog')">
           打开 .md / .sql
         </button>
-        <button class="btn btn-sm" @click="emit('open-demo-md')">
+        <button v-if="showDemoManual !== false" class="btn btn-sm" @click="emit('open-demo-md')">
           示例 .md 手册
         </button>
       </div>

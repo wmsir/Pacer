@@ -361,12 +361,30 @@ impl CapabilityFlags {
     }
 }
 
-/// Unified connection profile shared across DataGrip imports and Pacer-managed connections.
+/// Workspace project grouping multiple database connections, scripts, and a shared execution console.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceProject {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub root_dir: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
+}
+
+/// Unified connection profile shared across direct, DBeaver-imported, and extension-managed connections.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionProfile {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub source_uuid: Option<String>,
     pub db_type: DbEngineType,
     pub env: EnvLevel,

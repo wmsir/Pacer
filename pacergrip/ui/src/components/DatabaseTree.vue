@@ -7,9 +7,13 @@ import type {
   DatabaseMeta,
   IndexMeta,
   TableMeta,
+  WorkspaceProject,
 } from '../api/ipc';
 
 const props = defineProps<{
+  projects: WorkspaceProject[];
+  activeProjectId: string;
+  showAllProjects: boolean;
   connections: ConnectionProfile[];
   activeProfileId: string;
   activeDbName: string;
@@ -24,6 +28,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'new-connection'): void;
+  (e: 'new-project'): void;
+  (e: 'toggle-show-all-projects'): void;
+  (e: 'move-profile-project', profile: ConnectionProfile, projectId: string): void;
   (e: 'import-dbeaver'): void;
   (e: 'init-demo'): void;
   (e: 'toggle-profile', profile: ConnectionProfile): void;
@@ -75,10 +82,24 @@ function engineShort(dbType: string | Record<string, string>): string {
   return raw.toUpperCase();
 }
 
+const activeProject = computed(
+  () => props.projects.find((p) => p.id === props.activeProjectId) ?? props.projects[0] ?? null,
+);
+
+function projectNameOf(projectId?: string | null): string {
+  if (!projectId) return '';
+  return props.projects.find((p) => p.id === projectId)?.name ?? '';
+}
+
 const filteredConnections = computed(() => {
+  const scoped = props.showAllProjects
+    ? props.connections
+    : props.connections.filter(
+        (p) => !p.projectId || p.projectId === props.activeProjectId,
+      );
   const q = search.value.trim().toLowerCase();
-  if (!q) return props.connections;
-  return props.connections.filter((p) => {
+  if (!q) return scoped;
+  return scoped.filter((p) => {
     if (p.name.toLowerCase().includes(q)) return true;
     const dbs = props.databasesByProfile[p.id] ?? [];
     for (const db of dbs) {
@@ -137,6 +158,9 @@ function closeContext() {
     <div class="tw-header">
       <span>{{ t('toolDatabase') }}</span>
       <div class="tw-actions">
+        <button class="icon-btn compact" :title="t('newProject')" @click="emit('new-project')">
+          📦
+        </button>
         <button class="icon-btn compact" :title="t('newConnection')" @click="emit('new-connection')">
           ＋
         </button>
@@ -147,6 +171,31 @@ function closeContext() {
           ⚡
         </button>
       </div>
+    </div>
+
+    <div v-if="activeProject" class="project-banner">
+      <div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+        <span
+          class="project-dot"
+          :style="{ background: activeProject.color || 'var(--accent)' }"
+        />
+        <span
+          style="font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap"
+          :title="activeProject.description || activeProject.name"
+        >
+          {{ showAllProjects ? t('allProjects') : activeProject.name }}
+        </span>
+        <span class="pill pill-neutral">{{ filteredConnections.length }}</span>
+      </div>
+      <button
+        v-if="projects.length > 1"
+        class="icon-btn compact"
+        :class="{ active: showAllProjects }"
+        title="切换仅看当前项目或查看全部项目数据源"
+        @click="emit('toggle-show-all-projects')"
+      >
+        {{ showAllProjects ? '仅当前' : '全部' }}
+      </button>
     </div>
 
     <div class="tw-search">
@@ -183,6 +232,9 @@ function closeContext() {
           <span class="tree-chevron">{{ expandedProfiles[p.id] ? '▾' : '▸' }}</span>
           <span class="env-dot" :class="p.env" :title="p.env" />
           <span class="tree-label" style="font-weight: 600">{{ p.name }}</span>
+          <span v-if="showAllProjects && projectNameOf(p.projectId)" class="pill pill-neutral" style="margin-right: 2px">
+            {{ projectNameOf(p.projectId) }}
+          </span>
           <span class="tree-meta">{{ engineShort(p.dbType) }}</span>
           <span class="tree-hover-actions" @click.stop>
             <button class="icon-btn compact" :title="t('btnTest')" @click="emit('test-profile', p)">
@@ -307,6 +359,20 @@ function closeContext() {
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.profile.name)">
           <span>{{ t('ctxCopyName') }}</span>
         </button>
+        <template v-if="projects.length > 1">
+          <div class="dropdown-sep" />
+          <div style="padding: 3px 10px; font-size: 10.5px; color: var(--text-secondary)">
+            {{ t('moveToProject') }}
+          </div>
+          <button
+            v-for="proj in projects.filter((pr) => pr.id !== ctxMenu.profile?.projectId)"
+            :key="proj.id"
+            class="dropdown-item"
+            @click="emit('move-profile-project', ctxMenu.profile, proj.id)"
+          >
+            <span>→ {{ proj.name }}</span>
+          </button>
+        </template>
         <div class="dropdown-sep" />
         <button
           class="dropdown-item"

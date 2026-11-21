@@ -5,19 +5,25 @@ import {
   discoverDbeaver,
   pickDbeaverFolder,
   pickDbeaverImportFile,
+  pickDirectoryToMount,
   testConnectionDraft,
   type ConnectionDraft,
   type ConnectionProfile,
   type DbeaverDiscoveryItem,
   type DirectConfig,
   type EnvLevel,
+  type ProjectDraft,
   type RiskLevel,
+  type WorkspaceProject,
 } from '../api/ipc';
+import type { GridMutationPreviewPayload } from './ResultGrid.vue';
 import { formatBytes } from '../utils/sqlTools';
 
 export type ActiveModalKind =
   | 'none'
   | 'connection'
+  | 'project'
+  | 'grid-sql'
   | 'import'
   | 'encoding'
   | 'danger'
@@ -70,7 +76,11 @@ interface SavedConnTemplate {
 
 const props = defineProps<{
   activeModal: ActiveModalKind;
+  projects: WorkspaceProject[];
+  activeProjectId: string;
+  editingProject: WorkspaceProject | null;
   editingProfile: ConnectionProfile | null;
+  gridSqlContext: GridMutationPreviewPayload | null;
   encodingContext: EncodingModalContext | null;
   dangerContext: DangerModalContext | null;
   passwordProfile: ConnectionProfile | null;
@@ -81,6 +91,9 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void;
+  (e: 'save-project', draft: ProjectDraft): void;
+  (e: 'delete-project', projectId: string): void;
+  (e: 'execute-grid-sql', payload: GridMutationPreviewPayload, editedSql: string): void;
   (e: 'save-connection', draft: ConnectionDraft, password: string | null, closeAfter: boolean): void;
   (e: 'import-dbeaver-path', path: string, includePasswords: boolean): void;
   (e: 'import-dbeaver-text', text: string): void;
@@ -148,6 +161,7 @@ function loadTemplates(): SavedConnTemplate[] {
 
 const connForm = reactive<{
   id: string | null;
+  projectId: string;
   name: string;
   color: string;
   comment: string;
@@ -175,6 +189,7 @@ const connForm = reactive<{
   advancedProps: Array<{ key: string; value: string }>;
 }>({
   id: null,
+  projectId: '',
   name: '',
   color: '',
   comment: '',
@@ -455,6 +470,7 @@ function buildDraftPayload(): ConnectionDraft {
 
   return {
     id: connForm.id,
+    projectId: connForm.projectId || props.activeProjectId || null,
     name,
     dbType: connForm.dbType,
     host: isSqliteEngine.value ? null : connForm.host.trim() || null,
@@ -534,6 +550,7 @@ watch(
     if (prof) {
       const cfg = (prof.mode?.config ?? {}) as Partial<DirectConfig>;
       connForm.id = prof.id;
+      connForm.projectId = prof.projectId || props.activeProjectId || '';
       connForm.name = prof.name;
       connForm.color = prof.color ?? '';
       connForm.comment = prof.comment ?? '';
@@ -576,6 +593,7 @@ watch(
       }));
     } else {
       connForm.id = null;
+      connForm.projectId = props.activeProjectId || props.projects[0]?.id || '';
       connForm.name = '';
       connForm.color = '';
       connForm.comment = '';
@@ -605,6 +623,85 @@ watch(
     }
   },
 );
+
+// ==================== 8. Project Create/Edit & 9. Grid Mutation SQL Preview ====================
+const PROJECT_COLORS = ['#3574F0', '#22C55E', '#F59E0B', '#EF4444', '#A855F7', '#06B6D4', '#EC4899'];
+const projectForm = reactive<{
+  id: string | null;
+  name: string;
+  description: string;
+  color: string;
+  rootDir: string;
+}>({
+  id: null,
+  name: '',
+  description: '',
+  color: '#3574F0',
+  rootDir: '',
+});
+
+const editableGridSql = ref('');
+
+watch(
+  () => [props.activeModal, props.editingProject, props.gridSqlContext] as const,
+  ([modal, proj, gridCtx]) => {
+    if (modal === 'project') {
+      if (proj) {
+        projectForm.id = proj.id;
+        projectForm.name = proj.name;
+        projectForm.description = proj.description ?? '';
+        projectForm.color = proj.color ?? '#3574F0';
+        projectForm.rootDir = proj.rootDir ?? '';
+      } else {
+        projectForm.id = null;
+        projectForm.name = '';
+        projectForm.description = '';
+        projectForm.color = PROJECT_COLORS[props.projects.length % PROJECT_COLORS.length];
+        projectForm.rootDir = '';
+      }
+    } else if (modal === 'grid-sql' && gridCtx) {
+      editableGridSql.value = gridCtx.plan.statements.join('\n');
+    }
+  },
+);
+
+async function browseProjectRootDir() {
+  try {
+    const dir = await pickDirectoryToMount();
+    if (dir) projectForm.rootDir = dir;
+  } catch (err) {
+    emit('notify', String(err));
+  }
+}
+
+function submitProjectForm() {
+  if (!projectForm.name.trim()) {
+    emit('notify', '请输入项目名称');
+    return;
+  }
+  emit('save-project', {
+    id: projectForm.id,
+    name: projectForm.name.trim(),
+    description: projectForm.description.trim() || null,
+    color: projectForm.color || '#3574F0',
+    rootDir: projectForm.rootDir.trim() || null,
+  });
+}
+
+async function copyGridSqlText() {
+  if (!editableGridSql.value.trim()) return;
+  try {
+    await navigator.clipboard.writeText(editableGridSql.value);
+    emit('notify', t('copiedNotice'));
+  } catch {
+    emit('notify', '剪贴板写入失败');
+  }
+}
+
+function confirmExecuteGridSql() {
+  if (!props.gridSqlContext || !editableGridSql.value.trim()) return;
+  emit('execute-grid-sql', props.gridSqlContext, editableGridSql.value);
+}
 
 // ==================== 2. DBeaver Import / Export Modal State ====================
 const importPath = ref('');
@@ -870,6 +967,16 @@ const shortcutRows = computed(() =>
 
         <!-- TAB: GENERAL -->
         <div v-if="connTab === 'general'" class="conn-rows">
+          <!-- Project Binding (when multiple projects exist or creating new) -->
+          <div v-if="projects.length > 0" class="conn-row">
+            <label class="conn-row-label">所属项目:</label>
+            <select v-model="connForm.projectId" class="field">
+              <option v-for="proj in projects" :key="proj.id" :value="proj.id">
+                {{ proj.name }}
+              </option>
+            </select>
+          </div>
+
           <!-- Driver -->
           <div class="conn-row">
             <label class="conn-row-label">{{ t('connEngine') }}:</label>
@@ -1640,6 +1747,207 @@ const shortcutRows = computed(() =>
 
       <div style="display: flex; justify-content: flex-end; margin-top: 12px">
         <button class="btn btn-primary" @click="emit('close')">{{ t('btnClose') }}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8. Project Create / Edit Modal -->
+  <div
+    v-else-if="activeModal === 'project'"
+    class="modal-backdrop"
+    @click.self="emit('close')"
+  >
+    <div class="modal-card" style="width: min(520px, 92vw)">
+      <div class="modal-header">
+        <span>📦 {{ editingProject ? t('projectModalEdit') : t('projectModalCreate') }}</span>
+        <button class="icon-btn compact" @click="emit('close')">×</button>
+      </div>
+
+      <div class="conn-rows">
+        <div class="conn-row">
+          <label class="conn-row-label">{{ t('projectName') }}:</label>
+          <input
+            v-model="projectForm.name"
+            class="field"
+            placeholder="例如：保险核心 UAT / 订单微服务集群"
+            @keydown.enter="submitProjectForm"
+          />
+        </div>
+
+        <div class="conn-row">
+          <label class="conn-row-label">{{ t('projectColor') }}:</label>
+          <div style="display: flex; align-items: center; gap: 8px">
+            <button
+              v-for="clr in PROJECT_COLORS"
+              :key="clr"
+              type="button"
+              style="
+                width: 22px;
+                height: 22px;
+                border-radius: 5px;
+                border: 2px solid transparent;
+                cursor: pointer;
+              "
+              :style="{
+                background: clr,
+                borderColor: projectForm.color === clr ? 'var(--text-primary)' : 'transparent',
+              }"
+              @click="projectForm.color = clr"
+            />
+          </div>
+        </div>
+
+        <div class="conn-row">
+          <label class="conn-row-label">{{ t('projectDesc') }}:</label>
+          <input
+            v-model="projectForm.description"
+            class="field"
+            placeholder="可选，说明该项目包含的业务库与环境"
+          />
+        </div>
+
+        <div class="conn-row">
+          <label class="conn-row-label">绑定目录:</label>
+          <div style="display: flex; gap: 6px">
+            <input
+              v-model="projectForm.rootDir"
+              class="field"
+              placeholder="可选，切换项目时自动挂载该目录的 .md / .sql 文件"
+            />
+            <button class="btn btn-sm" @click="browseProjectRootDir">选择...</button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 16px;
+          padding-top: 12px;
+          border-top: 1px solid var(--border);
+        "
+      >
+        <button
+          v-if="editingProject && projects.length > 1"
+          class="btn btn-danger"
+          :disabled="busy"
+          @click="emit('delete-project', editingProject.id)"
+        >
+          {{ t('deleteProject') }}
+        </button>
+        <span v-else />
+        <div style="display: flex; gap: 8px">
+          <button class="btn" @click="emit('close')">{{ t('btnCancel') }}</button>
+          <button class="btn btn-primary" :disabled="busy || !projectForm.name.trim()" @click="submitProjectForm">
+            {{ t('btnSave') }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 9. Editable Result Grid -> Generated SQL Preview & Confirm Execute Modal -->
+  <div
+    v-else-if="activeModal === 'grid-sql' && gridSqlContext"
+    class="modal-backdrop"
+    @click.self="emit('close')"
+  >
+    <div class="modal-card" style="width: min(740px, 94vw)">
+      <div class="modal-header">
+        <span>⚡ 预览并执行数据修改 SQL</span>
+        <button class="icon-btn compact" @click="emit('close')">×</button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px">
+        <span
+          class="pill"
+          :class="
+            gridSqlContext.profileEnv === 'PROD'
+              ? 'pill-prod'
+              : gridSqlContext.profileEnv === 'TEST'
+                ? 'pill-test'
+                : 'pill-dev'
+          "
+        >
+          {{ gridSqlContext.profileEnv }}
+        </span>
+        <strong>{{ gridSqlContext.profileName }}</strong>
+        <span style="color: var(--text-secondary)">
+          / {{ gridSqlContext.dbName || 'default' }} · 表
+          <code style="font-family: var(--font-mono)">{{ gridSqlContext.tableName }}</code>
+        </span>
+        <span v-if="gridSqlContext.plan.usedPrimaryKey" class="pill pill-dev">
+          主键条件: {{ gridSqlContext.plan.keyColumns.join(', ') }}
+        </span>
+        <span v-else class="pill pill-test">
+          无主键（全列精确匹配）
+        </span>
+      </div>
+
+      <div
+        v-if="gridSqlContext.profileEnv === 'PROD'"
+        style="
+          padding: 8px 10px;
+          margin-bottom: 10px;
+          border-radius: 6px;
+          background: var(--prod-bg);
+          border: 1px solid rgba(247, 84, 100, 0.45);
+          color: var(--prod);
+          font-size: 12px;
+        "
+      >
+        ⚠ 当前目标属于 <strong>PROD 生产环境</strong>，请仔细确认以下生成的 SQL 与 WHERE 条件无误后再点击「确认执行」！
+      </div>
+
+      <div
+        v-if="gridSqlContext.plan.warning"
+        style="
+          padding: 7px 10px;
+          margin-bottom: 10px;
+          border-radius: 6px;
+          background: var(--test-bg);
+          border: 1px solid rgba(224, 168, 46, 0.4);
+          color: var(--test);
+          font-size: 11.5px;
+        "
+      >
+        {{ gridSqlContext.plan.warning }}
+      </div>
+
+      <div class="form-field">
+        <label>以下为根据表格修改自动生成的 SQL（支持执行前手工微调，按分号逐条执行）：</label>
+        <textarea
+          v-model="editableGridSql"
+          class="field"
+          rows="9"
+          style="font-family: var(--font-mono); font-size: 12px; line-height: 1.55; resize: vertical"
+        />
+      </div>
+
+      <div
+        style="
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 14px;
+          padding-top: 10px;
+          border-top: 1px solid var(--border);
+        "
+      >
+        <button class="btn" @click="copyGridSqlText">📋 复制 SQL</button>
+        <div style="display: flex; gap: 8px">
+          <button class="btn" @click="emit('close')">{{ t('btnCancel') }}</button>
+          <button
+            class="btn"
+            :class="gridSqlContext.profileEnv === 'PROD' ? 'btn-danger' : 'btn-primary'"
+            :disabled="busy || !editableGridSql.trim()"
+            @click="confirmExecuteGridSql"
+          >
+            ▶ 确认执行并刷新结果集
+          </button>
+        </div>
       </div>
     </div>
   </div>

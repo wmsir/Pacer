@@ -268,6 +268,7 @@ impl PacerInstance {
         ConnectionProfile {
             id: format!("pacer:{}", self.id),
             name: self.name.clone(),
+            project_id: None,
             source_uuid: None,
             db_type: engine,
             env,

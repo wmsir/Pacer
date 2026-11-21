@@ -1,6 +1,6 @@
-# PacerGrip
+# Pacer (Native Desktop Database IDE)
 
-**PacerGrip** 是一款基于 **Rust + Tauri v2 Native + Vue 3 + CodeMirror 6** 打造的商业级独立桌面数据库 IDE，深度复刻 **JetBrains DataGrip New UI** 交互体系，默认简体中文界面（支持中英文一键切换），同时完整保留扩展插槽（`pacer-core::extension` 与可选 `pacer-client`），可随时与 [`wmsir/Pacer`](https://github.com/wmsir/Pacer) 数据库治理平台无缝联动。
+**Pacer** 是一款基于 **Rust + Tauri v2 Native + Vue 3 + CodeMirror 6** 打造的商业级独立桌面数据库 IDE，默认简体中文界面（支持中英文一键切换），支持多项目多数据源管理、结果集直接修改生成 SQL 执行、项目级统一控制台日志（可复制粘贴 + 报错标红）、DBeaver 连接导入导出、Markdown 选中执行 SQL 与多编码无乱码状态栏，同时完整保留扩展插槽（`pacer-core::extension` 与可选 `pacer-client`）。
 
 ## 核心商业化特性
 
@@ -72,6 +72,6 @@ cargo clippy -p pacergrip-app --features pacer-extension --all-targets -- -D war
 
 仓库内置 [`../.github/workflows/build-pacergrip-windows.yml`](../.github/workflows/build-pacergrip-windows.yml) 与 [`../.github/workflows/release-pacergrip.yml`](../.github/workflows/release-pacergrip.yml)，在 `windows-latest` 上编译生产级 Windows 64 位二进制：
 
-- **`PacerGrip-windows-x64-portable.exe`**：绿色单文件便携版（无需安装，双击即用）
-- **`PacerGrip_*_x64-setup.exe`**：Windows 安装包（支持简中/英文安装界面，按当前用户安装并自动引导安装缺失的 WebView2 Runtime）
+- **`Pacer-windows-x64-portable.exe`**：绿色单文件便携版（无需安装，双击即用）
+- **`Pacer_*_x64-setup.exe`**：Windows 安装包（支持简中/英文安装界面，按当前用户安装并自动引导安装缺失的 WebView2 Runtime）
 - **`SHA256SUMS.txt`**：对应二进制 SHA-256 校验和

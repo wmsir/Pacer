@@ -62,9 +62,27 @@ export interface ConnectionFingerprint {
   database?: string | null;
 }
 
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  rootDir?: string | null;
+  createdAt: string;
+}
+
+export interface ProjectDraft {
+  id?: string | null;
+  name: string;
+  description?: string | null;
+  color?: string | null;
+  rootDir?: string | null;
+}
+
 export interface ConnectionProfile {
   id: string;
   name: string;
+  projectId?: string | null;
   sourceUuid?: string | null;
   dbType: string | Record<string, string>;
   env: EnvLevel;
@@ -82,6 +100,7 @@ export interface ConnectionProfile {
 
 export interface ConnectionDraft {
   id?: string | null;
+  projectId?: string | null;
   name: string;
   dbType: string | Record<string, string>;
   host?: string | null;
@@ -339,6 +358,29 @@ export async function pickDbeaverFolder(): Promise<string | null> {
   return typeof res === 'string' ? res : null;
 }
 
+export async function listProjects(): Promise<WorkspaceProject[]> {
+  assertTauri();
+  return invoke('list_projects_cmd');
+}
+
+export async function saveProject(draft: ProjectDraft): Promise<WorkspaceProject> {
+  assertTauri();
+  return invoke('save_project_cmd', { draft });
+}
+
+export async function deleteProject(projectId: string): Promise<WorkspaceProject[]> {
+  assertTauri();
+  return invoke('delete_project_cmd', { projectId });
+}
+
+export async function assignConnectionProject(
+  profileId: string,
+  projectId: string,
+): Promise<ConnectionProfile> {
+  assertTauri();
+  return invoke('assign_connection_project_cmd', { profileId, projectId });
+}
+
 export async function listConnections(): Promise<ConnectionProfile[]> {
   assertTauri();
   return invoke('list_connections');
@@ -373,9 +415,11 @@ export async function testConnectionDraft(
   return invoke('test_connection_draft_cmd', { draft, password: password ?? null });
 }
 
-export async function createDemoSqliteConnection(): Promise<ConnectionProfile> {
+export async function createDemoSqliteConnection(
+  projectId?: string | null,
+): Promise<ConnectionProfile> {
   assertTauri();
-  return invoke('create_demo_sqlite_connection');
+  return invoke('create_demo_sqlite_connection', { projectId: projectId ?? null });
 }
 
 export async function discoverDbeaver(): Promise<DbeaverDiscoveryItem[]> {
@@ -386,14 +430,22 @@ export async function discoverDbeaver(): Promise<DbeaverDiscoveryItem[]> {
 export async function importDbeaverPath(
   path: string,
   includePasswords = true,
+  projectId?: string | null,
 ): Promise<ConnectionProfile[]> {
   assertTauri();
-  return invoke('import_dbeaver_path_cmd', { path, includePasswords });
+  return invoke('import_dbeaver_path_cmd', {
+    path,
+    includePasswords,
+    projectId: projectId ?? null,
+  });
 }
 
-export async function importDbeaverText(text: string): Promise<ConnectionProfile[]> {
+export async function importDbeaverText(
+  text: string,
+  projectId?: string | null,
+): Promise<ConnectionProfile[]> {
   assertTauri();
-  return invoke('import_dbeaver_text_cmd', { text });
+  return invoke('import_dbeaver_text_cmd', { text, projectId: projectId ?? null });
 }
 
 export async function exportDbeaverJson(profileIds?: string[]): Promise<string> {

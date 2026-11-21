@@ -3,9 +3,11 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from './i18n';
 import {
   analyzeSql,
+  assignConnectionProject,
   createDemoMarkdownFile,
   createDemoSqliteConnection,
   deleteConnection,
+  deleteProject,
   executeSql,
   explainSql,
   exportDbeaverJson,
@@ -20,6 +22,7 @@ import {
   listDatabases,
   listExtensions,
   listIndexes,
+  listProjects,
   listQueryHistory,
   listTables,
   listWorkspaceFiles,
@@ -28,26 +31,31 @@ import {
   pickSaveFilePath,
   pickTextFileToOpen,
   saveConnection,
+  saveProject,
   saveTextFile,
   testConnection,
   type ColumnMeta,
   type ConnectionDraft,
   type ConnectionProfile,
   type DatabaseMeta,
+  type DirectConfig,
   type ExtensionMeta,
   type IndexMeta,
   type MarkdownSqlBlock,
   type OpenedFileDto,
+  type ProjectDraft,
   type QueryHistoryEntry,
   type ScriptAnalysis,
   type TableMeta,
   type WorkspaceFileEntry,
+  type WorkspaceProject,
 } from './api/ipc';
 import {
   BUILTIN_SNIPPETS,
   countLines,
   estimateUtf8Bytes,
   extractMarkdownSqlBlocksLocal,
+  extractSingleTableTarget,
   formatBytes,
   parseMarkdownSegments,
   type SqlSnippet,
@@ -55,7 +63,11 @@ import {
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
 import DatabaseTree from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
-import ResultGrid, { type ResultTabItem } from './components/ResultGrid.vue';
+import ResultGrid, {
+  type ConsoleLogEntry,
+  type GridMutationPreviewPayload,
+  type ResultTabItem,
+} from './components/ResultGrid.vue';
 import Modals, {
   type ActiveModalKind,
   type DangerModalContext,
@@ -104,7 +116,13 @@ const rightTool = ref<'structure' | 'extensions' | null>('structure');
 const leftWidth = ref<number>(Number(localStorage.getItem('pacergrip.leftWidth')) || 276);
 const rightWidth = ref<number>(Number(localStorage.getItem('pacergrip.rightWidth')) || 280);
 const bottomHeight = ref<number>(Number(localStorage.getItem('pacergrip.bottomHeight')) || 270);
-const openMenu = ref<'file' | 'edit' | 'database' | 'tools' | 'help' | null>(null);
+const openMenu = ref<'project' | 'file' | 'edit' | 'database' | 'tools' | 'help' | null>(null);
+const showDemoManual = ref<boolean>(localStorage.getItem('pacer.hideDemoManual') !== '1');
+
+function setShowDemoManual(visible: boolean) {
+  showDemoManual.value = visible;
+  localStorage.setItem('pacer.hideDemoManual', visible ? '0' : '1');
+}
 
 // Resize Dragging
 const draggingPane = ref<'left' | 'right' | 'bottom' | null>(null);
@@ -148,7 +166,33 @@ function stopResize() {
   window.removeEventListener('mouseup', stopResize);
 }
 
-// Database State
+// Projects & Database State
+const projects = ref<WorkspaceProject[]>([
+  {
+    id: 'default-project',
+    name: '默认项目',
+    description: '默认多数据源工作区项目',
+    color: '#3574F0',
+    rootDir: null,
+    createdAt: '',
+  },
+]);
+const activeProjectId = ref<string>(
+  localStorage.getItem('pacer.activeProjectId') || 'default-project',
+);
+const showAllProjects = ref<boolean>(false);
+
+const activeProject = computed(
+  () => projects.value.find((p) => p.id === activeProjectId.value) ?? projects.value[0],
+);
+
+const projectConnections = computed(() => {
+  if (showAllProjects.value) return connections.value;
+  return connections.value.filter(
+    (c) => !c.projectId || c.projectId === activeProjectId.value,
+  );
+});
+
 const connections = ref<ConnectionProfile[]>([]);
 const databasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
 const tablesByKey = reactive<Record<string, TableMeta[]>>({});
@@ -204,9 +248,9 @@ const allSnippets = computed(() => {
 
 // Editor Tabs State
 let consoleCounter = 1;
-const defaultConsoleSql = `-- PacerGrip · DataGrip 风格原生 SQL 控制台
+const defaultConsoleSql = `-- Pacer · 原生 SQL 控制台
 -- 快捷键：Ctrl+Enter 执行当前语句或选中 SQL ｜ Ctrl+Shift+Enter 执行全部 ｜ Ctrl+O 打开 .md/.sql 文件
--- 提示：支持打开 Markdown (.md) 运维/分析文档，选中任意 SQL 或点击代码块上方「▶ 执行」直接运行
+-- 提示：支持多项目多数据源管理、结果集直接双击修改生成 SQL，以及 Markdown 选中 SQL 直接执行
 
 SELECT
   c.full_name AS 客户名称,
@@ -316,18 +360,25 @@ const maxRowsLimit = ref<number | null>(1000);
 const activeServiceTab = ref<'result' | 'output' | 'ddl' | 'history' | 'problems'>('result');
 const resultTabs = ref<ResultTabItem[]>([]);
 const activeResultTabId = ref<string>('');
-const consoleLogs = ref<string[]>([]);
+const resultGridRef = ref<InstanceType<typeof ResultGrid> | null>(null);
+const logsByProject = reactive<Record<string, ConsoleLogEntry[]>>({});
 const ddlText = ref<string>('');
 const ddlTitle = ref<string>('');
 const historyEntries = ref<QueryHistoryEntry[]>([]);
 const astAnalysis = ref<ScriptAnalysis | null>(null);
 const busy = ref(false);
-const statusMessage = ref('就绪 · 支持 DBeaver 连接导入、URL 双向绑定与 Markdown 选中执行 SQL');
+const statusMessage = ref('就绪 · 支持多项目多数据源管理、DBeaver 导入、结果集直接修改与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
+
+const activeProjectLogs = computed<ConsoleLogEntry[]>(
+  () => logsByProject[activeProjectId.value] ?? [],
+);
 
 // Modals State
 const activeModal = ref<ActiveModalKind>('none');
+const editingProject = ref<WorkspaceProject | null>(null);
 const editingProfile = ref<ConnectionProfile | null>(null);
+const gridSqlContext = ref<GridMutationPreviewPayload | null>(null);
 const exportedJson = ref('');
 const dangerContext = ref<DangerModalContext | null>(null);
 const pendingDangerAction = ref<(() => Promise<void>) | null>(null);
@@ -353,12 +404,50 @@ function setStatus(msg: string, isError = false) {
   statusIsError.value = isError;
 }
 
-function appendLog(line: string) {
-  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-  consoleLogs.value.push(`[${ts}] ${line}`);
-  if (consoleLogs.value.length > 500) {
-    consoleLogs.value.splice(0, consoleLogs.value.length - 500);
+function pushProjectLog(opts: {
+  projectId?: string | null;
+  profileId?: string;
+  profileName: string;
+  dbName?: string;
+  level: ConsoleLogEntry['level'];
+  summary: string;
+  detail?: string;
+  durationMs?: number;
+}) {
+  const pid = opts.projectId || activeProjectId.value || 'default-project';
+  if (!logsByProject[pid]) {
+    logsByProject[pid] = [];
   }
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  logsByProject[pid].push({
+    id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: ts,
+    projectId: pid,
+    profileId: opts.profileId,
+    profileName: opts.profileName,
+    dbName: opts.dbName,
+    level: opts.level,
+    summary: opts.summary,
+    detail: opts.detail,
+    durationMs: opts.durationMs,
+  });
+  if (logsByProject[pid].length > 600) {
+    logsByProject[pid].splice(0, logsByProject[pid].length - 600);
+  }
+}
+
+function appendLog(line: string, level: ConsoleLogEntry['level'] = 'info', profileName = 'Pacer') {
+  pushProjectLog({
+    projectId: activeProjectId.value,
+    profileName,
+    level,
+    summary: line,
+  });
+}
+
+function clearActiveProjectLogs() {
+  logsByProject[activeProjectId.value] = [];
+  setStatus('已清空当前项目的控制台输出日志');
 }
 
 function isTabDirty(tab: EditorTab): boolean {
@@ -422,28 +511,131 @@ function findEnclosingMarkdownBlock(cursorLine: number): MarkdownSqlBlock | null
   );
 }
 
-// ==================== Connection & Metadata Operations ====================
+// ==================== Project & Connection Operations ====================
 
-async function refreshConnections() {
+async function refreshProjectsAndConnections() {
   if (!isTauriRuntime()) {
     setStatus(t('browserFallbackNotice'));
     return;
   }
   try {
+    const projList = await listProjects();
+    if (projList.length > 0) {
+      projects.value = projList;
+      if (!projList.some((p) => p.id === activeProjectId.value)) {
+        activeProjectId.value = projList[0].id;
+        localStorage.setItem('pacer.activeProjectId', activeProjectId.value);
+      }
+    }
+
     let list = await listConnections();
     if (list.length === 0) {
-      const demo = await createDemoSqliteConnection();
+      const demo = await createDemoSqliteConnection(activeProjectId.value);
       list = [demo];
-      appendLog(`自动初始化内置 SQLite 示例数据源: ${demo.name}`);
+      pushProjectLog({
+        projectId: demo.projectId,
+        profileId: demo.id,
+        profileName: demo.name,
+        level: 'info',
+        summary: '自动初始化内置 SQLite 示例数据源',
+      });
     }
     connections.value = list;
-    const first = list[0];
-    if (first && activeTab.value && !activeTab.value.profileId) {
-      activeTab.value.profileId = first.id;
-      await loadDatabasesForProfile(first, true);
+
+    const preferred =
+      list.find((c) => c.projectId === activeProjectId.value) ?? list[0];
+    if (preferred && activeTab.value && !activeTab.value.profileId) {
+      activeTab.value.profileId = preferred.id;
+      await loadDatabasesForProfile(preferred, true);
+    }
+
+    const curProj = activeProject.value;
+    if (curProj?.rootDir) {
+      await loadDirectory(curProj.rootDir);
     }
   } catch (err) {
-    setStatus(`加载数据源失败: ${String(err)}`, true);
+    setStatus(`加载项目与数据源失败: ${String(err)}`, true);
+  }
+}
+
+async function selectProject(projectId: string) {
+  openMenu.value = null;
+  activeProjectId.value = projectId;
+  localStorage.setItem('pacer.activeProjectId', projectId);
+  const proj = projects.value.find((p) => p.id === projectId);
+  if (!proj) return;
+
+  const matchingConns = connections.value.filter(
+    (c) => !c.projectId || c.projectId === projectId,
+  );
+  if (activeTab.value) {
+    const currentBelongs = matchingConns.some((c) => c.id === activeTab.value?.profileId);
+    if (!currentBelongs) {
+      const next = matchingConns[0];
+      activeTab.value.profileId = next?.id ?? '';
+      activeTab.value.dbName = '';
+      if (next) {
+        void loadDatabasesForProfile(next, true);
+      }
+    }
+  }
+  if (proj.rootDir) {
+    void loadDirectory(proj.rootDir);
+  }
+  setStatus(`已切换至项目: ${proj.name}（${matchingConns.length} 个数据源）`);
+}
+
+function openProjectModal(project: WorkspaceProject | null) {
+  editingProject.value = project;
+  activeModal.value = 'project';
+}
+
+async function handleSaveProject(draft: ProjectDraft) {
+  busy.value = true;
+  try {
+    const saved = await saveProject(draft);
+    projects.value = await listProjects();
+    activeModal.value = 'none';
+    await selectProject(saved.id);
+    pushProjectLog({
+      projectId: saved.id,
+      profileName: saved.name,
+      level: 'success',
+      summary: draft.id ? '已更新项目配置' : '已创建新项目',
+    });
+  } catch (err) {
+    setStatus(`保存项目失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleDeleteProject(projectId: string) {
+  busy.value = true;
+  try {
+    const remaining = await deleteProject(projectId);
+    projects.value = remaining;
+    connections.value = await listConnections();
+    activeModal.value = 'none';
+    if (remaining[0]) {
+      await selectProject(remaining[0].id);
+    }
+    setStatus('已删除项目，原项目数据源已自动移入默认项目');
+  } catch (err) {
+    setStatus(`删除项目失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleMoveProfileProject(profile: ConnectionProfile, targetProjectId: string) {
+  try {
+    await assignConnectionProject(profile.id, targetProjectId);
+    connections.value = await listConnections();
+    const targetName = projects.value.find((p) => p.id === targetProjectId)?.name ?? targetProjectId;
+    setStatus(`已将数据源「${profile.name}」移动至项目「${targetName}」`);
+  } catch (err) {
+    setStatus(`移动数据源失败: ${String(err)}`, true);
   }
 }
 
@@ -466,7 +658,14 @@ async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFir
       return;
     }
     setStatus(`加载库列表失败 (${profile.name}): ${msg}`, true);
-    appendLog(`ERROR [${profile.name}] ${msg}`);
+    pushProjectLog({
+      projectId: profile.projectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      level: 'error',
+      summary: '加载数据库列表失败',
+      detail: msg,
+    });
   }
 }
 
@@ -580,13 +779,21 @@ async function handleSaveConnection(
       activeTab.value.profileId = saved.id;
     }
     setStatus(`已保存数据源: ${saved.name}`);
-    appendLog(`SAVED [${saved.name}]`);
+    pushProjectLog({
+      projectId: saved.projectId,
+      profileId: saved.id,
+      profileName: saved.name,
+      level: 'success',
+      summary: '已保存数据源配置',
+    });
     if (closeAfter) {
       activeModal.value = 'none';
       void loadDatabasesForProfile(saved, true);
     }
   } catch (err) {
-    setStatus(`保存数据源失败: ${String(err)}`, true);
+    const msg = String(err);
+    setStatus(`保存数据源失败: ${msg}`, true);
+    appendLog(`保存数据源失败: ${msg}`, 'error');
   } finally {
     busy.value = false;
   }
@@ -598,12 +805,36 @@ async function handleTestProfile(profile: ConnectionProfile) {
     const ping = await testConnection(profile.id);
     if (ping.success) {
       setStatus(`连接测试成功: ${profile.name} (${ping.latencyMs}ms · ${ping.serverVersion ?? ''})`);
-      appendLog(`PING OK [${profile.name}] ${ping.latencyMs}ms`);
+      pushProjectLog({
+        projectId: profile.projectId,
+        profileId: profile.id,
+        profileName: profile.name,
+        level: 'success',
+        durationMs: ping.latencyMs,
+        summary: `连接测试成功 (${ping.latencyMs} ms · ${ping.serverVersion ?? 'OK'})`,
+      });
     } else {
       setStatus(`连接测试失败: ${ping.message}`, true);
+      pushProjectLog({
+        projectId: profile.projectId,
+        profileId: profile.id,
+        profileName: profile.name,
+        level: 'error',
+        summary: '连接测试失败',
+        detail: ping.message,
+      });
     }
   } catch (err) {
-    setStatus(`连接测试出错: ${String(err)}`, true);
+    const msg = String(err);
+    setStatus(`连接测试出错: ${msg}`, true);
+    pushProjectLog({
+      projectId: profile.projectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      level: 'error',
+      summary: '连接测试异常',
+      detail: msg,
+    });
   } finally {
     busy.value = false;
   }
@@ -626,7 +857,7 @@ async function handleDeleteProfile(profile: ConnectionProfile) {
 async function handleInitDemoSqlite() {
   busy.value = true;
   try {
-    const demo = await createDemoSqliteConnection();
+    const demo = await createDemoSqliteConnection(activeProjectId.value);
     connections.value = await listConnections();
     if (activeTab.value) {
       activeTab.value.profileId = demo.id;
@@ -665,13 +896,27 @@ async function handleSubmitPassword(profileId: string, password: string) {
 async function handleImportDbeaverPath(path: string, includePasswords: boolean) {
   busy.value = true;
   try {
-    const imported = await importDbeaverPath(path, includePasswords);
+    const imported = await importDbeaverPath(path, includePasswords, activeProjectId.value);
     connections.value = await listConnections();
-    setStatus(`已从 DBeaver 导入 ${imported.length} 个数据源`);
-    appendLog(`IMPORT DBeaver Path (${path}) -> ${imported.length} profile(s)`);
+    setStatus(`已从 DBeaver 导入 ${imported.length} 个数据源到「${activeProject.value?.name ?? '当前项目'}」`);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 导入',
+      level: 'success',
+      summary: `成功导入 ${imported.length} 个数据源`,
+      detail: path,
+    });
     activeModal.value = 'none';
   } catch (err) {
-    setStatus(`导入 DBeaver 路径失败: ${String(err)}`, true);
+    const msg = String(err);
+    setStatus(`导入 DBeaver 路径失败: ${msg}`, true);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 导入',
+      level: 'error',
+      summary: '导入 DBeaver 路径失败',
+      detail: msg,
+    });
   } finally {
     busy.value = false;
   }
@@ -680,13 +925,26 @@ async function handleImportDbeaverPath(path: string, includePasswords: boolean) 
 async function handleImportDbeaverText(text: string) {
   busy.value = true;
   try {
-    const imported = await importDbeaverText(text);
+    const imported = await importDbeaverText(text, activeProjectId.value);
     connections.value = await listConnections();
     setStatus(`已从 DBeaver 配置解析导入 ${imported.length} 个数据源`);
-    appendLog(`IMPORT DBeaver Text -> ${imported.length} profile(s)`);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 导入',
+      level: 'success',
+      summary: `成功解析并导入 ${imported.length} 个数据源`,
+    });
     activeModal.value = 'none';
   } catch (err) {
-    setStatus(`解析 DBeaver 配置失败: ${String(err)}`, true);
+    const msg = String(err);
+    setStatus(`解析 DBeaver 配置失败: ${msg}`, true);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 导入',
+      level: 'error',
+      summary: '解析 DBeaver 配置失败',
+      detail: msg,
+    });
   } finally {
     busy.value = false;
   }
@@ -712,7 +970,7 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
     activeTab.value.dbName = dbName;
   }
   const sql = `SELECT * FROM ${tableName} LIMIT 100;`;
-  await runStatementsWithGuard([sql], `${tableName} (前100行)`, profile, dbName);
+  await executeStatementsBatch([sql], `${tableName} (前100行)`, profile, dbName, tableName);
 }
 
 async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableName: string) {
@@ -890,17 +1148,51 @@ async function confirmDangerExecution() {
   }
 }
 
+function engineKeyOf(profile: ConnectionProfile): string {
+  return typeof profile.dbType === 'string'
+    ? profile.dbType
+    : Object.values(profile.dbType)[0] ?? 'sqlite';
+}
+
+function isProfileReadOnly(profile: ConnectionProfile): boolean {
+  const cfg = (profile.mode?.config ?? {}) as Partial<DirectConfig>;
+  return Boolean(cfg.readOnly) || !profile.capabilities.canDml;
+}
+
+async function resolveTablePrimaryKeys(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+): Promise<string[]> {
+  const cKey = `${profile.id}:${dbName}:${tableName}`;
+  let cols = columnsByKey[cKey];
+  if (!cols && dbName) {
+    try {
+      cols = await listColumns(profile.id, dbName, tableName);
+      columnsByKey[cKey] = cols;
+    } catch {
+      cols = [];
+    }
+  }
+  return (cols ?? []).filter((c) => c.isPrimaryKey).map((c) => c.name);
+}
+
 async function executeStatementsBatch(
   statements: string[],
   label: string,
   profile: ConnectionProfile,
   dbName: string,
+  explicitTableName?: string,
 ) {
   busy.value = true;
   const newTabs: ResultTabItem[] = [];
   let totalRowsAll = 0;
   let totalMsAll = 0;
   let lastError: string | null = null;
+  const targetProjectId = profile.projectId || activeProjectId.value;
+  const availableTables = (tablesByKey[`${profile.id}:${dbName}`] ?? []).map((t) => t.name);
+  const engineKey = engineKeyOf(profile);
+  const readOnly = isProfileReadOnly(profile);
 
   try {
     for (let idx = 0; idx < statements.length; idx += 1) {
@@ -908,19 +1200,47 @@ async function executeStatementsBatch(
       if (!sql) continue;
       const tabId = `res-${Date.now()}-${idx}`;
       const tabTitle = statements.length > 1 ? `${label} #${idx + 1}` : label;
+      const detected = explicitTableName
+        ? { db: dbName, table: explicitTableName }
+        : extractSingleTableTarget(sql);
+      const effectiveDb = detected?.db || dbName;
+      const sourceTable = detected?.table ?? null;
+      const primaryKeys =
+        sourceTable && effectiveDb
+          ? await resolveTablePrimaryKeys(profile, effectiveDb, sourceTable)
+          : [];
+
       const item: ResultTabItem = {
         id: tabId,
         title: tabTitle,
         sql,
+        profileId: profile.id,
+        profileName: profile.name,
+        profileEnv: profile.env,
+        engineKey,
+        dbName: effectiveDb,
+        readOnly,
+        sourceTable,
+        availableTables,
+        primaryKeys,
         columns: [],
         rows: [],
         summary: null,
       };
-      appendLog(`RUN [${profile.name}${dbName ? '/' + dbName : ''}] ${sql.replace(/\s+/g, ' ').slice(0, 140)}`);
+
+      pushProjectLog({
+        projectId: targetProjectId,
+        profileId: profile.id,
+        profileName: profile.name,
+        dbName: effectiveDb || undefined,
+        level: 'sql',
+        summary: '执行 SQL',
+        detail: sql,
+      });
 
       const summary = await executeSql(
         profile.id,
-        dbName || null,
+        effectiveDb || null,
         sql,
         maxRowsLimit.value,
         (chunk) => {
@@ -937,16 +1257,31 @@ async function executeStatementsBatch(
       totalRowsAll += summary.totalRows;
 
       if (summary.success) {
-        appendLog(
-          `OK (${summary.durationMs}ms · ${
+        pushProjectLog({
+          projectId: targetProjectId,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: effectiveDb || undefined,
+          level: 'success',
+          durationMs: summary.durationMs,
+          summary: `${
             summary.isDmlOrDdl
-              ? `影响 ${summary.affectedRows ?? 0} 行`
-              : `返回 ${summary.totalRows} 行`
-          })`,
-        );
+              ? `执行完成，影响 ${summary.affectedRows ?? 0} 行`
+              : `查询成功，返回 ${summary.totalRows} 行`
+          } (${summary.durationMs} ms)`,
+        });
       } else {
         lastError = summary.errorMessage ?? '执行失败';
-        appendLog(`ERROR (${summary.durationMs}ms): ${lastError}`);
+        pushProjectLog({
+          projectId: targetProjectId,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: effectiveDb || undefined,
+          level: 'error',
+          durationMs: summary.durationMs,
+          summary: `SQL 执行失败 (${summary.durationMs} ms)`,
+          detail: lastError,
+        });
       }
       newTabs.push(item);
     }
@@ -967,11 +1302,150 @@ async function executeStatementsBatch(
     await refreshHistory();
   } catch (err) {
     const msg = String(err);
-    appendLog(`FATAL: ${msg}`);
+    pushProjectLog({
+      projectId: targetProjectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      dbName: dbName || undefined,
+      level: 'error',
+      summary: 'SQL 执行异常',
+      detail: msg,
+    });
+    activeServiceTab.value = 'output';
     setStatus(`执行 SQL 出错: ${msg}`, true);
   } finally {
     busy.value = false;
   }
+}
+
+function handlePreviewGridMutations(payload: GridMutationPreviewPayload) {
+  gridSqlContext.value = payload;
+  activeModal.value = 'grid-sql';
+}
+
+async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedSql: string) {
+  const profile = connections.value.find((c) => c.id === payload.profileId);
+  if (!profile) {
+    setStatus('未找到对应的目标数据源', true);
+    return;
+  }
+  activeModal.value = 'none';
+  busy.value = true;
+  const targetProjectId = profile.projectId || activeProjectId.value;
+  let totalAffected = 0;
+  let failedErr: string | null = null;
+
+  try {
+    const analysis = await analyzeSql(editedSql, profile.dbType);
+    const stmts =
+      analysis.statements.length > 0
+        ? analysis.statements.map((s) => s.sql.trim()).filter(Boolean)
+        : editedSql
+            .split(';')
+            .map((s) => s.trim())
+            .filter(Boolean);
+
+    for (const stmt of stmts) {
+      pushProjectLog({
+        projectId: targetProjectId,
+        profileId: profile.id,
+        profileName: profile.name,
+        dbName: payload.dbName || undefined,
+        level: 'sql',
+        summary: `结果集修改提交 (${payload.tableName})`,
+        detail: stmt,
+      });
+
+      const summary = await executeSql(
+        profile.id,
+        payload.dbName || null,
+        stmt,
+        null,
+        () => {},
+      );
+      if (summary.success) {
+        totalAffected += summary.affectedRows ?? 0;
+        pushProjectLog({
+          projectId: targetProjectId,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: payload.dbName || undefined,
+          level: 'success',
+          durationMs: summary.durationMs,
+          summary: `修改成功，影响 ${summary.affectedRows ?? 0} 行 (${summary.durationMs} ms)`,
+        });
+      } else {
+        failedErr = summary.errorMessage ?? '修改提交失败';
+        pushProjectLog({
+          projectId: targetProjectId,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: payload.dbName || undefined,
+          level: 'error',
+          summary: '结果集修改提交失败',
+          detail: failedErr,
+        });
+        break;
+      }
+    }
+
+    if (failedErr) {
+      activeServiceTab.value = 'output';
+      setStatus(`数据修改失败: ${failedErr}`, true);
+    } else {
+      resultGridRef.value?.clearDraft(payload.resultTabId);
+      setStatus(`数据修改成功 · 共执行 ${stmts.length} 条 SQL，影响 ${totalAffected} 行`);
+
+      // Automatically refresh the originating SELECT result tab in-place
+      const targetTab = resultTabs.value.find((r) => r.id === payload.resultTabId);
+      if (targetTab) {
+        const refreshedCols: string[] = [];
+        const refreshedRows: Record<string, unknown>[] = [];
+        const summary = await executeSql(
+          profile.id,
+          targetTab.dbName || null,
+          targetTab.sql,
+          maxRowsLimit.value,
+          (chunk) => {
+            if (refreshedCols.length === 0 && chunk.columns.length > 0) {
+              refreshedCols.push(...chunk.columns);
+            }
+            if (chunk.rows.length > 0) {
+              refreshedRows.push(...chunk.rows);
+            }
+          },
+        );
+        targetTab.columns = refreshedCols.length > 0 ? refreshedCols : targetTab.columns;
+        targetTab.rows = refreshedRows;
+        targetTab.summary = summary;
+      }
+      await refreshHistory();
+    }
+  } catch (err) {
+    const msg = String(err);
+    pushProjectLog({
+      projectId: targetProjectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      dbName: payload.dbName || undefined,
+      level: 'error',
+      summary: '结果集修改提交异常',
+      detail: msg,
+    });
+    activeServiceTab.value = 'output';
+    setStatus(`数据修改异常: ${msg}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleRunConsoleQuickSql(sql: string) {
+  const prof = activeProfile.value;
+  if (!prof) {
+    setStatus('请先在顶部工具栏选择一个目标数据源', true);
+    return;
+  }
+  await runStatementsWithGuard([sql], '控制台快捷执行', prof, activeTab.value?.dbName ?? '');
 }
 
 async function runExplainActive() {
@@ -1002,6 +1476,15 @@ async function runExplainSql(sql: string) {
       id: tabId,
       title: `EXPLAIN (${res.durationMs}ms)`,
       sql: sql.trim(),
+      profileId: prof.id,
+      profileName: prof.name,
+      profileEnv: prof.env,
+      engineKey: engineKeyOf(prof),
+      dbName,
+      readOnly: true,
+      sourceTable: null,
+      availableTables: [],
+      primaryKeys: [],
       columns: res.columns,
       rows: res.rows,
       summary: {
@@ -1018,10 +1501,28 @@ async function runExplainSql(sql: string) {
     resultTabs.value = [item, ...resultTabs.value].slice(0, 12);
     activeResultTabId.value = tabId;
     activeServiceTab.value = 'result';
-    appendLog(`EXPLAIN [${prof.name}] ${res.durationMs}ms -> ${res.rows.length} steps`);
+    pushProjectLog({
+      projectId: prof.projectId,
+      profileId: prof.id,
+      profileName: prof.name,
+      dbName,
+      level: res.success ? 'success' : 'error',
+      durationMs: res.durationMs,
+      summary: res.success ? `EXPLAIN 完成 (${res.rows.length} steps, ${res.durationMs} ms)` : 'EXPLAIN 执行失败',
+      detail: res.success ? sql.trim() : (res.errorMessage ?? undefined),
+    });
     setStatus(res.success ? `执行计划生成成功 (${res.durationMs}ms)` : `EXPLAIN 失败: ${res.errorMessage}`, !res.success);
   } catch (err) {
-    setStatus(`EXPLAIN 出错: ${String(err)}`, true);
+    const msg = String(err);
+    pushProjectLog({
+      projectId: prof.projectId,
+      profileId: prof.id,
+      profileName: prof.name,
+      level: 'error',
+      summary: 'EXPLAIN 执行异常',
+      detail: msg,
+    });
+    setStatus(`EXPLAIN 出错: ${msg}`, true);
   } finally {
     busy.value = false;
   }
@@ -1317,7 +1818,8 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-open-file', category: 'action', label: t('openFile'), detail: '打开本地 Markdown / SQL 文件并检测编码', badge: 'Ctrl+O' },
     { id: 'act-open-folder', category: 'action', label: t('openFolder'), detail: '挂载本地目录到文件资源管理器', badge: '文件' },
     { id: 'act-demo-md', category: 'action', label: t('openDemoMd'), detail: '体验 Markdown 内联 CodeLens 与选中执行 SQL', badge: '示例' },
-    { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
+    { id: 'act-new-project', category: 'action', label: t('newProject'), detail: '新建多数据源工作区项目（共享统一控制台日志）', badge: '项目' },
+    { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: 'Ctrl+N' },
     { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: 'Ctrl+Alt+L' },
@@ -1388,6 +1890,7 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     if (item.id === 'act-open-file') await openFileFromDialog();
     else if (item.id === 'act-open-folder') await mountFolderDialog();
     else if (item.id === 'act-demo-md') await openDemoMarkdownHandbook();
+    else if (item.id === 'act-new-project') openProjectModal(null);
     else if (item.id === 'act-new-conn') {
       editingProfile.value = null;
       activeModal.value = 'connection';
@@ -1481,7 +1984,7 @@ onMounted(async () => {
   window.addEventListener('keydown', onGlobalKeydown);
   window.addEventListener('click', onGlobalClick);
 
-  await refreshConnections();
+  await refreshProjectsAndConnections();
   await refreshHistory();
   if (isTauriRuntime()) {
     extensions.value = await listExtensions().catch(() => []);
@@ -1506,8 +2009,60 @@ onBeforeUnmount(() => {
     <header class="ide-header">
       <div class="header-left">
         <div class="brand-mark" :title="t('appSubtitle')">
-          <span class="brand-logo">PG</span>
+          <span class="brand-logo">P</span>
           <span>{{ t('appTitle') }}</span>
+        </div>
+
+        <!-- JetBrains-style Project Switcher -->
+        <div class="menu-trigger" @click.stop>
+          <button
+            class="project-switcher"
+            :title="activeProject?.description || activeProject?.name"
+            @click="openMenu = openMenu === 'project' ? null : 'project'"
+          >
+            <span
+              class="project-dot"
+              :style="{ background: activeProject?.color || 'var(--accent)' }"
+            />
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+              {{ activeProject?.name || '默认项目' }}
+            </span>
+            <span style="opacity: 0.65; font-size: 10px">▾</span>
+          </button>
+
+          <div v-if="openMenu === 'project'" class="dropdown-menu" style="min-width: 245px">
+            <div style="padding: 4px 10px; font-size: 10.5px; color: var(--text-secondary)">
+              切换工作区项目
+            </div>
+            <button
+              v-for="proj in projects"
+              :key="proj.id"
+              class="dropdown-item"
+              @click="selectProject(proj.id)"
+            >
+              <span style="display: inline-flex; align-items: center; gap: 7px; min-width: 0">
+                <span class="project-dot" :style="{ background: proj.color || 'var(--accent)' }" />
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                  {{ proj.name }}
+                </span>
+              </span>
+              <span class="shortcut-hint">
+                {{ connections.filter((c) => !c.projectId || c.projectId === proj.id).length }} 库
+                {{ proj.id === activeProjectId ? '✓' : '' }}
+              </span>
+            </button>
+            <div class="dropdown-sep" />
+            <button class="dropdown-item" @click="openMenu = null; openProjectModal(null)">
+              <span>＋ {{ t('newProject') }}</span>
+            </button>
+            <button
+              v-if="activeProject"
+              class="dropdown-item"
+              @click="openMenu = null; openProjectModal(activeProject)"
+            >
+              <span>⚙ {{ t('manageProject') }}</span>
+            </button>
+          </div>
         </div>
 
         <nav class="menu-bar" @click.stop>
@@ -1650,6 +2205,9 @@ onBeforeUnmount(() => {
               <button class="dropdown-item" @click="openMenu = null; openDemoMarkdownHandbook()">
                 <span>{{ t('openDemoMd') }}</span>
               </button>
+              <button class="dropdown-item" @click="openMenu = null; setShowDemoManual(!showDemoManual)">
+                <span>{{ showDemoManual ? t('hideDemoManual') : t('showDemoManual') }}</span>
+              </button>
             </div>
           </div>
         </nav>
@@ -1667,11 +2225,11 @@ onBeforeUnmount(() => {
           />
           <select
             :value="activeTab?.profileId ?? ''"
-            title="当前执行数据源"
+            title="当前项目下执行数据源"
             @change="handleProfileSelectChange(($event.target as HTMLSelectElement).value)"
           >
             <option value="">{{ t('noConnectionSelected') }}</option>
-            <option v-for="prof in connections" :key="prof.id" :value="prof.id">
+            <option v-for="prof in projectConnections" :key="prof.id" :value="prof.id">
               {{ prof.name }} [{{ prof.env }}]
             </option>
           </select>
@@ -1812,6 +2370,9 @@ onBeforeUnmount(() => {
       >
         <DatabaseTree
           v-if="leftTool === 'database'"
+          :projects="projects"
+          :active-project-id="activeProjectId"
+          :show-all-projects="showAllProjects"
           :connections="connections"
           :active-profile-id="activeTab?.profileId ?? ''"
           :active-db-name="activeTab?.dbName ?? ''"
@@ -1822,6 +2383,9 @@ onBeforeUnmount(() => {
           :expanded-profiles="expandedProfiles"
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
+          @new-project="openProjectModal(null)"
+          @toggle-show-all-projects="showAllProjects = !showAllProjects"
+          @move-profile-project="handleMoveProfileProject"
           @new-connection="openConnectionModal(null)"
           @import-dbeaver="activeModal = 'import'"
           @init-demo="handleInitDemoSqlite"
@@ -1843,6 +2407,7 @@ onBeforeUnmount(() => {
           :mounted-dir="mountedDir"
           :entries="workspaceEntries"
           :recent-files="recentFiles"
+          :show-demo-manual="showDemoManual"
           @mount-folder="mountFolderDialog"
           @open-dir="loadDirectory"
           @open-file-dialog="openFileFromDialog"
@@ -1973,14 +2538,18 @@ onBeforeUnmount(() => {
           >
             📂
           </button>
-          <button
-            class="icon-btn"
-            style="margin: 3px 2px"
-            :title="t('openDemoMd')"
-            @click="openDemoMarkdownHandbook"
-          >
-            📝 示例手册
-          </button>
+          <span v-if="showDemoManual" class="demo-chip">
+            <button :title="t('openDemoMd')" @click="openDemoMarkdownHandbook">
+              📝 示例手册
+            </button>
+            <button
+              :title="t('hideDemoManual')"
+              style="opacity: 0.7; font-weight: 700"
+              @click.stop="setShowDemoManual(false)"
+            >
+              ×
+            </button>
+          </span>
         </div>
 
         <!-- Contextual Editor Sub-Toolbar -->
@@ -2190,10 +2759,12 @@ onBeforeUnmount(() => {
         <!-- Bottom Services / Result Grid Panel -->
         <section class="services-panel" :style="{ height: `${bottomHeight}px` }">
           <ResultGrid
+            ref="resultGridRef"
             :result-tabs="resultTabs"
             :active-result-tab-id="activeResultTabId"
             :active-service-tab="activeServiceTab"
-            :console-logs="consoleLogs"
+            :active-project-name="activeProject?.name ?? '默认项目'"
+            :console-logs="activeProjectLogs"
             :ddl-text="ddlText"
             :ddl-title="ddlTitle"
             :history-entries="historyEntries"
@@ -2202,6 +2773,10 @@ onBeforeUnmount(() => {
             @update:active-result-tab-id="activeResultTabId = $event"
             @close-result-tab="closeResultTab"
             @load-history-sql="loadHistorySqlIntoEditor"
+            @preview-grid-mutations="handlePreviewGridMutations"
+            @clear-console-logs="clearActiveProjectLogs"
+            @run-console-sql="handleRunConsoleQuickSql"
+            @send-sql-to-editor="createNewConsoleTab($event)"
             @notify="setStatus($event)"
           />
         </section>
@@ -2516,7 +3091,11 @@ onBeforeUnmount(() => {
     <!-- ==================== All Modals ==================== -->
     <Modals
       :active-modal="activeModal"
+      :projects="projects"
+      :active-project-id="activeProjectId"
+      :editing-project="editingProject"
       :editing-profile="editingProfile"
+      :grid-sql-context="gridSqlContext"
       :encoding-context="encodingModalContext"
       :danger-context="dangerContext"
       :password-profile="passwordProfile"
@@ -2524,6 +3103,9 @@ onBeforeUnmount(() => {
       :exported-json="exportedJson"
       :busy="busy"
       @close="activeModal = 'none'"
+      @save-project="handleSaveProject"
+      @delete-project="handleDeleteProject"
+      @execute-grid-sql="handleExecuteGridSql"
       @save-connection="handleSaveConnection"
       @import-dbeaver-path="handleImportDbeaverPath"
       @import-dbeaver-text="handleImportDbeaverText"

@@ -292,6 +292,140 @@ export function downloadTextFile(filename: string, content: string, mime: string
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Extracts a single target `[db.]table` from a simple `SELECT ... FROM ...` query.
+ * Returns `null` for multi-table JOINs or UNIONs so callers can fall back to manual table selection.
+ */
+export function extractSingleTableTarget(sql: string): { db?: string; table: string } | null {
+  const cleaned = sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .trim();
+  if (!/^select\b/i.test(cleaned)) return null;
+  if (/\b(join|union)\b/i.test(cleaned)) return null;
+
+  const fromMatch = cleaned.match(
+    /\bfrom\s+(?:([`"\[]?[A-Za-z0-9_$-]+[`"\]]?)\s*\.\s*)?([`"\[]?[A-Za-z0-9_$-]+[`"\]]?)(?:\s|$|,|;)/i,
+  );
+  if (!fromMatch) return null;
+
+  // Reject comma-joins (`FROM a, b`)
+  const afterFrom = cleaned.slice((fromMatch.index ?? 0) + fromMatch[0].length).trim();
+  if (fromMatch[0].trimEnd().endsWith(',')) return null;
+  if (/^(?:as\s+)?[A-Za-z0-9_$-]+\s*,/i.test(afterFrom)) return null;
+
+  const stripQuotes = (s: string) => s.replace(/^[`"\[]|[`"\]]$/g, '');
+  const db = fromMatch[1] ? stripQuotes(fromMatch[1]) : undefined;
+  const table = stripQuotes(fromMatch[2]);
+  if (!table || /^(select|where|group|order|limit|having|values)$/i.test(table)) {
+    return null;
+  }
+  return { db, table };
+}
+
+export function quoteIdentifier(ident: string, engineKey: string): string {
+  const eng = engineKey.toLowerCase();
+  if (eng.includes('postgres') || eng.includes('kingbase') || eng.includes('gauss') || eng.includes('oracle') || eng.includes('dameng')) {
+    return `"${ident.replace(/"/g, '""')}"`;
+  }
+  return `\`${ident.replace(/`/g, '``')}\``;
+}
+
+export function formatSqlLiteral(val: unknown): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') return Number.isFinite(val) ? String(val) : 'NULL';
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+  const str = typeof val === 'object' ? JSON.stringify(val) : String(val);
+  return `'${str.replace(/'/g, "''")}'`;
+}
+
+export interface GridMutationOptions {
+  tableName: string;
+  dbName?: string;
+  engineKey: string;
+  columns: string[];
+  primaryKeys: string[];
+  originalRows: Record<string, unknown>[];
+  modifiedCells: Record<number, Record<string, unknown>>;
+  deletedRowIndices: number[];
+  insertedRows: Array<Record<string, unknown>>;
+}
+
+export interface GridMutationPlan {
+  statements: string[];
+  usedPrimaryKey: boolean;
+  keyColumns: string[];
+  warning: string | null;
+}
+
+/**
+ * Generates dialect-accurate `UPDATE` / `INSERT` / `DELETE` statements from inline grid edits.
+ * Automatically anchors `WHERE` clauses on Primary Key columns when available, falling back to
+ * all original row columns (with `IS NULL` handling) and emitting a clear warning.
+ */
+export function generateGridMutationSql(opts: GridMutationOptions): GridMutationPlan {
+  const q = (id: string) => quoteIdentifier(id, opts.engineKey);
+  const qualifiedTable =
+    opts.dbName && opts.dbName !== 'main' && opts.dbName !== 'default'
+      ? `${q(opts.dbName)}.${q(opts.tableName)}`
+      : q(opts.tableName);
+
+  const usablePks = opts.primaryKeys.filter((pk) => opts.columns.includes(pk));
+  const usedPrimaryKey = usablePks.length > 0;
+  const keyColumns = usedPrimaryKey ? usablePks : opts.columns;
+  const warning = usedPrimaryKey
+    ? null
+    : '当前结果集未包含表主键，WHERE 条件将使用该行全部原始列值进行精确匹配，请仔细核对后再执行。';
+
+  const buildWhere = (origRow: Record<string, unknown>) =>
+    keyColumns
+      .map((col) => {
+        const v = origRow[col];
+        return v === null || v === undefined ? `${q(col)} IS NULL` : `${q(col)} = ${formatSqlLiteral(v)}`;
+      })
+      .join(' AND ');
+
+  const statements: string[] = [];
+  const deletedSet = new Set(opts.deletedRowIndices);
+
+  // 1. UPDATE statements for modified non-deleted rows
+  for (const [idxStr, changes] of Object.entries(opts.modifiedCells)) {
+    const rowIdx = Number(idxStr);
+    if (deletedSet.has(rowIdx)) continue;
+    const origRow = opts.originalRows[rowIdx];
+    if (!origRow) continue;
+    const changedEntries = Object.entries(changes).filter(([col, newVal]) => {
+      const oldVal = origRow[col];
+      return newVal !== oldVal;
+    });
+    if (changedEntries.length === 0) continue;
+
+    const setClause = changedEntries
+      .map(([col, val]) => `${q(col)} = ${formatSqlLiteral(val)}`)
+      .join(', ');
+    const whereClause = buildWhere(origRow);
+    statements.push(`UPDATE ${qualifiedTable} SET ${setClause} WHERE ${whereClause};`);
+  }
+
+  // 2. INSERT statements for newly added rows
+  for (const newRow of opts.insertedRows) {
+    const presentCols = opts.columns.filter((col) => newRow[col] !== undefined && newRow[col] !== '');
+    if (presentCols.length === 0) continue;
+    const colList = presentCols.map(q).join(', ');
+    const valList = presentCols.map((c) => formatSqlLiteral(newRow[c])).join(', ');
+    statements.push(`INSERT INTO ${qualifiedTable} (${colList}) VALUES (${valList});`);
+  }
+
+  // 3. DELETE statements for marked rows
+  for (const rowIdx of [...deletedSet].sort((a, b) => a - b)) {
+    const origRow = opts.originalRows[rowIdx];
+    if (!origRow) continue;
+    statements.push(`DELETE FROM ${qualifiedTable} WHERE ${buildWhere(origRow)};`);
+  }
+
+  return { statements, usedPrimaryKey, keyColumns, warning };
+}
+
 export interface SqlSnippet {
   id: string;
   title: string;

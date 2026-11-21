@@ -36,7 +36,7 @@ pub fn ensure_demo_markdown_file(storage_dir: &Path) -> CoreResult<OpenedFileDto
     std::fs::create_dir_all(storage_dir)?;
     let path = storage_dir.join("示例查询手册.md");
     if !path.is_file() {
-        let sample = r#"# PacerGrip SQL 运维与数据分析手册
+        let sample = r#"# Pacer SQL 运维与数据分析手册
 
 > 提示：在 Markdown 文档中，你可以：
 > 1. 直接点击每个 SQL 代码块上方的 **「▶ 执行」** 或 **「⚡ EXPLAIN」** 按钮；

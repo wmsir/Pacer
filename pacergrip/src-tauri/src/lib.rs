@@ -1,9 +1,33 @@
 pub mod commands;
 pub mod files;
 
+use std::path::Path;
 use tauri::Manager;
 
 use commands::AppState;
+
+/// One-time migration helper preserving saved connections & encrypted credentials when
+/// upgrading from the legacy `cn.fwpt.pacergrip` identifier to `cn.fwpt.pacer`.
+fn migrate_legacy_storage(new_dir: &Path) {
+    if new_dir.join("connections.json").is_file() {
+        return;
+    }
+    let Some(parent) = new_dir.parent() else {
+        return;
+    };
+    let legacy_dir = parent.join("cn.fwpt.pacergrip");
+    if !legacy_dir.is_dir() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(new_dir);
+    for file in ["connections.json", "credentials.dat", "demo_store.sqlite", "示例查询手册.md"] {
+        let src = legacy_dir.join(file);
+        let dst = new_dir.join(file);
+        if src.is_file() && !dst.is_file() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -13,11 +37,16 @@ pub fn run() {
             let data_dir = app
                 .path()
                 .app_data_dir()
-                .unwrap_or_else(|_| std::env::temp_dir().join("pacergrip"));
+                .unwrap_or_else(|_| std::env::temp_dir().join("pacer"));
+            migrate_legacy_storage(&data_dir);
             app.manage(AppState::new(data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::list_projects_cmd,
+            commands::save_project_cmd,
+            commands::delete_project_cmd,
+            commands::assign_connection_project_cmd,
             commands::list_connections,
             commands::save_connection,
             commands::delete_connection,
@@ -47,5 +76,5 @@ pub fn run() {
             commands::list_extensions_cmd,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running PacerGrip application");
+        .expect("error while running Pacer application");
 }

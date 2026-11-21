@@ -17,7 +17,7 @@ use pacer_core::{
     DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry, FileStatsDto,
     IndexMeta, MarkdownSqlBlock, OpenedFileDto, PingMetrics, PreExecuteDecision, QueryChunk,
     QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig, SslConfig, TableMeta,
-    WorkspaceFileEntry,
+    WorkspaceFileEntry, WorkspaceProject,
 };
 use pacer_dbeaver_io::{
     build_jdbc_url, discover_local_dbeaver_files, export_to_dbeaver_json,
@@ -37,6 +37,7 @@ use crate::files::{
 pub use pacer_client::PacerClient;
 
 const MAX_HISTORY_ENTRIES: usize = 200;
+const DEFAULT_PROJECT_ID: &str = "default-project";
 const LOCAL_VAULT_KEY: [u8; 16] = [
     0x50, 0x61, 0x63, 0x65, 0x72, 0x47, 0x72, 0x69, 0x70, 0x56, 0x61, 0x75, 0x6C, 0x74, 0x32, 0x36,
 ];
@@ -45,6 +46,7 @@ type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 pub struct AppState {
+    pub projects: RwLock<Vec<WorkspaceProject>>,
     pub connections: RwLock<Vec<ConnectionProfile>>,
     /// Active session + persisted passwords in memory.
     pub passwords: RwLock<HashMap<String, String>>,
@@ -58,9 +60,23 @@ pub struct AppState {
 
 impl AppState {
     pub fn new(storage_dir: PathBuf) -> Self {
+        let mut projects = load_projects_from_disk(&storage_dir);
+        if projects.is_empty() {
+            projects.push(default_workspace_project());
+        }
+        let valid_project_ids: Vec<String> = projects.iter().map(|p| p.id.clone()).collect();
+        let fallback_project_id = valid_project_ids[0].clone();
+
         let mut connections = load_connections_from_disk(&storage_dir);
         let persisted = load_vault_passwords(&storage_dir);
         for profile in &mut connections {
+            let needs_project = match profile.project_id.as_deref() {
+                Some(pid) => !valid_project_ids.iter().any(|id| id == pid),
+                None => true,
+            };
+            if needs_project {
+                profile.project_id = Some(fallback_project_id.clone());
+            }
             if let ConnectionMode::Direct(ref mut d)
             | ConnectionMode::Hybrid {
                 direct: ref mut d, ..
@@ -70,6 +86,7 @@ impl AppState {
             }
         }
         Self {
+            projects: RwLock::new(projects),
             connections: RwLock::new(connections),
             passwords: RwLock::new(persisted.clone()),
             persisted_passwords: RwLock::new(persisted),
@@ -78,6 +95,27 @@ impl AppState {
             extensions: ExtensionRegistry::new(),
             storage_dir,
         }
+    }
+
+    fn persist_projects(&self) -> Result<(), String> {
+        let snapshot = self
+            .projects
+            .read()
+            .map_err(|e| e.to_string())?
+            .clone();
+        std::fs::create_dir_all(&self.storage_dir).map_err(|e| e.to_string())?;
+        let path = self.storage_dir.join("projects.json");
+        let json = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn default_project_id(&self) -> String {
+        self.projects
+            .read()
+            .ok()
+            .and_then(|g| g.first().map(|p| p.id.clone()))
+            .unwrap_or_else(|| DEFAULT_PROJECT_ID.to_string())
     }
 
     fn persist_connections(&self) -> Result<(), String> {
@@ -114,7 +152,11 @@ impl AppState {
     async fn merge_imported_dbeaver(
         &self,
         incoming: Vec<ImportedDbeaverConnection>,
+        target_project_id: Option<String>,
     ) -> Result<Vec<ConnectionProfile>, String> {
+        let fallback_pid = target_project_id
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| self.default_project_id());
         let mut profiles = Vec::with_capacity(incoming.len());
         let mut changed_vault = false;
 
@@ -137,6 +179,7 @@ impl AppState {
                     item.profile.id.clone()
                 };
                 item.profile.id = target_id.clone();
+                item.profile.project_id = Some(fallback_pid.clone());
 
                 if let Some(pwd) = item.password {
                     pwd_guard.insert(target_id.clone(), pwd.clone());
@@ -244,6 +287,25 @@ impl AppState {
     }
 }
 
+fn default_workspace_project() -> WorkspaceProject {
+    WorkspaceProject {
+        id: DEFAULT_PROJECT_ID.to_string(),
+        name: "默认项目".to_string(),
+        description: Some("默认多数据源工作区项目".to_string()),
+        color: Some("#3574F0".to_string()),
+        root_dir: None,
+        created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    }
+}
+
+fn load_projects_from_disk(storage_dir: &Path) -> Vec<WorkspaceProject> {
+    let path = storage_dir.join("projects.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<WorkspaceProject>>(&raw).unwrap_or_default()
+}
+
 fn load_connections_from_disk(storage_dir: &Path) -> Vec<ConnectionProfile> {
     let path = storage_dir.join("connections.json");
     let Ok(raw) = std::fs::read_to_string(path) else {
@@ -302,8 +364,19 @@ fn map_err(err: CoreError) -> String {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProjectDraft {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub root_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConnectionDraft {
     pub id: Option<String>,
+    pub project_id: Option<String>,
     pub name: String,
     pub db_type: DbEngineType,
     pub host: Option<String>,
@@ -427,6 +500,104 @@ fn resolve_direct_from_draft(
 }
 
 #[tauri::command]
+pub fn list_projects_cmd(state: State<'_, AppState>) -> Result<Vec<WorkspaceProject>, String> {
+    state
+        .projects
+        .read()
+        .map(|g| g.clone())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_project_cmd(
+    state: State<'_, AppState>,
+    draft: ProjectDraft,
+) -> Result<WorkspaceProject, String> {
+    let name = draft.name.trim().to_string();
+    if name.is_empty() {
+        return Err("项目名称不能为空".to_string());
+    }
+    let id = draft
+        .id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("proj-{}", Uuid::new_v4()));
+
+    let project = WorkspaceProject {
+        id: id.clone(),
+        name,
+        description: draft.description.filter(|s| !s.trim().is_empty()),
+        color: draft.color.filter(|s| !s.trim().is_empty()),
+        root_dir: draft.root_dir.filter(|s| !s.trim().is_empty()),
+        created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+    };
+
+    {
+        let mut guard = state.projects.write().map_err(|e| e.to_string())?;
+        if let Some(existing) = guard.iter_mut().find(|p| p.id == id) {
+            let preserved_created = existing.created_at.clone();
+            *existing = project.clone();
+            existing.created_at = preserved_created;
+        } else {
+            guard.push(project.clone());
+        }
+    }
+    state.persist_projects()?;
+    Ok(project)
+}
+
+#[tauri::command]
+pub fn delete_project_cmd(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<WorkspaceProject>, String> {
+    let fallback_id = {
+        let mut guard = state.projects.write().map_err(|e| e.to_string())?;
+        if guard.len() <= 1 {
+            return Err("至少保留一个项目，无法删除最后一个项目".to_string());
+        }
+        guard.retain(|p| p.id != project_id);
+        guard[0].id.clone()
+    };
+
+    // Reassign any connections belonging to the deleted project to the remaining default project.
+    {
+        let mut cguard = state.connections.write().map_err(|e| e.to_string())?;
+        for conn in cguard.iter_mut() {
+            if conn.project_id.as_deref() == Some(project_id.as_str()) {
+                conn.project_id = Some(fallback_id.clone());
+            }
+        }
+    }
+
+    state.persist_projects()?;
+    state.persist_connections()?;
+    state
+        .projects
+        .read()
+        .map(|g| g.clone())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn assign_connection_project_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    project_id: String,
+) -> Result<ConnectionProfile, String> {
+    let updated = {
+        let mut guard = state.connections.write().map_err(|e| e.to_string())?;
+        let conn = guard
+            .iter_mut()
+            .find(|p| p.id == profile_id)
+            .ok_or_else(|| format!("未找到数据源: {profile_id}"))?;
+        conn.project_id = Some(project_id);
+        conn.clone()
+    };
+    state.persist_connections()?;
+    Ok(updated)
+}
+
+#[tauri::command]
 pub fn list_connections(state: State<'_, AppState>) -> Result<Vec<ConnectionProfile>, String> {
     let mut list = state
         .connections
@@ -505,9 +676,16 @@ pub async fn save_connection(
         database: direct.database.clone(),
     };
 
+    let resolved_project_id = draft
+        .project_id
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| state.default_project_id());
+
     let profile = ConnectionProfile {
         id: id.clone(),
         name: draft.name.trim().to_string(),
+        project_id: Some(resolved_project_id),
         source_uuid: None,
         db_type,
         env,
@@ -603,12 +781,16 @@ pub async fn test_connection_cmd(
 #[tauri::command]
 pub async fn create_demo_sqlite_connection(
     state: State<'_, AppState>,
+    project_id: Option<String>,
 ) -> Result<ConnectionProfile, String> {
     let demo_path = state.storage_dir.join("demo_store.sqlite");
     create_demo_sqlite_db(&demo_path).await.map_err(map_err)?;
 
     let path_str = demo_path.to_string_lossy().replace('\\', "/");
     let demo_id = "demo-sqlite-store".to_string();
+    let target_project_id = project_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| state.default_project_id());
 
     let direct = DirectConfig {
         db_type: DbEngineType::Sqlite,
@@ -634,6 +816,7 @@ pub async fn create_demo_sqlite_connection(
     let profile = ConnectionProfile {
         id: demo_id.clone(),
         name: "Demo SQLite Store".to_string(),
+        project_id: Some(target_project_id),
         source_uuid: Some(demo_id.clone()),
         db_type: DbEngineType::Sqlite,
         env: EnvLevel::Dev,
@@ -674,22 +857,24 @@ pub async fn import_dbeaver_path_cmd(
     state: State<'_, AppState>,
     path: String,
     include_passwords: Option<bool>,
+    project_id: Option<String>,
 ) -> Result<Vec<ConnectionProfile>, String> {
     let parsed = import_dbeaver_from_path(
         Path::new(&path),
         include_passwords.unwrap_or(true),
     )
     .map_err(map_err)?;
-    state.merge_imported_dbeaver(parsed).await
+    state.merge_imported_dbeaver(parsed, project_id).await
 }
 
 #[tauri::command]
 pub async fn import_dbeaver_text_cmd(
     state: State<'_, AppState>,
     text: String,
+    project_id: Option<String>,
 ) -> Result<Vec<ConnectionProfile>, String> {
     let parsed = parse_dbeaver_text(&text, None).map_err(map_err)?;
-    state.merge_imported_dbeaver(parsed).await
+    state.merge_imported_dbeaver(parsed, project_id).await
 }
 
 #[tauri::command]

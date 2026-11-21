@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PacerGrip",
-  "mainBinaryName": "PacerGrip",
-  "version": "0.3.0",
-  "identifier": "cn.fwpt.pacergrip",
+  "productName": "Pacer",
+  "mainBinaryName": "Pacer",
+  "version": "0.4.0",
+  "identifier": "cn.fwpt.pacer",
   "build": {
     "beforeDevCommand": {
       "script": "npm run dev",
@@ -19,7 +19,7 @@
   "app": {
     "windows": [
       {
-        "title": "PacerGrip — DataGrip 风格原生数据库 IDE",
+        "title": "Pacer — 原生数据库 IDE",
         "width": 1380,
         "height": 880,
         "minWidth": 1024,
