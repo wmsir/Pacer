@@ -732,8 +732,10 @@ function updateTabContent(next: string) {
 function handleCursorChange(telemetry: EditorCursorTelemetry) {
   const tab = activeTab.value;
   if (!tab) return;
+  const prevSel = tab.cursor.selectedText.trim();
+  const nextSel = telemetry.selectedText.trim();
   tab.cursor = telemetry;
-  if (telemetry.selectedText.trim()) {
+  if (nextSel && nextSel !== prevSel) {
     scheduleAstInspect();
   }
 }
@@ -744,7 +746,7 @@ function scheduleAstInspect() {
   if (astTimer !== null) window.clearTimeout(astTimer);
   astTimer = window.setTimeout(() => {
     void refreshAstInspection();
-  }, 320);
+  }, 450);
 }
 
 async function refreshAstInspection() {
@@ -1849,6 +1851,29 @@ async function executeStatementsBatch(
         },
       );
       item.summary = summary;
+      if (
+        summary.success &&
+        !summary.isDmlOrDdl &&
+        item.columns.length === 0 &&
+        sourceTable &&
+        effectiveDb &&
+        (explicitTableName ||
+          /^\s*select\s+(?:distinct\s+)?(?:\*|[a-z0-9_$`"\[\]]+\.\*)\s+from\b/i.test(sql))
+      ) {
+        const cKey = `${profile.id}:${effectiveDb}:${sourceTable}`;
+        let metaCols = columnsByKey[cKey];
+        if (!metaCols) {
+          try {
+            metaCols = await listColumns(profile.id, effectiveDb, sourceTable);
+            columnsByKey[cKey] = metaCols;
+          } catch {
+            metaCols = [];
+          }
+        }
+        if (metaCols && metaCols.length > 0) {
+          item.columns = metaCols.map((c) => c.name);
+        }
+      }
       totalMsAll += summary.durationMs;
       totalRowsAll += summary.totalRows;
 
@@ -3817,7 +3842,13 @@ onBeforeUnmount(() => {
           >
             <IdeIcon name="run" :size="13" />
             <span>
-              {{ activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runShort') }}
+              {{
+                activeTab?.cursor.selectedText.trim()
+                  ? locale === 'zh-CN'
+                    ? '执行选中'
+                    : 'Run Sel'
+                  : t('runShort')
+              }}
             </span>
           </button>
 
@@ -4237,18 +4268,21 @@ onBeforeUnmount(() => {
 
         <!-- Contextual Editor Sub-Toolbar -->
         <div v-if="activeTab" class="editor-subbar">
-          <div class="subbar-group">
+          <div class="subbar-group subbar-left">
             <template v-if="activeTab.cursor.selectedText.trim()">
               <button
                 class="btn btn-sm btn-primary"
+                style="flex-shrink: 0; white-space: nowrap; font-variant-numeric: tabular-nums"
                 :disabled="busy || !activeProfile"
+                :title="`${t('runSelected')} (${activeTab.cursor.selectedChars} 字符 · ${keymap.getDisplay('runCurrent')})`"
                 @click="runActiveEditor(false)"
               >
                 <IdeIcon name="run" :size="11" />
-                {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · {{ keymap.getDisplay('runCurrent') }})
+                {{ locale === 'zh-CN' ? '执行选中' : 'Run Sel' }} ({{ activeTab.cursor.selectedChars }})
               </button>
               <button
                 class="icon-btn compact"
+                style="flex-shrink: 0"
                 title="将选中的多行/逗号 ID 列表一键转为 SQL IN (...) 条件"
                 @click="handleConvertSelectionToIn"
               >
@@ -4257,7 +4291,15 @@ onBeforeUnmount(() => {
             </template>
 
             <template v-if="isMarkdownTab">
-              <div style="display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden">
+              <div
+                style="
+                  display: inline-flex;
+                  border: 1px solid var(--border);
+                  border-radius: 5px;
+                  overflow: hidden;
+                  flex-shrink: 0;
+                "
+              >
                 <button
                   class="icon-btn compact"
                   :class="{ active: activeTab.mdViewMode === 'source' }"
@@ -4284,7 +4326,7 @@ onBeforeUnmount(() => {
               <select
                 v-if="activeMdBlocks.length > 0"
                 class="field"
-                style="width: auto; max-width: 240px; padding: 2px 6px; font-size: 11px"
+                style="width: auto; max-width: 220px; padding: 2px 6px; font-size: 11px; flex-shrink: 0"
                 @change="onMdBlockJump"
               >
                 <option value="-1">
@@ -4295,13 +4337,20 @@ onBeforeUnmount(() => {
                 </option>
               </select>
 
-              <span style="font-size: 11px; color: var(--text-secondary)">
+              <span class="subbar-path-hint" :title="t('mdRunHint')">
                 {{ t('mdRunHint') }}
               </span>
             </template>
 
             <template v-else-if="!activeTab.cursor.selectedText.trim()">
-              <span style="font-size: 11px; color: var(--text-secondary)">
+              <span
+                class="subbar-path-hint"
+                :title="
+                  activeTab.path ||
+                  consoleScratchPaths[activeTab.id] ||
+                  `临时查询控制台（按 ${keymap.getDisplay('saveFile')} 可保存为 .sql / .md）`
+                "
+              >
                 {{
                   activeTab.path ||
                   (consoleScratchPaths[activeTab.id]
@@ -4312,7 +4361,7 @@ onBeforeUnmount(() => {
             </template>
           </div>
 
-          <div class="subbar-group">
+          <div class="subbar-group subbar-right">
             <div class="explain-split-wrap" @click.stop>
               <button
                 class="btn btn-sm explain-gen-btn"

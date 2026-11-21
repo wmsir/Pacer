@@ -286,4 +286,77 @@ mod tests {
         };
         assert!(matches!(err, CoreError::Transport(_)));
     }
+
+    #[tokio::test]
+    async fn test_sqlite_empty_table_returns_columns_with_zero_rows() {
+        let tmp = std::env::temp_dir().join(format!("pacergrip_empty_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        create_demo_sqlite_db(&tmp).await.unwrap();
+
+        let backend = connect_direct(&sqlite_config(&tmp, false), None)
+            .await
+            .unwrap();
+
+        let (tx_ddl, _rx_ddl) = mpsc::channel(4);
+        backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "CREATE TABLE empty_activities (id INTEGER PRIMARY KEY, title TEXT, status TEXT, created_at TEXT);".to_string(),
+                    limit: None,
+                },
+                tx_ddl,
+            )
+            .await
+            .unwrap();
+
+        let (tx, mut rx) = mpsc::channel(8);
+        let summary = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT * FROM empty_activities LIMIT 100;".to_string(),
+                    limit: Some(100),
+                },
+                tx,
+            )
+            .await
+            .unwrap();
+        assert!(summary.success);
+        assert!(!summary.is_dml_or_ddl);
+        assert_eq!(summary.total_rows, 0);
+
+        let mut chunks = Vec::new();
+        while let Some(c) = rx.recv().await {
+            chunks.push(c);
+        }
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].rows.is_empty());
+        assert_eq!(
+            chunks[0].columns,
+            vec!["id", "title", "status", "created_at"]
+        );
+
+        let (tx2, mut rx2) = mpsc::channel(8);
+        let summary2 = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT id AS activity_id, title FROM empty_activities WHERE id > 999;"
+                        .to_string(),
+                    limit: Some(100),
+                },
+                tx2,
+            )
+            .await
+            .unwrap();
+        assert!(summary2.success);
+        assert_eq!(summary2.total_rows, 0);
+        let chunk2 = rx2.recv().await.expect("expected metadata chunk for zero rows");
+        assert!(chunk2.rows.is_empty());
+        assert_eq!(chunk2.columns, vec!["activity_id", "title"]);
+
+        drop(backend);
+        let _ = std::fs::remove_file(&tmp);
+    }
 }

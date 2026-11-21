@@ -743,6 +743,15 @@ async function copyText(text: string) {
   }
 }
 
+function onHorizontalWheelScroll(e: WheelEvent) {
+  const el = e.currentTarget as HTMLElement | null;
+  if (!el || el.scrollWidth <= el.clientWidth) return;
+  if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && e.deltaY !== 0) {
+    e.preventDefault();
+    el.scrollLeft += e.deltaY;
+  }
+}
+
 // ==================== Shared Project Helpers (Matches Left Database Explorer) ====================
 const defaultProjectId = computed(() => props.projects[0]?.id || 'default-project');
 
@@ -986,13 +995,35 @@ const astWarnings = computed(
         </button>
       </div>
 
-      <div v-if="resultTabs.length >= 1 && activeServiceTab === 'result'" style="display: flex; gap: 4px; align-items: center; overflow-x: auto">
+      <div class="services-tabs-meta">
+        <span
+          v-if="activeServiceTab === 'result' && resultTabs.length > 0"
+          style="font-size: 11px; color: var(--text-muted)"
+        >
+          {{ resultTabs.length }} 个结果页
+        </span>
+        <button
+          v-if="activeServiceTab === 'result' && resultTabs.length > 1 && currentResult"
+          class="icon-btn compact"
+          title="关闭其他未固定的结果页"
+          @click="emit('close-other-result-tabs', currentResult.id)"
+        >
+          清其他
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-if="activeServiceTab === 'result' && resultTabs.length >= 1"
+      class="result-tabs-strip"
+    >
+      <div class="result-tabs-scroll" @wheel="onHorizontalWheelScroll">
         <button
           v-for="rt in resultTabs"
           :key="rt.id"
-          class="btn btn-sm"
-          :class="{ 'btn-primary': rt.id === activeResultTabId }"
-          style="display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0"
+          class="result-tab-pill"
+          :class="{ active: rt.id === activeResultTabId }"
+          :title="`${rt.title} · ${rt.rows.length} 行`"
           @click="emit('update:activeResultTabId', rt.id)"
         >
           <span
@@ -1003,22 +1034,15 @@ const astWarnings = computed(
           >
             <IdeIcon name="pin" :size="11" />
           </span>
-          <span>{{ rt.title }}</span>
+          <span class="result-tab-title">{{ rt.title }}</span>
+          <span class="result-tab-count">{{ rt.rows.length }}</span>
           <span
-            style="margin-left: 2px; opacity: 0.8"
+            class="result-tab-close"
             title="关闭该结果页"
             @click.stop="emit('close-result-tab', rt.id)"
           >
             ×
           </span>
-        </button>
-        <button
-          v-if="resultTabs.length > 1 && currentResult"
-          class="icon-btn compact"
-          title="关闭其他未固定的结果页"
-          @click="emit('close-other-result-tabs', currentResult.id)"
-        >
-          清其他
         </button>
       </div>
     </div>
@@ -1027,14 +1051,17 @@ const astWarnings = computed(
       <!-- ==================== 1. Editable Result Grid Tab ==================== -->
       <template v-if="activeServiceTab === 'result'">
         <div v-if="!currentResult || currentResult.columns.length === 0" class="empty-state">
-          <div v-if="currentResult?.summary?.isDmlOrDdl">
+          <div v-if="!currentResult">{{ t('emptyGridHint') }}</div>
+          <div v-else-if="currentResult.summary?.isDmlOrDdl">
             <span class="pill pill-dev">执行成功</span>
             <span style="margin-left: 8px">
               {{ t('affectedRows', { count: currentResult.summary.affectedRows ?? 0 }) }} ·
               {{ currentResult.summary.durationMs }} ms
             </span>
           </div>
-          <div v-else>{{ t('emptyGridHint') }}</div>
+          <div v-else>
+            查询完成，返回 0 行（{{ currentResult.summary?.durationMs ?? 0 }} ms）
+          </div>
         </div>
 
         <template v-else>
@@ -1212,6 +1239,35 @@ const astWarnings = computed(
                   </tr>
                 </thead>
                 <tbody>
+                  <tr
+                    v-if="displayedRows.length === 0 && (activeDraft?.inserted.length ?? 0) === 0"
+                    class="empty-data-row"
+                  >
+                    <td :colspan="currentResult.columns.length + 1" class="empty-data-cell">
+                      <template v-if="filterText.trim()">
+                        <span>当前筛选「{{ filterText }}」下无匹配数据</span>
+                        <button
+                          class="btn btn-sm"
+                          style="margin-left: 8px"
+                          @click="filterText = ''"
+                        >
+                          清除筛选
+                        </button>
+                      </template>
+                      <template v-else>
+                        <span>查询结果为空（0 行）— 已保留当前查询字段结构</span>
+                        <button
+                          v-if="!currentResult.readOnly"
+                          class="btn btn-sm"
+                          style="margin-left: 10px"
+                          @click="addNewRow"
+                        >
+                          <IdeIcon name="plus" :size="11" /> 新增一行
+                        </button>
+                      </template>
+                    </td>
+                  </tr>
+
                   <!-- Existing DB Rows -->
                   <tr
                     v-for="(item, visibleIdx) in displayedRows"

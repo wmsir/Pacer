@@ -299,10 +299,18 @@ impl DbBackend for SqliteBackend {
         let max_rows = req.limit.map(|l| l as usize).unwrap_or(usize::MAX);
         let limited_rows: Vec<&SqliteRow> = rows.iter().take(max_rows).collect();
 
-        let columns: Vec<String> = rows
-            .first()
-            .map(|r| r.columns().iter().map(|c| c.name().to_string()).collect())
-            .unwrap_or_default();
+        let columns: Vec<String> = if let Some(first) = rows.first() {
+            first.columns().iter().map(|c| c.name().to_string()).collect()
+        } else {
+            match conn.describe(req.sql.as_str()).await {
+                Ok(desc) => desc
+                    .columns()
+                    .iter()
+                    .map(|c| c.name().to_string())
+                    .collect(),
+                Err(_) => Vec::new(),
+            }
+        };
 
         let mut converted = Vec::with_capacity(limited_rows.len());
         for row in &limited_rows {
