@@ -7,10 +7,12 @@ import FileTreeNode from './FileTreeNode.vue';
 
 const props = defineProps<{
   mountedDir: string;
+  rootExpanded: boolean;
   rootEntries: WorkspaceFileEntry[];
   childrenByDir: Record<string, WorkspaceFileEntry[]>;
   expandedDirs: Record<string, boolean>;
   recentFiles: string[];
+  showRecentFiles: boolean;
   activeFilePath: string | null;
   dockSide: 'left' | 'right';
   showDemoManual?: boolean;
@@ -18,7 +20,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'mount-folder'): void;
-  (e: 'open-dir', dirPath: string): void;
+  (e: 'toggle-root-dir'): void;
+  (e: 'close-mounted-dir'): void;
   (e: 'toggle-dir', dirPath: string): void;
   (e: 'collapse-all-dirs'): void;
   (e: 'open-file-dialog'): void;
@@ -26,12 +29,16 @@ const emit = defineEmits<{
   (e: 'locate-active-file'): void;
   (e: 'reveal-path', path: string): void;
   (e: 'toggle-dock-side'): void;
+  (e: 'toggle-show-recent'): void;
+  (e: 'remove-recent-file', path: string): void;
+  (e: 'clear-recent-files'): void;
   (e: 'open-demo-md'): void;
   (e: 'refresh-dir'): void;
 }>();
 
 const { t } = useI18n();
 const filterText = ref('');
+const recentCollapsed = ref<boolean>(localStorage.getItem('pacer.recentFilesCollapsed') === '1');
 const bodyEl = ref<HTMLDivElement | null>(null);
 
 const filteredRootEntries = computed(() => {
@@ -40,12 +47,9 @@ const filteredRootEntries = computed(() => {
   return props.rootEntries.filter((e) => e.isDir || e.name.toLowerCase().includes(q));
 });
 
-function parentDir(dir: string): string | null {
-  const normalized = dir.replace(/\\/g, '/').replace(/\/+$/, '');
-  const idx = normalized.lastIndexOf('/');
-  if (idx <= 0) return null;
-  if (idx === 2 && normalized[1] === ':') return `${normalized.slice(0, 3)}`;
-  return normalized.slice(0, idx);
+function toggleRecentCollapsed() {
+  recentCollapsed.value = !recentCollapsed.value;
+  localStorage.setItem('pacer.recentFilesCollapsed', recentCollapsed.value ? '1' : '0');
 }
 
 function baseName(path: string): string {
@@ -124,6 +128,14 @@ defineExpose({ scrollToActiveFile });
         </button>
         <button
           class="icon-btn compact"
+          :class="{ active: showRecentFiles }"
+          :title="showRecentFiles ? '隐藏最近打开的文件' : '显示最近打开的文件'"
+          @click="emit('toggle-show-recent')"
+        >
+          <IdeIcon name="clock" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
           :title="dockSide === 'right' ? '将本地文件面板移至左侧' : '将本地文件面板移至右侧'"
           @click="emit('toggle-dock-side')"
         >
@@ -149,58 +161,64 @@ defineExpose({ scrollToActiveFile });
       </div>
 
       <template v-if="mountedDir">
+        <!-- Root Mounted Folder Row (Collapsible Pure Tree, No "Up" Button) -->
         <div
-          style="
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 4px;
-            padding: 4px 6px;
-            font-size: 11px;
-            color: var(--text-secondary);
-            border-bottom: 1px solid var(--border-subtle);
-            margin-bottom: 4px;
-          "
+          class="tree-row"
+          style="padding-left: 6px; font-weight: 600"
+          :title="mountedDir"
+          @click="emit('toggle-root-dir')"
         >
-          <span
-            :title="mountedDir"
-            style="
-              display: inline-flex;
-              align-items: center;
-              gap: 5px;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-              font-weight: 600;
-              color: var(--text-primary);
-            "
-          >
-            <IdeIcon name="folder-open" :size="13" />
-            <span style="overflow: hidden; text-overflow: ellipsis">{{ baseName(mountedDir) || mountedDir }}</span>
+          <span class="tree-chevron">
+            <IdeIcon :name="rootExpanded ? 'chevron-down' : 'chevron-right'" :size="12" />
           </span>
-          <button
-            v-if="parentDir(mountedDir)"
-            class="icon-btn compact"
-            title="切换到上一级目录"
-            @click="emit('open-dir', parentDir(mountedDir)!)"
-          >
-            ↑ {{ t('upFolder') }}
-          </button>
+          <IdeIcon :name="rootExpanded ? 'folder-open' : 'folder'" :size="14" />
+          <span class="tree-label">{{ baseName(mountedDir) || mountedDir }}</span>
+          <span class="tree-hover-actions" @click.stop>
+            <button
+              class="icon-btn compact"
+              :title="t('btnRefresh')"
+              @click="emit('refresh-dir')"
+            >
+              <IdeIcon name="refresh" :size="12" />
+            </button>
+            <button
+              class="icon-btn compact"
+              title="在系统资源管理器中定位文件夹"
+              @click="emit('reveal-path', mountedDir)"
+            >
+              <IdeIcon name="reveal" :size="12" />
+            </button>
+            <button
+              class="icon-btn compact"
+              title="关闭当前文件夹"
+              @click="emit('close-mounted-dir')"
+            >
+              <IdeIcon name="close" :size="12" />
+            </button>
+          </span>
         </div>
 
-        <FileTreeNode
-          v-for="entry in filteredRootEntries"
-          :key="entry.path"
-          :entry="entry"
-          :depth="0"
-          :expanded-dirs="expandedDirs"
-          :children-by-dir="childrenByDir"
-          :active-file-path="activeFilePath"
-          :filter-text="filterText"
-          @toggle-dir="emit('toggle-dir', $event)"
-          @open-file="emit('open-file', $event)"
-          @reveal-path="emit('reveal-path', $event)"
-        />
+        <div v-if="rootExpanded">
+          <FileTreeNode
+            v-for="entry in filteredRootEntries"
+            :key="entry.path"
+            :entry="entry"
+            :depth="1"
+            :expanded-dirs="expandedDirs"
+            :children-by-dir="childrenByDir"
+            :active-file-path="activeFilePath"
+            :filter-text="filterText"
+            @toggle-dir="emit('toggle-dir', $event)"
+            @open-file="emit('open-file', $event)"
+            @reveal-path="emit('reveal-path', $event)"
+          />
+          <div
+            v-if="filteredRootEntries.length === 0"
+            style="font-size: 11px; color: var(--text-muted); padding: 2px 6px 4px 34px"
+          >
+            （空目录）
+          </div>
+        </div>
       </template>
 
       <div v-else class="empty-state" style="padding: 10px 6px">
@@ -213,38 +231,62 @@ defineExpose({ scrollToActiveFile });
         </div>
       </div>
 
-      <div v-if="recentFiles.length > 0" style="margin-top: 12px">
-        <div
-          style="
-            font-size: 11px;
-            font-weight: 700;
-            color: var(--text-secondary);
-            padding: 6px 6px 4px;
-            border-top: 1px solid var(--border-subtle);
-          "
-        >
-          {{ t('recentFiles') }}
-        </div>
-        <div
-          v-for="rf in recentFiles"
-          :key="rf"
-          class="tree-row"
-          :class="{ selected: activeFilePath && rf.toLowerCase() === activeFilePath.toLowerCase() }"
-          :title="rf"
-          @click="emit('open-file', rf)"
-        >
-          <IdeIcon :name="rf.toLowerCase().endsWith('.md') ? 'md-file' : 'sql-file'" :size="14" />
-          <span class="tree-label">{{ baseName(rf) }}</span>
-          <span class="tree-hover-actions" @click.stop>
+      <div v-if="showRecentFiles && recentFiles.length > 0" style="margin-top: 10px">
+        <div class="recent-files-header" @click="toggleRecentCollapsed">
+          <span style="display: inline-flex; align-items: center; gap: 4px">
+            <IdeIcon :name="recentCollapsed ? 'chevron-right' : 'chevron-down'" :size="12" />
+            <span>{{ t('recentFiles') }}</span>
+            <span class="pill pill-neutral" style="font-size: 10px; padding: 0 5px">
+              {{ recentFiles.length }}
+            </span>
+          </span>
+          <span style="display: inline-flex; align-items: center; gap: 2px" @click.stop>
             <button
               class="icon-btn compact"
-              title="在系统资源管理器中定位"
-              @click="emit('reveal-path', rf)"
+              title="清空最近打开记录"
+              @click="emit('clear-recent-files')"
             >
-              <IdeIcon name="reveal" :size="12" />
+              <IdeIcon name="trash" :size="12" />
+            </button>
+            <button
+              class="icon-btn compact"
+              title="隐藏最近打开的文件"
+              @click="emit('toggle-show-recent')"
+            >
+              <IdeIcon name="close" :size="12" />
             </button>
           </span>
         </div>
+
+        <template v-if="!recentCollapsed">
+          <div
+            v-for="rf in recentFiles"
+            :key="rf"
+            class="tree-row"
+            :class="{ selected: activeFilePath && rf.toLowerCase() === activeFilePath.toLowerCase() }"
+            :title="rf"
+            @click="emit('open-file', rf)"
+          >
+            <IdeIcon :name="rf.toLowerCase().endsWith('.md') ? 'md-file' : 'sql-file'" :size="14" />
+            <span class="tree-label">{{ baseName(rf) }}</span>
+            <span class="tree-hover-actions" @click.stop>
+              <button
+                class="icon-btn compact"
+                title="在系统资源管理器中定位"
+                @click="emit('reveal-path', rf)"
+              >
+                <IdeIcon name="reveal" :size="12" />
+              </button>
+              <button
+                class="icon-btn compact"
+                title="从最近记录中移除"
+                @click="emit('remove-recent-file', rf)"
+              >
+                <IdeIcon name="close" :size="12" />
+              </button>
+            </span>
+          </div>
+        </template>
       </div>
     </div>
   </div>

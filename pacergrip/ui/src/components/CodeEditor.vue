@@ -71,7 +71,7 @@ const props = defineProps<{
   modelValue: string;
   fileKind: string;
   engineKey: string;
-  theme: 'dark' | 'light';
+  theme: 'dark' | 'light' | 'eyecare';
   readOnly?: boolean;
   schemaMap?: Record<string, string[]>;
   runLabel?: string;
@@ -275,6 +275,35 @@ function buildThemeExtension() {
           },
         },
         { dark: true },
+      ),
+    ];
+  }
+  if (props.theme === 'eyecare') {
+    return [
+      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      EditorView.theme(
+        {
+          '&': { backgroundColor: '#CCE8CF', color: '#1C2B20' },
+          '.cm-content': { caretColor: '#1C2B20' },
+          '.cm-cursor, .cm-dropCursor': { borderLeftColor: '#1C2B20' },
+          '.cm-gutters': {
+            backgroundColor: '#C0DFC3',
+            color: '#58725E',
+            borderRight: '1px solid #A9CCA9',
+          },
+          '.cm-activeLine': { backgroundColor: 'rgba(34,122,82,0.085)' },
+          '.cm-activeLineGutter': { backgroundColor: '#B4D6B8', color: '#1C2B20' },
+          '&.cm-focused .cm-selectionBackground, ::selection': {
+            backgroundColor: '#98CCA4',
+          },
+          '.cm-panels': { backgroundColor: '#C0DFC3', color: '#1C2B20' },
+          '.cm-tooltip': {
+            backgroundColor: '#D7EFD9',
+            border: '1px solid #9FC4A4',
+            color: '#1C2B20',
+          },
+        },
+        { dark: false },
       ),
     ];
   }

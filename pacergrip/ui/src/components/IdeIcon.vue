@@ -48,7 +48,9 @@ export type IdeIconName =
   | 'db-mysql'
   | 'db-postgres'
   | 'db-sqlite'
-  | 'db-generic';
+  | 'db-generic'
+  | 'leaf'
+  | 'clock';
 
 withDefaults(
   defineProps<{
@@ -362,6 +364,28 @@ withDefaults(
     <template v-else-if="name === 'warning'">
       <path d="M8 2.4L14 13.2H2L8 2.4Z" fill="#E0A82E" fill-opacity="0.18" stroke="#E0A82E" stroke-width="1.35" stroke-linejoin="round" />
       <path d="M8 6.4V9.6M8 11.4V11.6" stroke="#E0A82E" stroke-width="1.5" stroke-linecap="round" />
+    </template>
+
+    <template v-else-if="name === 'leaf'">
+      <path
+        d="M13.2 2.8C8.2 2.8 3.6 5.8 3.2 12.2C6.4 12.4 12.8 11.2 13.2 2.8Z"
+        fill="currentColor"
+        fill-opacity="0.22"
+        stroke="currentColor"
+        stroke-width="1.35"
+        stroke-linejoin="round"
+      />
+      <path
+        d="M2.6 13.4C5.4 10.6 8.6 7.8 11.8 4.8"
+        stroke="currentColor"
+        stroke-width="1.35"
+        stroke-linecap="round"
+      />
+    </template>
+
+    <template v-else-if="name === 'clock'">
+      <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.35" />
+      <path d="M8 4.8V8.2L10.4 9.6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
     </template>
   </svg>
 </template>

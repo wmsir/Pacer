@@ -97,19 +97,27 @@ interface EditorTab {
 
 const { t, locale, toggleLocale } = useI18n();
 
-// Theme (Darcula Dark default, IntelliJ Light toggle)
-const theme = ref<'dark' | 'light'>(
-  localStorage.getItem('pacergrip.theme') === 'light' ? 'light' : 'dark',
-);
+// Theme (Darcula Dark default, IntelliJ Light, Mung Bean Eye-Care)
+export type AppTheme = 'dark' | 'light' | 'eyecare';
 
-function applyTheme(next: 'dark' | 'light') {
+function loadInitialTheme(): AppTheme {
+  const saved = localStorage.getItem('pacergrip.theme');
+  if (saved === 'light' || saved === 'eyecare') return saved;
+  return 'dark';
+}
+
+const theme = ref<AppTheme>(loadInitialTheme());
+
+function applyTheme(next: AppTheme) {
   theme.value = next;
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('pacergrip.theme', next);
 }
 
-function toggleTheme() {
-  applyTheme(theme.value === 'dark' ? 'light' : 'dark');
+function cycleTheme() {
+  const order: AppTheme[] = ['dark', 'light', 'eyecare'];
+  const next = order[(order.indexOf(theme.value) + 1) % order.length];
+  applyTheme(next);
 }
 
 // Layout & Panels (Local Files defaults to RIGHT side, user-configurable Left/Right!)
@@ -124,7 +132,9 @@ const bottomVisible = ref<boolean>(true);
 const leftWidth = ref<number>(Number(localStorage.getItem('pacergrip.leftWidth')) || 276);
 const rightWidth = ref<number>(Number(localStorage.getItem('pacergrip.rightWidth')) || 286);
 const bottomHeight = ref<number>(Number(localStorage.getItem('pacergrip.bottomHeight')) || 270);
-const openMenu = ref<'project' | 'file' | 'edit' | 'database' | 'tools' | 'help' | null>(null);
+const openMenu = ref<'project' | 'file' | 'edit' | 'database' | 'tools' | 'help' | 'theme' | null>(
+  null,
+);
 const showDemoManual = ref<boolean>(localStorage.getItem('pacer.hideDemoManual') !== '1');
 
 function setShowDemoManual(visible: boolean) {
@@ -260,11 +270,13 @@ const inspectedIndexes = computed(() => {
 
 // Files Explorer (Recursive Tree) & Snippets State
 const mountedDir = ref<string>(localStorage.getItem('pacergrip.mountedDir') || '');
+const rootDirExpanded = ref<boolean>(true);
 const workspaceEntries = ref<WorkspaceFileEntry[]>([]);
 const fileTreeChildren = reactive<Record<string, WorkspaceFileEntry[]>>({});
 const expandedFileDirs = reactive<Record<string, boolean>>({});
 const fileExplorerRef = ref<InstanceType<typeof FileExplorer> | null>(null);
 const recentFiles = ref<string[]>(loadJsonStorage<string[]>('pacergrip.recentFiles', []));
+const showRecentFiles = ref<boolean>(localStorage.getItem('pacer.showRecentFiles') !== '0');
 const customSnippets = ref<SqlSnippet[]>(loadJsonStorage<SqlSnippet[]>('pacergrip.snippets', []));
 const snippetFilter = ref('');
 const closedTabsStack = ref<EditorTab[]>([]);
@@ -341,19 +353,23 @@ const tabs = ref<EditorTab[]>([
   },
 ]);
 const activeTabId = ref<string>('console-1');
+const selectedProfileId = ref<string>('');
+const selectedDbName = ref<string>('');
 const editorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
-const activeTab = computed(
-  () => tabs.value.find((tab) => tab.id === activeTabId.value) ?? tabs.value[0],
+const activeTab = computed<EditorTab | null>(
+  () => tabs.value.find((tab) => tab.id === activeTabId.value) ?? tabs.value[0] ?? null,
 );
 
-const activeProfile = computed(
-  () => connections.value.find((c) => c.id === activeTab.value?.profileId) ?? null,
-);
+const activeProfile = computed(() => {
+  const pid = activeTab.value?.profileId || selectedProfileId.value;
+  return connections.value.find((c) => c.id === pid) ?? null;
+});
 
-const activeDatabases = computed(() =>
-  activeTab.value?.profileId ? databasesByProfile[activeTab.value.profileId] ?? [] : [],
-);
+const activeDatabases = computed(() => {
+  const pid = activeTab.value?.profileId || selectedProfileId.value;
+  return pid ? databasesByProfile[pid] ?? [] : [];
+});
 
 const activeEngineKey = computed(() => {
   const prof = activeProfile.value;
@@ -592,9 +608,16 @@ async function refreshProjectsAndConnections() {
 
     const preferred =
       list.find((c) => c.projectId === activeProjectId.value) ?? list[0];
-    if (preferred && activeTab.value && !activeTab.value.profileId) {
-      activeTab.value.profileId = preferred.id;
-      await loadDatabasesForProfile(preferred, true);
+    if (preferred) {
+      if (!selectedProfileId.value) {
+        selectedProfileId.value = preferred.id;
+      }
+      if (activeTab.value && !activeTab.value.profileId) {
+        activeTab.value.profileId = preferred.id;
+        await loadDatabasesForProfile(preferred, true);
+      } else if (!activeTab.value) {
+        await loadDatabasesForProfile(preferred, true);
+      }
     }
 
     const curProj = activeProject.value;
@@ -619,15 +642,18 @@ async function selectProject(projectId: string) {
   const matchingConns = connections.value.filter(
     (c) => c.projectId === projectId || (isFirst && !c.projectId),
   );
-  if (activeTab.value) {
-    const currentBelongs = matchingConns.some((c) => c.id === activeTab.value?.profileId);
-    if (!currentBelongs) {
-      const next = matchingConns[0];
+  const currentPid = activeTab.value?.profileId || selectedProfileId.value;
+  const currentBelongs = matchingConns.some((c) => c.id === currentPid);
+  if (!currentBelongs) {
+    const next = matchingConns[0];
+    selectedProfileId.value = next?.id ?? '';
+    selectedDbName.value = '';
+    if (activeTab.value) {
       activeTab.value.profileId = next?.id ?? '';
       activeTab.value.dbName = '';
-      if (next) {
-        void loadDatabasesForProfile(next, true);
-      }
+    }
+    if (next) {
+      void loadDatabasesForProfile(next, true);
     }
   }
   if (proj.rootDir) {
@@ -717,9 +743,16 @@ async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFir
     databasesByProfile[profile.id] = dbs;
     expandedProfiles[profile.id] = true;
     const defaultDb = dbs.find((d) => !d.isSystem)?.name ?? dbs[0]?.name ?? '';
-    if (autoSelectFirst && activeTab.value && activeTab.value.profileId === profile.id && defaultDb) {
-      activeTab.value.dbName = defaultDb;
-      await loadTablesForDb(profile, defaultDb);
+    if (autoSelectFirst && defaultDb) {
+      if (selectedProfileId.value === profile.id) {
+        selectedDbName.value = defaultDb;
+      }
+      if (activeTab.value && activeTab.value.profileId === profile.id) {
+        activeTab.value.dbName = defaultDb;
+        await loadTablesForDb(profile, defaultDb);
+      } else if (!activeTab.value && selectedProfileId.value === profile.id) {
+        await loadTablesForDb(profile, defaultDb);
+      }
     }
   } catch (err) {
     const msg = String(err);
@@ -764,6 +797,7 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
 }
 
 async function toggleProfileNode(profile: ConnectionProfile) {
+  selectedProfileId.value = profile.id;
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
   }
@@ -775,6 +809,8 @@ async function toggleProfileNode(profile: ConnectionProfile) {
 }
 
 async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
+  selectedProfileId.value = profile.id;
+  selectedDbName.value = dbName;
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
     activeTab.value.dbName = dbName;
@@ -818,10 +854,13 @@ async function selectTableNode(profile: ConnectionProfile, dbName: string, table
 }
 
 async function handleProfileSelectChange(profileId: string) {
+  selectedProfileId.value = profileId;
+  selectedDbName.value = '';
   const tab = activeTab.value;
-  if (!tab) return;
-  tab.profileId = profileId;
-  tab.dbName = '';
+  if (tab) {
+    tab.profileId = profileId;
+    tab.dbName = '';
+  }
   const prof = connections.value.find((c) => c.id === profileId);
   if (prof) {
     await loadDatabasesForProfile(prof, true);
@@ -829,9 +868,12 @@ async function handleProfileSelectChange(profileId: string) {
 }
 
 async function handleDbSelectChange(dbName: string) {
+  selectedDbName.value = dbName;
   const tab = activeTab.value;
-  if (!tab || !activeProfile.value) return;
-  tab.dbName = dbName;
+  if (tab) {
+    tab.dbName = dbName;
+  }
+  if (!activeProfile.value) return;
   if (dbName) {
     await loadTablesForDb(activeProfile.value, dbName);
   }
@@ -847,6 +889,7 @@ async function handleSaveConnection(
     const saved = await saveConnection(draft, password);
     connections.value = await listConnections();
     editingProfile.value = saved;
+    selectedProfileId.value = saved.id;
     if (activeTab.value) {
       activeTab.value.profileId = saved.id;
     }
@@ -916,6 +959,10 @@ async function handleDeleteProfile(profile: ConnectionProfile) {
   try {
     await deleteConnection(profile.id);
     connections.value = await listConnections();
+    if (selectedProfileId.value === profile.id) {
+      selectedProfileId.value = connections.value[0]?.id ?? '';
+      selectedDbName.value = '';
+    }
     if (activeTab.value?.profileId === profile.id) {
       activeTab.value.profileId = connections.value[0]?.id ?? '';
       activeTab.value.dbName = '';
@@ -933,6 +980,7 @@ async function handleInitDemoSqlite(targetProjectId?: string) {
     const demo = await createDemoSqliteConnection(pid);
     connections.value = await listConnections();
     expandedProjects[pid] = true;
+    selectedProfileId.value = demo.id;
     if (activeTab.value) {
       activeTab.value.profileId = demo.id;
     }
@@ -1039,6 +1087,8 @@ async function handleExportDbeaverJson() {
 // ==================== Table Actions ====================
 
 async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tableName: string) {
+  selectedProfileId.value = profile.id;
+  selectedDbName.value = dbName;
   if (activeTab.value) {
     activeTab.value.profileId = profile.id;
     activeTab.value.dbName = dbName;
@@ -1067,7 +1117,11 @@ function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: 
   const cols = columnsByKey[cKey] ?? [];
   const colList = cols.length > 0 ? cols.map((c) => `  ${c.name}`).join(',\n') : '  *';
   const snippet = `SELECT\n${colList}\nFROM ${tableName}\nLIMIT 100;\n`;
-  editorRef.value?.insertText(snippet);
+  if (!activeTab.value) {
+    createNewConsoleTab(snippet, profile.id, dbName);
+  } else {
+    editorRef.value?.insertText(snippet);
+  }
   setStatus(`已生成 ${tableName} 查询语句到编辑器`);
 }
 
@@ -1519,7 +1573,12 @@ async function handleRunConsoleQuickSql(sql: string) {
     setStatus('请先在顶部工具栏选择一个目标数据源', true);
     return;
   }
-  await runStatementsWithGuard([sql], '控制台快捷执行', prof, activeTab.value?.dbName ?? '');
+  await runStatementsWithGuard(
+    [sql],
+    '控制台快捷执行',
+    prof,
+    activeTab.value?.dbName || selectedDbName.value,
+  );
 }
 
 async function runExplainActive() {
@@ -1543,7 +1602,7 @@ async function runExplainSql(sql: string) {
   }
   busy.value = true;
   try {
-    const dbName = activeTab.value?.dbName || 'main';
+    const dbName = activeTab.value?.dbName || selectedDbName.value || 'main';
     const res = await explainSql(prof.id, dbName, sql.trim());
     const tabId = `explain-${Date.now()}`;
     const item: ResultTabItem = {
@@ -1645,6 +1704,13 @@ function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: strin
   consoleCounter += 1;
   const id = `console-${Date.now()}-${consoleCounter}`;
   const current = activeTab.value;
+  const resolvedProfileId =
+    profileId ??
+    current?.profileId ??
+    (selectedProfileId.value || projectConnections.value[0]?.id || connections.value[0]?.id || '');
+  const resolvedDbName = dbName ?? current?.dbName ?? selectedDbName.value ?? '';
+  selectedProfileId.value = resolvedProfileId;
+  selectedDbName.value = resolvedDbName;
   const tab: EditorTab = {
     id,
     title: `console_${consoleCounter}.sql`,
@@ -1657,8 +1723,8 @@ function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: strin
     lineEnding: 'LF',
     byteSize: estimateUtf8Bytes(initialSql),
     readOnly: false,
-    profileId: profileId ?? current?.profileId ?? connections.value[0]?.id ?? '',
-    dbName: dbName ?? current?.dbName ?? '',
+    profileId: resolvedProfileId,
+    dbName: resolvedDbName,
     mdViewMode: 'source',
     cursor: createEmptyCursor(initialSql),
   };
@@ -1667,21 +1733,120 @@ function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: strin
   scheduleAstInspect();
 }
 
+function pushClosedTabs(list: EditorTab[]) {
+  if (list.length === 0) return;
+  for (let i = list.length - 1; i >= 0; i--) {
+    const item = list[i];
+    if (item.profileId) selectedProfileId.value = item.profileId;
+    if (item.dbName) selectedDbName.value = item.dbName;
+    closedTabsStack.value.unshift({ ...item });
+  }
+  if (closedTabsStack.value.length > 30) {
+    closedTabsStack.value.length = 30;
+  }
+}
+
 function closeEditorTab(id: string) {
-  const closing = tabs.value.find((t) => t.id === id);
-  if (closing) {
-    closedTabsStack.value.unshift({ ...closing });
-    if (closedTabsStack.value.length > 20) closedTabsStack.value.pop();
-  }
-  if (tabs.value.length <= 1) {
-    createNewConsoleTab('');
-  }
   const idx = tabs.value.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  const closing = tabs.value[idx];
+  pushClosedTabs([closing]);
   tabs.value = tabs.value.filter((t) => t.id !== id);
+  if (tabs.value.length === 0) {
+    activeTabId.value = '';
+    astAnalysis.value = null;
+    return;
+  }
   if (activeTabId.value === id) {
     const next = tabs.value[Math.max(0, idx - 1)] ?? tabs.value[0];
     if (next) activeTabId.value = next.id;
   }
+}
+
+function closeOtherTabs(keepId: string) {
+  const target = tabs.value.find((t) => t.id === keepId);
+  if (!target) return;
+  const toClose = tabs.value.filter((t) => t.id !== keepId);
+  pushClosedTabs(toClose);
+  tabs.value = [target];
+  activeTabId.value = target.id;
+  scheduleAstInspect();
+}
+
+function closeAllTabs() {
+  if (tabs.value.length === 0) return;
+  pushClosedTabs(tabs.value);
+  tabs.value = [];
+  activeTabId.value = '';
+  astAnalysis.value = null;
+}
+
+function closeTabsToLeft(targetId: string) {
+  const targetIdx = tabs.value.findIndex((t) => t.id === targetId);
+  if (targetIdx <= 0) return;
+  const toClose = tabs.value.slice(0, targetIdx);
+  pushClosedTabs(toClose);
+  tabs.value = tabs.value.slice(targetIdx);
+  if (!tabs.value.some((t) => t.id === activeTabId.value)) {
+    activeTabId.value = targetId;
+  }
+}
+
+function closeTabsToRight(targetId: string) {
+  const targetIdx = tabs.value.findIndex((t) => t.id === targetId);
+  if (targetIdx < 0 || targetIdx >= tabs.value.length - 1) return;
+  const toClose = tabs.value.slice(targetIdx + 1);
+  pushClosedTabs(toClose);
+  tabs.value = tabs.value.slice(0, targetIdx + 1);
+  if (!tabs.value.some((t) => t.id === activeTabId.value)) {
+    activeTabId.value = targetId;
+  }
+}
+
+function closeUnmodifiedTabs() {
+  const toClose = tabs.value.filter((t) => !isTabDirty(t));
+  if (toClose.length === 0) return;
+  pushClosedTabs(toClose);
+  tabs.value = tabs.value.filter((t) => isTabDirty(t));
+  if (tabs.value.length === 0) {
+    activeTabId.value = '';
+    astAnalysis.value = null;
+  } else if (!tabs.value.some((t) => t.id === activeTabId.value)) {
+    activeTabId.value = tabs.value[0].id;
+  }
+}
+
+// Editor Tab Right-Click Context Menu
+const tabCtxMenu = reactive<{
+  visible: boolean;
+  x: number;
+  y: number;
+  tabId: string;
+}>({
+  visible: false,
+  x: 0,
+  y: 0,
+  tabId: '',
+});
+
+const tabCtxTab = computed<EditorTab | null>(
+  () => tabs.value.find((t) => t.id === tabCtxMenu.tabId) ?? null,
+);
+
+const tabCtxIndex = computed<number>(
+  () => tabs.value.findIndex((t) => t.id === tabCtxMenu.tabId),
+);
+
+function openTabContextMenu(ev: MouseEvent, tab: EditorTab) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  openMenu.value = null;
+  const maxX = Math.max(8, window.innerWidth - 220);
+  const maxY = Math.max(8, window.innerHeight - 310);
+  tabCtxMenu.x = Math.min(ev.clientX, maxX);
+  tabCtxMenu.y = Math.min(ev.clientY, maxY);
+  tabCtxMenu.tabId = tab.id;
+  tabCtxMenu.visible = true;
 }
 
 function reopenLastClosedTab() {
@@ -1690,6 +1855,9 @@ function reopenLastClosedTab() {
   const revived: EditorTab = { ...last, id: `tab-${Date.now()}` };
   tabs.value.push(revived);
   activeTabId.value = revived.id;
+  if (revived.profileId) selectedProfileId.value = revived.profileId;
+  if (revived.dbName) selectedDbName.value = revived.dbName;
+  scheduleAstInspect();
   setStatus(`已恢复标签页: ${revived.title}`);
 }
 
@@ -1723,6 +1891,9 @@ function openFileDtoInTab(dto: OpenedFileDto) {
   } else {
     const current = activeTab.value;
     const id = `file-${Date.now()}`;
+    const resolvedProfileId =
+      current?.profileId ?? (selectedProfileId.value || projectConnections.value[0]?.id || connections.value[0]?.id || '');
+    const resolvedDbName = current?.dbName ?? selectedDbName.value ?? '';
     tabs.value.push({
       id,
       title: dto.name,
@@ -1735,8 +1906,8 @@ function openFileDtoInTab(dto: OpenedFileDto) {
       lineEnding: dto.lineEnding === 'CRLF' ? 'CRLF' : 'LF',
       byteSize: dto.byteSize,
       readOnly: false,
-      profileId: current?.profileId ?? connections.value[0]?.id ?? '',
-      dbName: current?.dbName ?? '',
+      profileId: resolvedProfileId,
+      dbName: resolvedDbName,
       mdViewMode: dto.fileKind === 'markdown' ? defaultMdMode : 'source',
       cursor: createEmptyCursor(dto.content),
     });
@@ -1873,6 +2044,7 @@ async function loadDirectory(dirPath: string) {
     const norm = dirPath.replace(/\\/g, '/').replace(/\/+$/, '') || dirPath;
     workspaceEntries.value = await listWorkspaceFiles(norm);
     mountedDir.value = norm;
+    rootDirExpanded.value = true;
     fileTreeChildren[norm] = workspaceEntries.value;
     localStorage.setItem('pacergrip.mountedDir', mountedDir.value);
     // Refresh any currently expanded subdirectories too
@@ -1888,6 +2060,41 @@ async function loadDirectory(dirPath: string) {
   } catch (err) {
     setStatus(`读取目录失败: ${String(err)}`, true);
   }
+}
+
+function toggleRootDirExpanded() {
+  rootDirExpanded.value = !rootDirExpanded.value;
+}
+
+function closeMountedDir() {
+  mountedDir.value = '';
+  workspaceEntries.value = [];
+  for (const k of Object.keys(expandedFileDirs)) {
+    delete expandedFileDirs[k];
+  }
+  for (const k of Object.keys(fileTreeChildren)) {
+    delete fileTreeChildren[k];
+  }
+  localStorage.removeItem('pacergrip.mountedDir');
+  setStatus('已关闭当前打开的文件夹');
+}
+
+function toggleShowRecentFiles() {
+  showRecentFiles.value = !showRecentFiles.value;
+  localStorage.setItem('pacer.showRecentFiles', showRecentFiles.value ? '1' : '0');
+}
+
+function removeRecentFile(targetPath: string) {
+  const norm = targetPath.replace(/\\/g, '/').toLowerCase();
+  recentFiles.value = recentFiles.value.filter(
+    (p) => p.replace(/\\/g, '/').toLowerCase() !== norm,
+  );
+  localStorage.setItem('pacergrip.recentFiles', JSON.stringify(recentFiles.value));
+}
+
+function clearRecentFiles() {
+  recentFiles.value = [];
+  localStorage.setItem('pacergrip.recentFiles', '[]');
 }
 
 async function toggleFileDir(dirPath: string) {
@@ -1909,13 +2116,13 @@ function collapseAllFileDirs() {
   }
 }
 
-async function locateActiveFileInTree() {
-  const filePath = activeTab.value?.path;
+async function locateFileInTreeByPath(filePath: string) {
   if (!filePath) {
     setStatus('当前标签页尚未保存到本地磁盘，无法定位位置', true);
     return;
   }
   openFilesPanel();
+  rootDirExpanded.value = true;
   const normFile = filePath.replace(/\\/g, '/');
   const lastSlash = normFile.lastIndexOf('/');
   const parent = lastSlash > 0 ? normFile.slice(0, lastSlash) : normFile;
@@ -1952,6 +2159,10 @@ async function locateActiveFileInTree() {
   setStatus(`已在文件树中定位: ${normFile}`);
 }
 
+async function locateActiveFileInTree() {
+  await locateFileInTreeByPath(activeTab.value?.path ?? '');
+}
+
 async function handleRevealInExplorer(targetPath: string) {
   if (!targetPath) return;
   try {
@@ -1964,7 +2175,11 @@ async function handleRevealInExplorer(targetPath: string) {
 // ==================== Snippets ====================
 
 function insertSnippetIntoEditor(sql: string) {
-  editorRef.value?.insertText(`\n${sql}\n`);
+  if (!activeTab.value) {
+    createNewConsoleTab(sql);
+  } else {
+    editorRef.value?.insertText(`\n${sql}\n`);
+  }
   setStatus('已插入 SQL 代码片段到编辑器');
 }
 
@@ -2004,7 +2219,9 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: 'Ctrl+N' },
     { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: 'Ctrl+Alt+L' },
-    { id: 'act-theme', category: 'action', label: `切换主题 (${theme.value === 'dark' ? t('themeLight') : t('themeDark')})`, detail: '在 Darcula 深色与 IntelliJ 浅色主题间切换', badge: '主题' },
+    { id: 'act-theme-dark', category: 'action', label: `切换主题：${t('themeDark')}`, detail: '经典深色 Darcula 界面与编辑器配色', badge: '主题' },
+    { id: 'act-theme-light', category: 'action', label: `切换主题：${t('themeLight')}`, detail: '明亮清爽 IntelliJ Light 界面与编辑器配色', badge: '主题' },
+    { id: 'act-theme-eyecare', category: 'action', label: `切换主题：${t('themeEyecare')}`, detail: '柔和绿豆沙护眼色（#CCE8CF），适合长时间阅读', badge: '护眼' },
     { id: 'act-lang', category: 'action', label: `切换界面语言 (${locale.value === 'zh-CN' ? 'English' : '简体中文'})`, detail: '中英文界面即时切换', badge: 'i18n' },
     { id: 'act-encoding', category: 'action', label: t('encodingModalTitle'), detail: '重新解码 GBK/UTF-8 BOM 或转换保存编码', badge: '编码' },
     { id: 'act-shortcuts', category: 'action', label: t('shortcutsTitle'), detail: '查看全部 DataGrip 兼容快捷键', badge: '帮助' },
@@ -2080,7 +2297,9 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     } else if (item.id === 'act-import') activeModal.value = 'import';
     else if (item.id === 'act-new-console') createNewConsoleTab('');
     else if (item.id === 'act-format') await formatActiveSql();
-    else if (item.id === 'act-theme') toggleTheme();
+    else if (item.id === 'act-theme-dark') applyTheme('dark');
+    else if (item.id === 'act-theme-light') applyTheme('light');
+    else if (item.id === 'act-theme-eyecare') applyTheme('eyecare');
     else if (item.id === 'act-lang') toggleLocale();
     else if (item.id === 'act-encoding') activeModal.value = 'encoding';
     else if (item.id === 'act-shortcuts') activeModal.value = 'shortcuts';
@@ -2202,6 +2421,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
   if (e.key === 'Escape') {
     openMenu.value = null;
+    tabCtxMenu.visible = false;
     if (activeModal.value !== 'none') {
       activeModal.value = 'none';
     } else {
@@ -2212,6 +2432,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
 function onGlobalClick() {
   openMenu.value = null;
+  tabCtxMenu.visible = false;
 }
 
 async function copyText(text: string) {
@@ -2468,8 +2689,26 @@ onBeforeUnmount(() => {
               <button class="dropdown-item" @click="openMenu = null; toggleFilesDockSide()">
                 <span>本地文件面板停靠：移至{{ filesDockSide === 'right' ? '左侧' : '右侧' }}</span>
               </button>
-              <button class="dropdown-item" @click="openMenu = null; toggleTheme()">
-                <span>切换深浅色主题 ({{ theme === 'dark' ? 'Darcula' : 'Light' }})</span>
+              <button class="dropdown-item" @click="openMenu = null; applyTheme('dark')">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <span class="theme-swatch" style="background: #1e1f22" />
+                  <span>{{ t('themeDark') }}</span>
+                </span>
+                <IdeIcon v-if="theme === 'dark'" name="check" :size="12" />
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; applyTheme('light')">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <span class="theme-swatch" style="background: #ffffff" />
+                  <span>{{ t('themeLight') }}</span>
+                </span>
+                <IdeIcon v-if="theme === 'light'" name="check" :size="12" />
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; applyTheme('eyecare')">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <span class="theme-swatch" style="background: #cce8cf" />
+                  <span>{{ t('themeEyecare') }}</span>
+                </span>
+                <IdeIcon v-if="theme === 'eyecare'" name="check" :size="12" />
               </button>
               <button class="dropdown-item" @click="openMenu = null; toggleLocale()">
                 <span>切换中英文 ({{ locale }})</span>
@@ -2516,7 +2755,7 @@ onBeforeUnmount(() => {
             :title="activeProfile.env"
           />
           <select
-            :value="activeTab?.profileId ?? ''"
+            :value="activeTab?.profileId || selectedProfileId"
             title="当前项目下执行数据源"
             @change="handleProfileSelectChange(($event.target as HTMLSelectElement).value)"
           >
@@ -2529,7 +2768,7 @@ onBeforeUnmount(() => {
           <span class="run-widget-sep" />
 
           <select
-            :value="activeTab?.dbName ?? ''"
+            :value="activeTab?.dbName || selectedDbName"
             title="当前执行数据库 / Schema"
             @change="handleDbSelectChange(($event.target as HTMLSelectElement).value)"
           >
@@ -2543,7 +2782,7 @@ onBeforeUnmount(() => {
 
           <button
             class="icon-btn run-btn"
-            :disabled="busy || !activeProfile"
+            :disabled="busy || !activeProfile || !activeTab"
             :title="activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runCurrent')"
             @click="runActiveEditor(false)"
           >
@@ -2555,7 +2794,7 @@ onBeforeUnmount(() => {
 
           <button
             class="icon-btn"
-            :disabled="busy || !activeProfile"
+            :disabled="busy || !activeProfile || !activeTab"
             :title="t('runAll') + ' (Ctrl+Shift+Enter)'"
             @click="runActiveEditor(true)"
           >
@@ -2564,7 +2803,7 @@ onBeforeUnmount(() => {
 
           <button
             class="icon-btn"
-            :disabled="busy || !activeProfile"
+            :disabled="busy || !activeProfile || !activeTab"
             :title="t('explainBtn')"
             @click="runExplainActive"
           >
@@ -2573,7 +2812,7 @@ onBeforeUnmount(() => {
 
           <button
             class="icon-btn"
-            :disabled="busy || isMarkdownTab"
+            :disabled="busy || !activeTab || isMarkdownTab"
             :title="t('formatSql') + ' (Ctrl+Alt+L)'"
             @click="formatActiveSql"
           >
@@ -2608,13 +2847,52 @@ onBeforeUnmount(() => {
           <IdeIcon name="search" :size="14" />
           <span class="shortcut-hint">Shift×2</span>
         </button>
-        <button
-          class="icon-btn"
-          :title="theme === 'dark' ? t('themeLight') : t('themeDark')"
-          @click="toggleTheme"
-        >
-          <IdeIcon :name="theme === 'dark' ? 'sun' : 'moon'" :size="14" />
-        </button>
+        <div class="menu-trigger" @click.stop>
+          <button
+            class="icon-btn"
+            :title="`切换界面主题（当前：${
+              theme === 'dark'
+                ? t('themeDark')
+                : theme === 'light'
+                  ? t('themeLight')
+                  : t('themeEyecare')
+            }）`"
+            @click="openMenu = openMenu === 'theme' ? null : 'theme'"
+            @dblclick.stop="openMenu = null; cycleTheme()"
+          >
+            <IdeIcon
+              :name="theme === 'dark' ? 'moon' : theme === 'light' ? 'sun' : 'leaf'"
+              :size="14"
+              :color="theme === 'eyecare' ? '#227a52' : ''"
+            />
+          </button>
+          <div v-if="openMenu === 'theme'" class="dropdown-menu" style="left: auto; right: 0; min-width: 175px">
+            <button class="dropdown-item" @click="openMenu = null; applyTheme('dark')">
+              <span style="display: inline-flex; align-items: center; gap: 6px">
+                <span class="theme-swatch" style="background: #1e1f22" />
+                <IdeIcon name="moon" :size="13" />
+                <span>{{ t('themeDark') }}</span>
+              </span>
+              <IdeIcon v-if="theme === 'dark'" name="check" :size="12" />
+            </button>
+            <button class="dropdown-item" @click="openMenu = null; applyTheme('light')">
+              <span style="display: inline-flex; align-items: center; gap: 6px">
+                <span class="theme-swatch" style="background: #ffffff" />
+                <IdeIcon name="sun" :size="13" />
+                <span>{{ t('themeLight') }}</span>
+              </span>
+              <IdeIcon v-if="theme === 'light'" name="check" :size="12" />
+            </button>
+            <button class="dropdown-item" @click="openMenu = null; applyTheme('eyecare')">
+              <span style="display: inline-flex; align-items: center; gap: 6px">
+                <span class="theme-swatch" style="background: #cce8cf" />
+                <IdeIcon name="leaf" :size="13" color="#227a52" />
+                <span>{{ t('themeEyecare') }}</span>
+              </span>
+              <IdeIcon v-if="theme === 'eyecare'" name="check" :size="12" />
+            </button>
+          </div>
+        </div>
         <button class="icon-btn" title="切换中英文界面" @click="toggleLocale">
           {{ t('langSwitch') }}
         </button>
@@ -2673,8 +2951,8 @@ onBeforeUnmount(() => {
           :active-project-id="activeProjectId"
           :expanded-projects="expandedProjects"
           :connections="connections"
-          :active-profile-id="activeTab?.profileId ?? ''"
-          :active-db-name="activeTab?.dbName ?? ''"
+          :active-profile-id="activeTab?.profileId || selectedProfileId"
+          :active-db-name="activeTab?.dbName || selectedDbName"
           :databases-by-profile="databasesByProfile"
           :tables-by-key="tablesByKey"
           :columns-by-key="columnsByKey"
@@ -2708,15 +2986,18 @@ onBeforeUnmount(() => {
           v-else-if="leftTool === 'files' && filesDockSide === 'left'"
           ref="fileExplorerRef"
           :mounted-dir="mountedDir"
+          :root-expanded="rootDirExpanded"
           :root-entries="workspaceEntries"
           :children-by-dir="fileTreeChildren"
           :expanded-dirs="expandedFileDirs"
           :recent-files="recentFiles"
+          :show-recent-files="showRecentFiles"
           :active-file-path="activeTab?.path ?? null"
           :dock-side="filesDockSide"
           :show-demo-manual="showDemoManual"
           @mount-folder="mountFolderDialog"
-          @open-dir="loadDirectory"
+          @toggle-root-dir="toggleRootDirExpanded"
+          @close-mounted-dir="closeMountedDir"
           @toggle-dir="toggleFileDir"
           @collapse-all-dirs="collapseAllFileDirs"
           @open-file-dialog="openFileFromDialog"
@@ -2724,6 +3005,9 @@ onBeforeUnmount(() => {
           @locate-active-file="locateActiveFileInTree"
           @reveal-path="handleRevealInExplorer"
           @toggle-dock-side="toggleFilesDockSide"
+          @toggle-show-recent="toggleShowRecentFiles"
+          @remove-recent-file="removeRecentFile"
+          @clear-recent-files="clearRecentFiles"
           @open-demo-md="openDemoMarkdownHandbook"
           @refresh-dir="loadDirectory(mountedDir)"
         />
@@ -2821,6 +3105,8 @@ onBeforeUnmount(() => {
             ]"
             :title="tab.path ?? tab.title"
             @click="activeTabId = tab.id"
+            @contextmenu.prevent="openTabContextMenu($event, tab)"
+            @auxclick.middle.prevent="closeEditorTab(tab.id)"
           >
             <IdeIcon :name="tab.fileKind === 'markdown' ? 'md-file' : 'sql-file'" :size="13" />
             <span>{{ tab.title }}</span>
@@ -3081,6 +3367,42 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Empty Editor State (when all console / file tabs are closed) -->
+        <div v-else class="editor-empty-workspace">
+          <div style="display: inline-flex; align-items: center; gap: 10px">
+            <span class="brand-logo" style="width: 30px; height: 30px; font-size: 16px">P</span>
+            <span class="editor-empty-title">没有打开的 SQL 控制台或文档</span>
+          </div>
+          <div class="editor-empty-shortcuts">
+            <span>新建查询控制台</span>
+            <span><kbd>Ctrl</kbd> + <kbd>N</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd></span>
+            <span>打开 .md / .sql 文件</span>
+            <span><kbd>Ctrl</kbd> + <kbd>O</kbd></span>
+            <span>恢复刚关闭的标签页</span>
+            <span><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></span>
+            <span>随处搜索</span>
+            <span><kbd>双击 Shift</kbd> / <kbd>Ctrl</kbd>+<kbd>K</kbd></span>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap">
+            <button class="btn btn-primary btn-sm" @click="createNewConsoleTab('')">
+              <IdeIcon name="plus" :size="13" />
+              新建查询控制台
+            </button>
+            <button class="btn btn-sm" @click="openFileFromDialog">
+              <IdeIcon name="folder-open" :size="13" />
+              打开本地文件
+            </button>
+            <button
+              v-if="closedTabsStack.length > 0"
+              class="btn btn-sm"
+              @click="reopenLastClosedTab"
+            >
+              <IdeIcon name="refresh" :size="13" />
+              恢复刚关闭的标签页
+            </button>
+          </div>
+        </div>
+
         <!-- Horizontal Resizer -->
         <div
           v-if="bottomVisible"
@@ -3136,15 +3458,18 @@ onBeforeUnmount(() => {
           v-if="rightTool === 'files' && filesDockSide === 'right'"
           ref="fileExplorerRef"
           :mounted-dir="mountedDir"
+          :root-expanded="rootDirExpanded"
           :root-entries="workspaceEntries"
           :children-by-dir="fileTreeChildren"
           :expanded-dirs="expandedFileDirs"
           :recent-files="recentFiles"
+          :show-recent-files="showRecentFiles"
           :active-file-path="activeTab?.path ?? null"
           :dock-side="filesDockSide"
           :show-demo-manual="showDemoManual"
           @mount-folder="mountFolderDialog"
-          @open-dir="loadDirectory"
+          @toggle-root-dir="toggleRootDirExpanded"
+          @close-mounted-dir="closeMountedDir"
           @toggle-dir="toggleFileDir"
           @collapse-all-dirs="collapseAllFileDirs"
           @open-file-dialog="openFileFromDialog"
@@ -3152,6 +3477,9 @@ onBeforeUnmount(() => {
           @locate-active-file="locateActiveFileInTree"
           @reveal-path="handleRevealInExplorer"
           @toggle-dock-side="toggleFilesDockSide"
+          @toggle-show-recent="toggleShowRecentFiles"
+          @remove-recent-file="removeRecentFile"
+          @clear-recent-files="clearRecentFiles"
           @open-demo-md="openDemoMarkdownHandbook"
           @refresh-dir="loadDirectory(mountedDir)"
         />
@@ -3487,5 +3815,127 @@ onBeforeUnmount(() => {
       @select-search-item="handleSelectSearchItem"
       @notify="setStatus($event)"
     />
+
+    <!-- Editor Tab Right-Click Context Menu -->
+    <div
+      v-if="tabCtxMenu.visible && tabCtxTab"
+      class="context-menu"
+      :style="{ left: `${tabCtxMenu.x}px`, top: `${tabCtxMenu.y}px`, zIndex: 95 }"
+      @click.stop
+    >
+      <button
+        class="dropdown-item"
+        @click="
+          tabCtxMenu.visible = false;
+          closeEditorTab(tabCtxTab.id);
+        "
+      >
+        <span>关闭</span>
+        <span class="shortcut-hint">Ctrl+W</span>
+      </button>
+      <button
+        class="dropdown-item"
+        :disabled="tabs.length <= 1"
+        @click="
+          tabCtxMenu.visible = false;
+          closeOtherTabs(tabCtxTab.id);
+        "
+      >
+        <span>关闭其他标签页</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          tabCtxMenu.visible = false;
+          closeAllTabs();
+        "
+      >
+        <span>关闭所有标签页</span>
+      </button>
+      <button
+        class="dropdown-item"
+        :disabled="tabCtxIndex <= 0"
+        @click="
+          tabCtxMenu.visible = false;
+          closeTabsToLeft(tabCtxTab.id);
+        "
+      >
+        <span>关闭左侧标签页</span>
+      </button>
+      <button
+        class="dropdown-item"
+        :disabled="tabCtxIndex < 0 || tabCtxIndex >= tabs.length - 1"
+        @click="
+          tabCtxMenu.visible = false;
+          closeTabsToRight(tabCtxTab.id);
+        "
+      >
+        <span>关闭右侧标签页</span>
+      </button>
+      <button
+        class="dropdown-item"
+        :disabled="!tabs.some((t) => !isTabDirty(t))"
+        @click="
+          tabCtxMenu.visible = false;
+          closeUnmodifiedTabs();
+        "
+      >
+        <span>关闭未修改的标签页</span>
+      </button>
+      <div class="dropdown-sep" />
+      <button
+        class="dropdown-item"
+        :disabled="closedTabsStack.length === 0"
+        @click="
+          tabCtxMenu.visible = false;
+          reopenLastClosedTab();
+        "
+      >
+        <span>恢复刚关闭的标签页</span>
+        <span class="shortcut-hint">Ctrl+Shift+T</span>
+      </button>
+      <template v-if="tabCtxTab.path">
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="
+            tabCtxMenu.visible = false;
+            locateFileInTreeByPath(tabCtxTab.path!);
+          "
+        >
+          <span>在文件树中定位</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            tabCtxMenu.visible = false;
+            handleRevealInExplorer(tabCtxTab.path!);
+          "
+        >
+          <span>在系统资源管理器中定位</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            tabCtxMenu.visible = false;
+            copyText(tabCtxTab.path!);
+          "
+        >
+          <span>复制文件路径</span>
+        </button>
+      </template>
+      <template v-else>
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="
+            tabCtxMenu.visible = false;
+            copyText(tabCtxTab.title);
+          "
+        >
+          <span>复制标签页名称</span>
+        </button>
+      </template>
+    </div>
   </div>
 </template>
