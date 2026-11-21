@@ -28,9 +28,9 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
   {
     id: 'lt-sel',
     abbrev: 'sel',
-    description: '查询全表记录 SELECT * FROM table',
+    description: '查询表记录（自动附带顶部行数限制）',
     category: 'query',
-    template: 'SELECT * FROM ${1:table};${0}',
+    template: 'SELECT * FROM ${1:table}${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -57,7 +57,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     abbrev: 'selw',
     description: '带 WHERE 条件查询表记录',
     category: 'query',
-    template: 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}',
+    template: 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value}${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -75,7 +75,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     abbrev: 'selo',
     description: '按指定列倒序查询最新记录',
     category: 'query',
-    template: 'SELECT * FROM ${1:table} ORDER BY ${2:column} DESC LIMIT 100;${0}',
+    template: 'SELECT * FROM ${1:table} ORDER BY ${2:column} DESC${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -85,7 +85,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     description: '按字段分组聚合计数排行榜',
     category: 'query',
     template:
-      'SELECT ${2:column}, COUNT(*) AS cnt\nFROM ${1:table}\nGROUP BY ${2:column}\nORDER BY cnt DESC\nLIMIT 100;${0}',
+      'SELECT ${2:column}, COUNT(*) AS cnt\nFROM ${1:table}\nGROUP BY ${2:column}\nORDER BY cnt DESC${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -94,7 +94,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     abbrev: 'seld',
     description: '字段去重查询 SELECT DISTINCT',
     category: 'query',
-    template: 'SELECT DISTINCT ${2:column} FROM ${1:table} LIMIT 100;${0}',
+    template: 'SELECT DISTINCT ${2:column} FROM ${1:table}${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -104,7 +104,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     description: '双表 LEFT JOIN 关联查询',
     category: 'query',
     template:
-      'SELECT a.*, b.*\nFROM ${1:table} a\nLEFT JOIN ${2:table2} b ON a.${3:column} = b.${4:column2}\nLIMIT 100;${0}',
+      'SELECT a.*, b.*\nFROM ${1:table} a\nLEFT JOIN ${2:table2} b ON a.${3:column} = b.${4:column2}${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -113,7 +113,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     abbrev: 'selin',
     description: 'IN 多值过滤查询',
     category: 'query',
-    template: 'SELECT * FROM ${1:table} WHERE ${2:column} IN (${3:values}) LIMIT 100;${0}',
+    template: 'SELECT * FROM ${1:table} WHERE ${2:column} IN (${3:values})${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -150,7 +150,7 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
     description: 'WITH 公用表表达式 (CTE)',
     category: 'query',
     template:
-      'WITH ${1:cte_name} AS (\n  SELECT * FROM ${2:table} WHERE ${3:condition}\n)\nSELECT * FROM ${1:cte_name} LIMIT 100;${0}',
+      'WITH ${1:cte_name} AS (\n  SELECT * FROM ${2:table} WHERE ${3:condition}\n)\nSELECT * FROM ${1:cte_name}${LIMIT_CLAUSE};${0}',
     enabled: true,
     builtin: true,
   },
@@ -231,9 +231,9 @@ export const BUILTIN_LIVE_TEMPLATES: SqlLiveTemplate[] = [
   {
     id: 'lt-lim',
     abbrev: 'lim',
-    description: '结果集行数限制 LIMIT 100',
+    description: '结果集行数限制（同步顶部限制条数）',
     category: 'clause',
-    template: 'LIMIT ${1:100}${0}',
+    template: 'LIMIT ${1:${LIMIT}}${0}',
     enabled: true,
     builtin: true,
   },
@@ -418,6 +418,73 @@ export function formatCompletionIdentifier(
   return ident;
 }
 
+function normalizeRowLimitNumber(maxRowsLimit: number | null | undefined): number {
+  if (typeof maxRowsLimit === 'number' && Number.isFinite(maxRowsLimit) && maxRowsLimit > 0) {
+    return Math.trunc(maxRowsLimit);
+  }
+  return 100;
+}
+
+/**
+ * Builds the dialect-accurate row-limit SQL clause matching the top bar `maxRowsLimit`.
+ * Returns an empty string when `maxRowsLimit === null` ("Unlimited").
+ */
+export function buildLimitClauseForEngine(
+  engineKey: string,
+  maxRowsLimit: number | null | undefined = 100,
+): string {
+  if (maxRowsLimit === null) return '';
+  const limit = normalizeRowLimitNumber(maxRowsLimit);
+  const eng = (engineKey || 'mysql').toLowerCase();
+  if (eng.includes('oracle') || eng.includes('dameng') || eng === 'dm') {
+    return ` FETCH FIRST ${limit} ROWS ONLY`;
+  }
+  if (eng.includes('sqlserver') || eng.includes('mssql')) {
+    return ` OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY`;
+  }
+  return ` LIMIT ${limit}`;
+}
+
+/**
+ * Expands dynamic context variables `${LIMIT_CLAUSE}` / `${LIMIT}` inside a live template
+ * according to the active database dialect and top bar row limit.
+ */
+export function resolveLiveTemplateForContext(
+  raw: string,
+  engineKey = 'mysql',
+  maxRowsLimit: number | null | undefined = 100,
+): string {
+  if (!raw) return '';
+  const numLimit = normalizeRowLimitNumber(maxRowsLimit);
+  const eng = (engineKey || 'mysql').toLowerCase();
+  let resolved = raw;
+
+  if (
+    maxRowsLimit !== null &&
+    (eng.includes('sqlserver') || eng.includes('mssql')) &&
+    /\$\{LIMIT_CLAUSE\}|\$LIMIT_CLAUSE\$/i.test(resolved) &&
+    !/\border\s+by\b/i.test(resolved)
+  ) {
+    const withoutClause = resolved.replace(/\s*(?:\$\{LIMIT_CLAUSE\}|\$LIMIT_CLAUSE\$)/gi, '');
+    if (/^\s*SELECT\s+(?:DISTINCT\s+)?/i.test(withoutClause)) {
+      resolved = withoutClause.replace(
+        /^(\s*SELECT\s+(?:DISTINCT\s+)?)/i,
+        `$1TOP ${numLimit} `,
+      );
+    } else if (/\)\s*SELECT\s+(?:DISTINCT\s+)?/i.test(withoutClause)) {
+      resolved = withoutClause.replace(
+        /(\)\s*)(SELECT\s+(?:DISTINCT\s+)?)/i,
+        `$1$2TOP ${numLimit} `,
+      );
+    }
+  }
+
+  const limitClause = buildLimitClauseForEngine(engineKey, maxRowsLimit);
+  resolved = resolved.replace(/\$\{LIMIT_CLAUSE\}|\$LIMIT_CLAUSE\$/gi, limitClause);
+  resolved = resolved.replace(/\$\{LIMIT\}|\$LIMIT\$/gi, String(numLimit));
+  return resolved;
+}
+
 /**
  * Normalizes either CodeMirror (`${1:table}`, `${0}`) or JetBrains-style (`$table$`, `$END$`)
  * placeholder variables into valid CodeMirror snippet templates.
@@ -430,8 +497,12 @@ export function normalizeLiveTemplate(raw: string): string {
 }
 
 /** Converts snippet template placeholders into clean readable preview text. */
-export function formatTemplatePreview(raw: string): string {
-  return raw
+export function formatTemplatePreview(
+  raw: string,
+  engineKey = 'mysql',
+  maxRowsLimit: number | null | undefined = 100,
+): string {
+  return resolveLiveTemplateForContext(raw, engineKey, maxRowsLimit)
     .replace(/\$\{\d*\}/g, '')
     .replace(/\$\{\d+:([^}]+)\}/g, '$1')
     .replace(/\$\{([^}]+)\}/g, '$1')
@@ -524,6 +595,22 @@ export function extractReferencedTablesInStatement(
 }
 
 const STORAGE_KEY = 'pacer.liveTemplates.v1';
+const STORAGE_VERSION = 2;
+
+const V1_MIGRATION_MAP: Record<string, string> = {
+  'lt-sel': 'SELECT * FROM ${1:table};${0}',
+  'lt-selw': 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}',
+  'lt-selo': 'SELECT * FROM ${1:table} ORDER BY ${2:column} DESC LIMIT 100;${0}',
+  'lt-selg':
+    'SELECT ${2:column}, COUNT(*) AS cnt\nFROM ${1:table}\nGROUP BY ${2:column}\nORDER BY cnt DESC\nLIMIT 100;${0}',
+  'lt-seld': 'SELECT DISTINCT ${2:column} FROM ${1:table} LIMIT 100;${0}',
+  'lt-selj':
+    'SELECT a.*, b.*\nFROM ${1:table} a\nLEFT JOIN ${2:table2} b ON a.${3:column} = b.${4:column2}\nLIMIT 100;${0}',
+  'lt-selin': 'SELECT * FROM ${1:table} WHERE ${2:column} IN (${3:values}) LIMIT 100;${0}',
+  'lt-cte':
+    'WITH ${1:cte_name} AS (\n  SELECT * FROM ${2:table} WHERE ${3:condition}\n)\nSELECT * FROM ${1:cte_name} LIMIT 100;${0}',
+  'lt-lim': 'LIMIT ${1:100}${0}',
+};
 
 interface StoredLiveTemplates {
   version: number;
@@ -534,6 +621,36 @@ function cloneBuiltins(): SqlLiveTemplate[] {
   return BUILTIN_LIVE_TEMPLATES.map((t) => ({ ...t }));
 }
 
+/**
+ * Upgrades untouched v1 built-in query templates (`sel`, `selw`, `selo`, etc.) to use dynamic
+ * `${LIMIT_CLAUSE}` / `${LIMIT}` tokens while preserving any user-customized or custom templates.
+ */
+export function migrateStoredLiveTemplates(
+  items: SqlLiveTemplate[],
+  version: number,
+): { items: SqlLiveTemplate[]; migrated: boolean } {
+  if (version >= STORAGE_VERSION) {
+    return { items, migrated: false };
+  }
+  const builtinById = new Map(BUILTIN_LIVE_TEMPLATES.map((b) => [b.id, b]));
+  let migrated = false;
+  const next = items.map((item) => {
+    const oldDefault = V1_MIGRATION_MAP[item.id];
+    const builtin = builtinById.get(item.id);
+    if (oldDefault !== undefined && builtin && item.template === oldDefault) {
+      migrated = true;
+      return {
+        ...item,
+        template: builtin.template,
+        description:
+          item.id === 'lt-sel' || item.id === 'lt-lim' ? builtin.description : item.description,
+      };
+    }
+    return item;
+  });
+  return { items: next, migrated: true };
+}
+
 function loadInitialTemplates(): SqlLiveTemplate[] {
   if (typeof localStorage === 'undefined') return cloneBuiltins();
   try {
@@ -541,8 +658,9 @@ function loadInitialTemplates(): SqlLiveTemplate[] {
     if (!raw) return cloneBuiltins();
     const parsed = JSON.parse(raw) as StoredLiveTemplates | SqlLiveTemplate[];
     const items = Array.isArray(parsed) ? parsed : parsed?.items;
+    const version = Array.isArray(parsed) ? 1 : Number(parsed?.version) || 1;
     if (!Array.isArray(items) || items.length === 0) return cloneBuiltins();
-    return items.map((item) => ({
+    const normalized = items.map((item) => ({
       id: String(item.id || `lt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
       abbrev: String(item.abbrev || '').trim(),
       description: String(item.description || ''),
@@ -551,6 +669,21 @@ function loadInitialTemplates(): SqlLiveTemplate[] {
       enabled: item.enabled !== false,
       builtin: Boolean(item.builtin),
     }));
+    const { items: migratedItems, migrated } = migrateStoredLiveTemplates(normalized, version);
+    if (migrated) {
+      try {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            version: STORAGE_VERSION,
+            items: migratedItems,
+          } satisfies StoredLiveTemplates),
+        );
+      } catch {
+        // non-fatal
+      }
+    }
+    return migratedItems;
   } catch {
     return cloneBuiltins();
   }
@@ -565,7 +698,10 @@ function persistTemplates() {
   try {
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ version: 1, items: templateStore.items } satisfies StoredLiveTemplates),
+      JSON.stringify({
+        version: STORAGE_VERSION,
+        items: templateStore.items,
+      } satisfies StoredLiveTemplates),
     );
   } catch {
     // non-fatal

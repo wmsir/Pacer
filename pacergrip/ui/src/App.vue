@@ -59,6 +59,7 @@ import {
 } from './api/ipc';
 import {
   BUILTIN_SNIPPETS,
+  buildExplainPlanSql,
   convertSelectionToSqlIn,
   countLines,
   estimateUtf8Bytes,
@@ -66,9 +67,13 @@ import {
   extractSingleTableTarget,
   extractSqlParameters,
   formatBytes,
+  getEngineDisplayName,
+  getExplainModesForEngine,
+  isWriteOrDdlStatement,
   parseMarkdownSegments,
   quoteIdentifier,
   transformSqlTextCase,
+  type ExplainPlanMode,
   type SqlSnippet,
 } from './utils/sqlTools';
 import {
@@ -152,9 +157,9 @@ const bottomVisible = ref<boolean>(true);
 const leftWidth = ref<number>(Number(localStorage.getItem('pacergrip.leftWidth')) || 276);
 const rightWidth = ref<number>(Number(localStorage.getItem('pacergrip.rightWidth')) || 286);
 const bottomHeight = ref<number>(Number(localStorage.getItem('pacergrip.bottomHeight')) || 270);
-const openMenu = ref<'project' | 'file' | 'edit' | 'database' | 'tools' | 'help' | 'theme' | null>(
-  null,
-);
+const openMenu = ref<
+  'project' | 'file' | 'edit' | 'database' | 'tools' | 'help' | 'theme' | 'explain-plan' | null
+>(null);
 const showDemoManual = ref<boolean>(localStorage.getItem('pacer.hideDemoManual') !== '1');
 const editorFontSize = ref<number>(
   Math.max(11, Math.min(22, Number(localStorage.getItem('pacer.editorFontSize')) || 13)),
@@ -526,15 +531,41 @@ const activeDialectLabel = computed(() => {
   if (activeTab.value.fileKind === 'markdown') return 'Markdown + SQL';
   if (activeTab.value.fileKind === 'json') return 'JSON';
   if (activeTab.value.fileKind === 'xml') return 'XML';
-  const eng = activeEngineKey.value.toLowerCase();
-  if (eng.includes('sqlite')) return 'SQL (SQLite)';
-  if (eng.includes('postgres')) return 'SQL (PostgreSQL)';
-  if (eng.includes('mysql') || eng.includes('maria') || eng.includes('tidb')) return 'SQL (MySQL)';
-  return `SQL (${activeEngineKey.value})`;
+  return `SQL (${getEngineDisplayName(activeEngineKey.value)})`;
 });
 
+const activeExplainMeta = computed(() => getExplainModesForEngine(activeEngineKey.value));
+const activeExplainAnalyzeOption = computed(
+  () => activeExplainMeta.value.options.find((o) => o.mode === 'analyze') ?? null,
+);
+
+const MAX_ROWS_STORAGE_KEY = 'pacer.maxRowsLimit.v1';
+
+function loadInitialMaxRowsLimit(): number | null {
+  try {
+    const raw = localStorage.getItem(MAX_ROWS_STORAGE_KEY);
+    if (raw === null) return 100;
+    if (raw === '0') return null;
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return Math.trunc(parsed);
+  } catch {
+    // non-fatal
+  }
+  return 100;
+}
+
+function setMaxRowsLimit(rawVal: string) {
+  const next = rawVal === '0' ? null : Math.max(1, Math.trunc(Number(rawVal) || 100));
+  maxRowsLimit.value = next;
+  try {
+    localStorage.setItem(MAX_ROWS_STORAGE_KEY, next === null ? '0' : String(next));
+  } catch {
+    // non-fatal
+  }
+}
+
 // Services / Results / AST / History State
-const maxRowsLimit = ref<number | null>(1000);
+const maxRowsLimit = ref<number | null>(loadInitialMaxRowsLimit());
 const activeServiceTab = ref<'result' | 'output' | 'ddl' | 'history' | 'problems'>('result');
 const resultTabs = ref<ResultTabItem[]>([]);
 const activeResultTabId = ref<string>('');
@@ -2033,9 +2064,9 @@ async function handleRunConsoleQuickSql(sql: string) {
   );
 }
 
-async function runExplainActive() {
+async function resolveActiveSqlForExplain(): Promise<string> {
   const tab = activeTab.value;
-  if (!tab) return;
+  if (!tab) return '';
   let sql = tab.cursor.selectedText.trim();
   if (!sql && tab.fileKind === 'markdown') {
     sql = findEnclosingMarkdownBlock(tab.cursor.line)?.sql ?? '';
@@ -2043,24 +2074,97 @@ async function runExplainActive() {
   if (!sql) {
     sql = (await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset)) ?? tab.content;
   }
+  return sql.trim();
+}
+
+async function runExplainActive() {
+  const sql = await resolveActiveSqlForExplain();
   await runExplainSql(sql);
 }
 
-async function runExplainSql(sql: string) {
+async function handleGenerateExplainPlan(
+  mode: ExplainPlanMode = 'standard',
+  target: 'new-console' | 'insert-editor' | 'run' | 'copy' = 'new-console',
+) {
+  openMenu.value = null;
+  const rawSql = await resolveActiveSqlForExplain();
+  if (!rawSql) {
+    setStatus('当前编辑器没有可生成执行计划的 SQL 语句', true);
+    return;
+  }
+
+  const plan = buildExplainPlanSql(rawSql, activeEngineKey.value, mode);
+  const profId = activeTab.value?.profileId || selectedProfileId.value || undefined;
+  const dbName = activeTab.value?.dbName || selectedDbName.value || undefined;
+
+  if (target === 'copy') {
+    try {
+      await navigator.clipboard.writeText(plan.fullScript);
+      setStatus(`已复制 ${plan.dialectLabel} 执行计划 SQL (${plan.modeLabel})`);
+    } catch (err) {
+      setStatus(`复制执行计划 SQL 失败: ${String(err)}`, true);
+    }
+    return;
+  }
+
+  if (target === 'insert-editor') {
+    const tab = activeTab.value;
+    if (!tab || tab.readOnly || tab.fileKind === 'markdown') {
+      createNewConsoleTab(plan.fullScript, profId, dbName);
+      setStatus(
+        `${tab?.fileKind === 'markdown' ? 'Markdown 文档' : '当前只读页签'}已改为在新控制台生成 ${plan.dialectLabel} 执行计划 (${plan.modeLabel})`,
+      );
+      return;
+    }
+    const base = tab.content.trimEnd();
+    const nextDoc = base ? `${base}\n\n${plan.fullScript}` : plan.fullScript;
+    updateTabContent(nextDoc);
+    setStatus(`已在当前编辑器末尾插入 ${plan.dialectLabel} 执行计划 SQL (${plan.modeLabel})`);
+    return;
+  }
+
+  if (target === 'run') {
+    const prof = activeProfile.value;
+    if (!prof || !plan.canRunDirectly) {
+      createNewConsoleTab(plan.fullScript, profId, dbName);
+      setStatus(
+        `${plan.dialectLabel} 当前为语法方言生成模式（未绑定直连驱动），已在新控制台生成 ${plan.modeLabel}`,
+      );
+      return;
+    }
+    if (plan.executesQuery && (prof.env === 'PROD' || isWriteOrDdlStatement(rawSql))) {
+      createNewConsoleTab(plan.fullScript, profId, dbName);
+      setStatus(
+        `安全保护：${plan.modeLabel} 会实际运行语句（当前为 PROD 生产库或写操作），已在新控制台生成，请人工确认后再执行`,
+      );
+      return;
+    }
+    await runExplainSql(plan.sql, `${plan.dialectLabel} · ${plan.modeLabel}`);
+    return;
+  }
+
+  createNewConsoleTab(plan.fullScript, profId, dbName);
+  setStatus(
+    `已按 ${plan.dialectLabel} 方言生成执行计划 (${plan.modeLabel})，按 ${keymap.getDisplay('runCurrent')} 可执行查看`,
+  );
+}
+
+async function runExplainSql(sql: string, customTitle?: string) {
   const prof = activeProfile.value;
-  if (!prof || !sql.trim()) {
+  const cleaned = sql.trim().replace(/;+\s*$/, '');
+  if (!prof || !cleaned) {
     setStatus('请先选择数据源并提供有效 SQL 以查看执行计划', true);
     return;
   }
   busy.value = true;
   try {
     const dbName = activeTab.value?.dbName || selectedDbName.value || 'main';
-    const res = await explainSql(prof.id, dbName, sql.trim());
+    const res = await explainSql(prof.id, dbName, cleaned);
     const tabId = `explain-${Date.now()}`;
     const item: ResultTabItem = {
       id: tabId,
-      title: `EXPLAIN (${res.durationMs}ms)`,
-      sql: sql.trim(),
+      title: `${customTitle || 'EXPLAIN'} (${res.durationMs}ms)`,
+      sql: cleaned,
       profileId: prof.id,
       profileName: prof.name,
       profileEnv: prof.env,
@@ -2093,8 +2197,10 @@ async function runExplainSql(sql: string) {
       dbName,
       level: res.success ? 'success' : 'error',
       durationMs: res.durationMs,
-      summary: res.success ? `EXPLAIN 完成 (${res.rows.length} steps, ${res.durationMs} ms)` : 'EXPLAIN 执行失败',
-      detail: res.success ? sql.trim() : (res.errorMessage ?? undefined),
+      summary: res.success
+        ? `${customTitle || 'EXPLAIN'} 完成 (${res.rows.length} steps, ${res.durationMs} ms)`
+        : `${customTitle || 'EXPLAIN'} 执行失败`,
+      detail: res.success ? cleaned : (res.errorMessage ?? undefined),
     });
     setStatus(res.success ? `执行计划生成成功 (${res.durationMs}ms)` : `EXPLAIN 失败: ${res.errorMessage}`, !res.success);
   } catch (err) {
@@ -2786,6 +2892,13 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: keymap.getDisplay('newConsole') },
+    {
+      id: 'act-gen-explain',
+      category: 'action',
+      label: `生成当前查询执行计划 (${activeExplainMeta.value.dialectLabel})`,
+      detail: '按当前数据源方言生成标准 / ANALYZE / 详细执行计划 SQL',
+      badge: activeExplainMeta.value.dialectLabel,
+    },
     { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: keymap.getDisplay('formatSql') },
     { id: 'act-theme-dark', category: 'action', label: `切换主题：${t('themeDark')}`, detail: '经典深色 Darcula 界面与编辑器配色', badge: '主题' },
     { id: 'act-theme-light', category: 'action', label: `切换主题：${t('themeLight')}`, detail: '明亮清爽 IntelliJ Light 界面与编辑器配色', badge: '主题' },
@@ -2865,6 +2978,7 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
       activeModal.value = 'connection';
     } else if (item.id === 'act-import') activeModal.value = 'import';
     else if (item.id === 'act-new-console') createNewConsoleTab('');
+    else if (item.id === 'act-gen-explain') await handleGenerateExplainPlan('standard', 'new-console');
     else if (item.id === 'act-format') await formatActiveSql();
     else if (item.id === 'act-theme-dark') applyTheme('dark');
     else if (item.id === 'act-theme-light') applyTheme('light');
@@ -3475,6 +3589,12 @@ onBeforeUnmount(() => {
               {{ t('menuTools') }}
             </button>
             <div v-if="openMenu === 'tools'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; handleGenerateExplainPlan('standard', 'new-console')">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <IdeIcon name="explain" :size="13" />
+                  <span>生成当前查询执行计划 ({{ activeExplainMeta.dialectLabel }})</span>
+                </span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'search'">
                 <span>随处搜索 / 查找操作</span>
                 <span class="shortcut-hint">{{ keymap.getDisplay('searchEverywhere') }}</span>
@@ -3713,7 +3833,7 @@ onBeforeUnmount(() => {
           <button
             class="icon-btn"
             :disabled="busy || !activeProfile || !activeTab"
-            :title="`${t('explainBtn')} (${keymap.getDisplay('explainSql')})`"
+            :title="`${t('explainBtn')} · ${activeExplainMeta.dialectLabel} (${keymap.getDisplay('explainSql')})`"
             @click="runExplainActive"
           >
             <IdeIcon name="explain" :size="14" />
@@ -3732,14 +3852,9 @@ onBeforeUnmount(() => {
 
           <select
             :value="maxRowsLimit === null ? '0' : String(maxRowsLimit)"
-            :title="t('maxRows')"
+            :title="`${t('maxRows')}（默认 100；与 sel + Tab 查询条数联动）`"
             style="max-width: 82px"
-            @change="
-              maxRowsLimit =
-                ($event.target as HTMLSelectElement).value === '0'
-                  ? null
-                  : Number(($event.target as HTMLSelectElement).value)
-            "
+            @change="setMaxRowsLimit(($event.target as HTMLSelectElement).value)"
           >
             <option value="100">100 行</option>
             <option value="500">500 行</option>
@@ -4198,6 +4313,91 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="subbar-group">
+            <div class="explain-split-wrap" @click.stop>
+              <button
+                class="btn btn-sm explain-gen-btn"
+                :disabled="busy || !activeTab"
+                :title="`按当前数据源方言 (${activeExplainMeta.dialectLabel}) 在新控制台生成对应执行计划 SQL`"
+                @click="handleGenerateExplainPlan('standard', 'new-console')"
+              >
+                <IdeIcon name="explain" :size="12" />
+                <span>{{ t('genExplainPlanBtn') }}</span>
+                <span class="explain-dialect-tag">{{ activeExplainMeta.dialectLabel }}</span>
+              </button>
+              <button
+                class="btn btn-sm explain-gen-caret"
+                :class="{ open: openMenu === 'explain-plan' }"
+                :disabled="busy || !activeTab"
+                title="选择执行计划模式（标准 / ANALYZE / 详细 / 插入当前编辑器 / 直接执行）"
+                @click="openMenu = openMenu === 'explain-plan' ? null : 'explain-plan'"
+              >
+                ▾
+              </button>
+              <div
+                v-if="openMenu === 'explain-plan'"
+                class="dropdown-menu align-right explain-plan-menu"
+              >
+                <div class="explain-menu-head">
+                  {{ activeExplainMeta.dialectLabel }} · 生成执行计划 SQL
+                </div>
+                <button
+                  v-for="opt in activeExplainMeta.options"
+                  :key="opt.mode"
+                  class="dropdown-item"
+                  :title="opt.description"
+                  @click="handleGenerateExplainPlan(opt.mode, 'new-console')"
+                >
+                  <span style="display: inline-flex; align-items: center; gap: 6px">
+                    <span>{{ opt.label }}</span>
+                    <span v-if="opt.executesQuery" class="explain-exec-badge">实际执行</span>
+                  </span>
+                  <span class="shortcut-hint">{{ opt.shortSyntax }}</span>
+                </button>
+                <div class="dropdown-sep" />
+                <button
+                  class="dropdown-item"
+                  :disabled="!activeTab || activeTab.readOnly || isMarkdownTab"
+                  @click="handleGenerateExplainPlan('standard', 'insert-editor')"
+                >
+                  <span>插入到当前编辑器末尾</span>
+                </button>
+                <button
+                  class="dropdown-item"
+                  @click="handleGenerateExplainPlan('standard', 'copy')"
+                >
+                  <span>复制 {{ activeExplainMeta.dialectLabel }} 执行计划 SQL</span>
+                </button>
+                <template v-if="activeExplainMeta.canRunDirectly && activeProfile">
+                  <div class="dropdown-sep" />
+                  <button
+                    class="dropdown-item"
+                    @click="handleGenerateExplainPlan('standard', 'run')"
+                  >
+                    <span>直接生成并运行 ({{ activeExplainMeta.options[0].shortSyntax }})</span>
+                  </button>
+                  <button
+                    v-if="
+                      activeExplainAnalyzeOption &&
+                      activeExplainAnalyzeOption.shortSyntax !== activeExplainMeta.options[0].shortSyntax
+                    "
+                    class="dropdown-item"
+                    :title="activeExplainAnalyzeOption.description"
+                    @click="handleGenerateExplainPlan('analyze', 'run')"
+                  >
+                    <span style="display: inline-flex; align-items: center; gap: 6px">
+                      <span>直接生成并运行 ({{ activeExplainAnalyzeOption.shortSyntax }})</span>
+                      <span
+                        v-if="activeExplainAnalyzeOption.executesQuery"
+                        class="explain-exec-badge"
+                      >
+                        实际执行
+                      </span>
+                    </span>
+                  </button>
+                </template>
+              </div>
+            </div>
+
             <span
               v-if="astAnalysis"
               class="pill"
@@ -4270,6 +4470,7 @@ onBeforeUnmount(() => {
               :font-size="editorFontSize"
               :word-wrap="editorWordWrap"
               :schema-map="activeSchemaMap"
+              :max-rows-limit="maxRowsLimit"
               @update:model-value="updateTabContent"
               @cursor-change="handleCursorChange"
               @run-shortcut="runActiveEditor"
@@ -4935,6 +5136,8 @@ onBeforeUnmount(() => {
       :search-items="searchItems"
       :exported-json="exportedJson"
       :shortcuts-initial-tab="shortcutsInitialTab"
+      :max-rows-limit="maxRowsLimit"
+      :engine-key="activeEngineKey"
       :busy="busy"
       @close="
         pendingCloseTabId = null;

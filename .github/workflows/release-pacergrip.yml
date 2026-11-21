@@ -223,6 +223,10 @@ jobs:
             - **macOS `.app` 安全工作空间策略**：在 `/Applications`、`AppTranslocation` 沙盒或只读挂载卷启动时自动落盘至标准 `~/Library/Application Support/cn.fwpt.pacer`（绝不向 `.app` 包内部写入文件）；若将 `Pacer.app` 放在用户自定义可写目录，则优先在同级创建便携 `pacer-workspace/`。
             - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
 
+            ### v0.9.1 新增与优化 / What's New in v0.9.1
+            - **`sel + Tab` 快捷查询联动顶部行数限制（默认 `100` 行）**：顶部查询行数上限默认调整为 `100 行` 并自动记忆用户切换结果；输入 `sel`（及 `selw` / `selo` / `selg` / `seld` / `selj` / `selin` / `cte` / `lim` 等查询模板）按 `Tab` 展开时，实时同步顶部行数并自动适配当前数据库方言（MySQL / PostgreSQL / TiDB / SQLite 生成 `LIMIT 100`，Oracle / 达梦 DM8 生成 `FETCH FIRST 100 ROWS ONLY`，SQL Server 生成 `TOP 100` / `OFFSET ... FETCH NEXT`，选择“不限”时自动省略限制子句）。
+            - **分库方言「生成执行计划」拆分按钮**：编辑器子工具栏新增专属「生成执行计划」按钮与下拉模式菜单，自动识别当前数据源引擎生成精确语法的计划 SQL（支持 MySQL `EXPLAIN` / `EXPLAIN ANALYZE` / `EXPLAIN FORMAT=TREE`、TiDB `EXPLAIN ANALYZE` / `verbose`、MariaDB `ANALYZE` / `FORMAT=JSON`、OceanBase `EXTENDED` / `OUTLINE`、PostgreSQL / KingbaseES / openGauss `(COSTS, VERBOSE)` / `(ANALYZE, BUFFERS)` / `(FORMAT JSON)`、SQLite `EXPLAIN QUERY PLAN`、Oracle `DBMS_XPLAN`、达梦 DM8、SQL Server `SHOWPLAN`、ClickHouse `EXPLAIN PLAN indexes = 1` / `PIPELINE` / `AST`），支持新控制台打开、插入编辑器末尾、复制及带生产库安全拦截的一键执行。
+
             ### 核心特性 / Highlights
             - **SQL 缩写模板（Live Templates · `sel + Tab`）& 智能库表弹出**：输入 `sel`、`selw`、`selc`、`selo`、`selg`、`ins`、`upd`、`del` 等 27 个常用缩写按 `Tab` 秒展开并自动弹出当前数据库可选表与字段；支持完全自定义、启停与 JSON 导入导出。
             - **SQL 参数绑定执行（`:param` / `${param}` / `#{param}`）**：执行含参数占位符的脚本时自动弹出参数赋值窗（自动记住历史值、自动类型识别与实时 SQL 预览），跳过 `:=` 与 `::type` 类型强转。

@@ -122,6 +122,8 @@ const props = defineProps<{
   searchItems: SearchEverywhereItem[];
   exportedJson: string;
   shortcutsInitialTab?: 'keymap' | 'templates';
+  maxRowsLimit?: number | null;
+  engineKey?: string;
   busy: boolean;
 }>();
 
@@ -1058,7 +1060,7 @@ const templateForm = reactive<{
   abbrev: '',
   description: '',
   category: 'custom',
-  template: 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}',
+  template: 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value}${LIMIT_CLAUSE};${0}',
   enabled: true,
 });
 
@@ -1090,7 +1092,7 @@ function openCreateTemplateForm() {
   templateForm.abbrev = '';
   templateForm.description = '';
   templateForm.category = 'custom';
-  templateForm.template = 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}';
+  templateForm.template = 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value}${LIMIT_CLAUSE};${0}';
   templateForm.enabled = true;
   templateImportVisible.value = false;
   templateFormVisible.value = true;
@@ -2516,12 +2518,13 @@ function runImportLiveTemplates() {
             "
           >
             <span style="font-size: 11px; color: var(--text-secondary)">
-              SQL 展开模板（支持 <code>${1:table}</code> / <code>${2:column}</code> / <code>$END$</code>，选择 table 后自动弹出当前库表）：
+              SQL 展开模板（支持 <code>${1:table}</code> / <code>${2:column}</code> / <code>${LIMIT_CLAUSE}</code> 同步顶部行数限制 / <code>$END$</code>）：
             </span>
             <div style="display: flex; gap: 4px; flex-wrap: wrap">
               <button class="icon-btn compact" @click="insertTemplateToken('${1:table}')">+ 表占位 ${1:table}</button>
               <button class="icon-btn compact" @click="insertTemplateToken('${2:column}')">+ 列占位 ${2:column}</button>
               <button class="icon-btn compact" @click="insertTemplateToken('${3:value}')">+ 值占位 ${3:value}</button>
+              <button class="icon-btn compact" @click="insertTemplateToken('${LIMIT_CLAUSE}')">+ 行数限制 ${LIMIT_CLAUSE}</button>
               <button class="icon-btn compact" @click="insertTemplateToken('${0}')">+ 结束光标 ${0}</button>
             </div>
           </div>
@@ -2532,7 +2535,7 @@ function runImportLiveTemplates() {
             class="field"
             rows="4"
             style="font-family: var(--font-mono); font-size: 12px; margin-bottom: 6px"
-            placeholder="SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}"
+            placeholder="SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value}${LIMIT_CLAUSE};${0}"
           />
 
           <div
@@ -2545,7 +2548,7 @@ function runImportLiveTemplates() {
             "
           >
             <span style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono)">
-              展开预览：{{ formatTemplatePreview(templateForm.template) }}
+              展开预览：{{ formatTemplatePreview(templateForm.template, props.engineKey || 'mysql', props.maxRowsLimit) }}
             </span>
             <div style="display: flex; gap: 6px">
               <button
@@ -2641,7 +2644,7 @@ function runImportLiveTemplates() {
                   "
                   :title="tpl.template"
                 >
-                  {{ formatTemplatePreview(tpl.template) }}
+                  {{ formatTemplatePreview(tpl.template, props.engineKey || 'mysql', props.maxRowsLimit) }}
                 </td>
                 <td>
                   <div style="display: flex; gap: 4px">

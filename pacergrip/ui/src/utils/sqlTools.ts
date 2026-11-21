@@ -726,3 +726,517 @@ export function decodeUnixTimestampHint(val: unknown): string | null {
   )}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
   return `${formatted} (Unix ${unit})`;
 }
+
+// ==================== Dialect-Aware Execution Plan Generator ====================
+
+export type ExplainPlanMode = 'standard' | 'analyze' | 'verbose';
+
+export interface ExplainPlanModeOption {
+  mode: ExplainPlanMode;
+  label: string;
+  shortSyntax: string;
+  executesQuery: boolean;
+  description: string;
+}
+
+export interface ExplainPlanResult {
+  engineKey: string;
+  dialectLabel: string;
+  mode: ExplainPlanMode;
+  modeLabel: string;
+  headerComment: string;
+  sql: string;
+  fullScript: string;
+  executesQuery: boolean;
+  canRunDirectly: boolean;
+}
+
+export function getEngineDisplayName(engineKey: string): string {
+  const e = (engineKey || 'mysql').toLowerCase();
+  if (e.includes('tidb')) return 'TiDB';
+  if (e.includes('mariadb')) return 'MariaDB';
+  if (e.includes('oceanbase')) return 'OceanBase';
+  if (e.includes('mysql')) return 'MySQL';
+  if (e.includes('kingbase')) return 'KingbaseES';
+  if (e.includes('gauss')) return 'openGauss';
+  if (e.includes('postgres') || e === 'pg') return 'PostgreSQL';
+  if (e.includes('sqlite')) return 'SQLite';
+  if (e.includes('oracle')) return 'Oracle';
+  if (e.includes('dameng') || e === 'dm') return '达梦 DM8';
+  if (e.includes('sqlserver') || e.includes('mssql')) return 'SQL Server';
+  if (e.includes('clickhouse')) return 'ClickHouse';
+  return engineKey || 'SQL';
+}
+
+function stripLeadingSqlComments(sql: string): string {
+  let s = sql.trim();
+  while (s.length > 0) {
+    if (s.startsWith('--')) {
+      const nl = s.indexOf('\n');
+      s = nl >= 0 ? s.slice(nl + 1).trimStart() : '';
+      continue;
+    }
+    if (s.startsWith('/*')) {
+      const close = s.indexOf('*/');
+      s = close >= 0 ? s.slice(close + 2).trimStart() : '';
+      continue;
+    }
+    break;
+  }
+  return s.trim();
+}
+
+export function isWriteOrDdlStatement(sql: string): boolean {
+  const cleaned = stripLeadingSqlComments(sql);
+  return /^(insert|update|delete|replace|merge|drop|alter|truncate|create|grant|revoke)\b/i.test(
+    cleaned,
+  );
+}
+
+/**
+ * Strips leading `EXPLAIN ...` prefixes or multi-statement execution-plan wrappers (Oracle
+ * `EXPLAIN PLAN FOR ... SELECT * FROM TABLE(DBMS_XPLAN.DISPLAY...)`, SQL Server `SET SHOWPLAN_*`)
+ * so generating a new plan or switching dialects never creates `EXPLAIN EXPLAIN ...`.
+ */
+export function stripExistingExplainPrefix(rawSql: string): string {
+  let s = stripLeadingSqlComments(rawSql).replace(/;+\s*$/, '').trim();
+
+  for (let pass = 0; pass < 3; pass += 1) {
+    const before = s;
+
+    // SQL Server SET SHOWPLAN_TEXT / SHOWPLAN_XML / STATISTICS PROFILE wrappers
+    s = s
+      .replace(/^SET\s+(?:SHOWPLAN_TEXT|SHOWPLAN_XML|STATISTICS\s+PROFILE)\s+ON\s*;?\s*(?:GO\s*)?/i, '')
+      .replace(/\s*(?:GO\s*)?SET\s+(?:SHOWPLAN_TEXT|SHOWPLAN_XML|STATISTICS\s+PROFILE)\s+OFF\s*;?\s*$/i, '')
+      .trim();
+
+    // Oracle trailing DBMS_XPLAN.DISPLAY query
+    s = s
+      .replace(/;?\s*SELECT\s+\*\s+FROM\s+TABLE\s*\(\s*DBMS_XPLAN\.DISPLAY[\s\S]*?\)\s*;?\s*$/i, '')
+      .trim();
+
+    // Leading EXPLAIN variants across supported dialects
+    const patterns = [
+      /^EXPLAIN\s+QUERY\s+PLAN\b\s*/i,
+      /^EXPLAIN\s+PLAN\s+indexes\s*=\s*\d+(?:\s*,\s*[a-z_]+\s*=\s*\d+)*\b\s*/i,
+      /^EXPLAIN\s+PLAN\s+FOR\b\s*/i,
+      /^EXPLAIN\s+FORMAT\s*=\s*(?:'[^']*'|"[^"]*"|[A-Za-z_]+)\b\s*/i,
+      /^EXPLAIN\s*\([^)]*\)\s*/i,
+      /^EXPLAIN\s+(?:ANALYZE|EXTENDED|OUTLINE|PIPELINE|AST|FOR)\b\s*/i,
+      /^EXPLAIN\b\s*/i,
+      /^ANALYZE\b\s+(?=(?:SELECT|WITH|\())/i,
+    ];
+    for (const pat of patterns) {
+      if (pat.test(s)) {
+        s = s.replace(pat, '').trim();
+        break;
+      }
+    }
+
+    s = stripLeadingSqlComments(s).replace(/;+\s*$/, '').trim();
+    if (s === before) break;
+  }
+
+  return s;
+}
+
+export function getExplainModesForEngine(engineKey: string): {
+  dialectLabel: string;
+  canRunDirectly: boolean;
+  options: ExplainPlanModeOption[];
+} {
+  const e = (engineKey || 'mysql').toLowerCase();
+  const dialectLabel = getEngineDisplayName(engineKey);
+
+  if (e.includes('tidb')) {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'TiDB 标准执行计划',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '查看 TiDB 优化器估算的分布式算子、索引扫描与 TiKV/TiFlash 路径',
+        },
+        {
+          mode: 'analyze',
+          label: 'TiDB 实际运行剖析',
+          shortSyntax: 'EXPLAIN ANALYZE',
+          executesQuery: true,
+          description: '实际执行查询并返回真实 actRows、execution info 与 TiKV 耗时统计',
+        },
+        {
+          mode: 'verbose',
+          label: 'TiDB 详细 Cost 计划',
+          shortSyntax: "EXPLAIN FORMAT='verbose'",
+          executesQuery: false,
+          description: '包含估算 Cost、内存与网络开销的详细计划',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('oceanbase')) {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'OceanBase 标准执行计划',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '展示算子树、表扫描与估算行数及代价',
+        },
+        {
+          mode: 'analyze',
+          label: 'OceanBase 扩展计划',
+          shortSyntax: 'EXPLAIN EXTENDED',
+          executesQuery: false,
+          description: '展示分区裁剪、表达式改写、输出列与完整 Cost Breakdown（不实际执行）',
+        },
+        {
+          mode: 'verbose',
+          label: 'OceanBase Outline 计划',
+          shortSyntax: 'EXPLAIN OUTLINE',
+          executesQuery: false,
+          description: '生成带 Hint Outline 调优指令的完整执行计划',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('mariadb')) {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'MariaDB 标准执行计划',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '标准表格式优化器执行计划（type / possible_keys / key / rows）',
+        },
+        {
+          mode: 'analyze',
+          label: 'MariaDB 真实运行剖析',
+          shortSyntax: 'ANALYZE',
+          executesQuery: true,
+          description: '实际运行并返回 r_rows、r_filtered 与循环次数对比',
+        },
+        {
+          mode: 'verbose',
+          label: 'MariaDB JSON 详情计划',
+          shortSyntax: 'EXPLAIN FORMAT=JSON',
+          executesQuery: false,
+          description: '包含精确 Cost 与索引条件细节的 JSON 计划',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('mysql')) {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'MySQL 标准执行计划',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '标准表格式执行计划（type / key / key_len / rows / Extra）',
+        },
+        {
+          mode: 'analyze',
+          label: 'MySQL 实际耗时剖析 (8.0+)',
+          shortSyntax: 'EXPLAIN ANALYZE',
+          executesQuery: true,
+          description: '实际执行查询并输出每个算子的真实耗时、循环与实际返回行数',
+        },
+        {
+          mode: 'verbose',
+          label: 'MySQL 树状 Cost 计划',
+          shortSyntax: 'EXPLAIN FORMAT=TREE',
+          executesQuery: false,
+          description: '树状展示连接顺序与优化器估算 Cost（不执行查询）',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('postgres') || e.includes('kingbase') || e.includes('gauss') || e === 'pg') {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: `${dialectLabel} 详细估算计划`,
+          shortSyntax: 'EXPLAIN (COSTS, VERBOSE)',
+          executesQuery: false,
+          description: '不执行查询，展示节点 Cost、预估行数、目标输出列与 Schema',
+        },
+        {
+          mode: 'analyze',
+          label: `${dialectLabel} 实际执行 + 缓存统计`,
+          shortSyntax: 'EXPLAIN (ANALYZE, BUFFERS)',
+          executesQuery: true,
+          description: '实际执行语句，返回真实耗时与共享缓存块命中/磁盘读取统计',
+        },
+        {
+          mode: 'verbose',
+          label: `${dialectLabel} JSON 结构化计划`,
+          shortSyntax: 'EXPLAIN (FORMAT JSON)',
+          executesQuery: false,
+          description: '输出完整 JSON 计划，便于结构化比对节点成本',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('sqlite')) {
+    return {
+      dialectLabel,
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'SQLite 高层索引与扫描计划',
+          shortSyntax: 'EXPLAIN QUERY PLAN',
+          executesQuery: false,
+          description: '直观展示 SCAN TABLE / SEARCH USING INDEX 与临时排序信息',
+        },
+        {
+          mode: 'verbose',
+          label: 'SQLite VDBE 字节码指令',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '输出 SQLite 虚拟机底层字节码指令清单',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('oracle')) {
+    return {
+      dialectLabel,
+      canRunDirectly: false,
+      options: [
+        {
+          mode: 'standard',
+          label: 'Oracle 标准 DBMS_XPLAN',
+          shortSyntax: 'DBMS_XPLAN.DISPLAY',
+          executesQuery: false,
+          description: '生成 EXPLAIN PLAN FOR 与 DBMS_XPLAN.DISPLAY 双段查询脚本文档',
+        },
+        {
+          mode: 'analyze',
+          label: 'Oracle 运行时统计格式',
+          shortSyntax: "DISPLAY(..., 'ALLSTATS LAST')",
+          executesQuery: false,
+          description: '带 ALLSTATS LAST 格式参数的 DBMS_XPLAN 展示语句',
+        },
+        {
+          mode: 'verbose',
+          label: 'Oracle 全量详情计划',
+          shortSyntax: "DISPLAY(..., 'ALL')",
+          executesQuery: false,
+          description: '包含投影列、谓词过滤与 Outline 的全量 DBMS_XPLAN 展示',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('dameng') || e === 'dm') {
+    return {
+      dialectLabel,
+      canRunDirectly: false,
+      options: [
+        {
+          mode: 'standard',
+          label: '达梦 DM8 标准执行计划',
+          shortSyntax: 'EXPLAIN',
+          executesQuery: false,
+          description: '生成达梦 DM8 EXPLAIN 执行计划语句',
+        },
+        {
+          mode: 'verbose',
+          label: '达梦 DM8 EXPLAIN FOR 计划',
+          shortSyntax: 'EXPLAIN FOR',
+          executesQuery: false,
+          description: '生成达梦 DM8 EXPLAIN FOR 执行计划语句',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('sqlserver') || e.includes('mssql')) {
+    return {
+      dialectLabel,
+      canRunDirectly: false,
+      options: [
+        {
+          mode: 'standard',
+          label: 'SQL Server 文本估算计划',
+          shortSyntax: 'SET SHOWPLAN_TEXT ON',
+          executesQuery: false,
+          description: '不执行查询，开启 SHOWPLAN_TEXT 返回预估计划',
+        },
+        {
+          mode: 'analyze',
+          label: 'SQL Server 实际执行计划',
+          shortSyntax: 'SET STATISTICS PROFILE ON',
+          executesQuery: true,
+          description: '实际执行查询并附带每个算子的真实 Rows / Executes 统计',
+        },
+        {
+          mode: 'verbose',
+          label: 'SQL Server XML 详细计划',
+          shortSyntax: 'SET SHOWPLAN_XML ON',
+          executesQuery: false,
+          description: '生成完整 XML 格式估算执行计划（可保存为 .sqlplan）',
+        },
+      ],
+    };
+  }
+
+  if (e.includes('clickhouse')) {
+    return {
+      dialectLabel,
+      canRunDirectly: false,
+      options: [
+        {
+          mode: 'standard',
+          label: 'ClickHouse 索引裁剪计划',
+          shortSyntax: 'EXPLAIN PLAN indexes = 1',
+          executesQuery: false,
+          description: '查看 MergeTree 分区与主键粒度 Granule 裁剪效果',
+        },
+        {
+          mode: 'analyze',
+          label: 'ClickHouse 并行执行管线',
+          shortSyntax: 'EXPLAIN PIPELINE',
+          executesQuery: false,
+          description: '查看多线程流式计算 Pipeline 算子拓扑（不实际跑全表）',
+        },
+        {
+          mode: 'verbose',
+          label: 'ClickHouse 抽象语法树',
+          shortSyntax: 'EXPLAIN AST',
+          executesQuery: false,
+          description: '查看查询解析重写后的 AST 结构',
+        },
+      ],
+    };
+  }
+
+  return {
+    dialectLabel,
+    canRunDirectly: true,
+    options: [
+      {
+        mode: 'standard',
+        label: `${dialectLabel} 标准执行计划`,
+        shortSyntax: 'EXPLAIN',
+        executesQuery: false,
+        description: '生成标准 EXPLAIN 语句',
+      },
+      {
+        mode: 'analyze',
+        label: `${dialectLabel} 执行剖析`,
+        shortSyntax: 'EXPLAIN ANALYZE',
+        executesQuery: true,
+        description: '生成 EXPLAIN ANALYZE 语句',
+      },
+    ],
+  };
+}
+
+/**
+ * Generates dialect-specific execution plan SQL for the selected database engine and mode.
+ */
+export function buildExplainPlanSql(
+  rawSql: string,
+  engineKey: string,
+  mode: ExplainPlanMode = 'standard',
+): ExplainPlanResult {
+  const inner = stripExistingExplainPrefix(rawSql);
+  const { dialectLabel, canRunDirectly, options } = getExplainModesForEngine(engineKey);
+  const chosenOption =
+    options.find((o) => o.mode === mode) ?? options[0];
+  const resolvedMode = chosenOption.mode;
+  const e = (engineKey || 'mysql').toLowerCase();
+
+  let sql = '';
+  if (e.includes('tidb')) {
+    if (resolvedMode === 'analyze') sql = `EXPLAIN ANALYZE ${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN FORMAT = 'verbose' ${inner};`;
+    else sql = `EXPLAIN ${inner};`;
+  } else if (e.includes('oceanbase')) {
+    if (resolvedMode === 'analyze') sql = `EXPLAIN EXTENDED ${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN OUTLINE ${inner};`;
+    else sql = `EXPLAIN ${inner};`;
+  } else if (e.includes('mariadb')) {
+    if (resolvedMode === 'analyze') sql = `ANALYZE ${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN FORMAT = JSON ${inner};`;
+    else sql = `EXPLAIN ${inner};`;
+  } else if (e.includes('mysql')) {
+    if (resolvedMode === 'analyze') sql = `EXPLAIN ANALYZE ${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN FORMAT = TREE ${inner};`;
+    else sql = `EXPLAIN ${inner};`;
+  } else if (e.includes('postgres') || e.includes('kingbase') || e.includes('gauss') || e === 'pg') {
+    if (resolvedMode === 'analyze') sql = `EXPLAIN (ANALYZE, BUFFERS)\n${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN (FORMAT JSON, COSTS, VERBOSE)\n${inner};`;
+    else sql = `EXPLAIN (COSTS, VERBOSE)\n${inner};`;
+  } else if (e.includes('sqlite')) {
+    if (resolvedMode === 'verbose') sql = `EXPLAIN\n${inner};`;
+    else sql = `EXPLAIN QUERY PLAN\n${inner};`;
+  } else if (e.includes('oracle')) {
+    if (resolvedMode === 'analyze') {
+      sql = `EXPLAIN PLAN FOR\n${inner};\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, 'ALLSTATS LAST'));`;
+    } else if (resolvedMode === 'verbose') {
+      sql = `EXPLAIN PLAN FOR\n${inner};\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY(NULL, NULL, 'ALL'));`;
+    } else {
+      sql = `EXPLAIN PLAN FOR\n${inner};\nSELECT * FROM TABLE(DBMS_XPLAN.DISPLAY);`;
+    }
+  } else if (e.includes('dameng') || e === 'dm') {
+    sql = resolvedMode === 'standard' ? `EXPLAIN ${inner};` : `EXPLAIN FOR ${inner};`;
+  } else if (e.includes('sqlserver') || e.includes('mssql')) {
+    if (resolvedMode === 'analyze') {
+      sql = `SET STATISTICS PROFILE ON;\n${inner};\nSET STATISTICS PROFILE OFF;`;
+    } else if (resolvedMode === 'verbose') {
+      sql = `SET SHOWPLAN_XML ON;\nGO\n${inner};\nGO\nSET SHOWPLAN_XML OFF;`;
+    } else {
+      sql = `SET SHOWPLAN_TEXT ON;\nGO\n${inner};\nGO\nSET SHOWPLAN_TEXT OFF;`;
+    }
+  } else if (e.includes('clickhouse')) {
+    if (resolvedMode === 'analyze') sql = `EXPLAIN PIPELINE\n${inner};`;
+    else if (resolvedMode === 'verbose') sql = `EXPLAIN AST\n${inner};`;
+    else sql = `EXPLAIN PLAN indexes = 1\n${inner};`;
+  } else {
+    sql = resolvedMode === 'analyze' ? `EXPLAIN ANALYZE ${inner};` : `EXPLAIN ${inner};`;
+  }
+
+  const lines = [`-- [${dialectLabel}] ${chosenOption.label} (${chosenOption.shortSyntax})`];
+  if (chosenOption.executesQuery) {
+    lines.push('-- ⚠ 注意：该模式会实际执行 SQL 以采集真实耗时与行数，写操作/生产库请谨慎运行');
+  }
+  const headerComment = lines.join('\n');
+  const fullScript = `${headerComment}\n${sql}\n`;
+
+  return {
+    engineKey,
+    dialectLabel,
+    mode: resolvedMode,
+    modeLabel: chosenOption.shortSyntax,
+    headerComment,
+    sql,
+    fullScript,
+    executesQuery: chosenOption.executesQuery,
+    canRunDirectly,
+  };
+}

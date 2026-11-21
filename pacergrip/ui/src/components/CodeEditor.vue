@@ -72,10 +72,12 @@ import type { MarkdownSqlBlock } from '../api/ipc';
 import { extractMarkdownSqlBlocksLocal } from '../utils/sqlTools';
 import { comboToCodeMirrorKey, useKeymap } from '../utils/keymap';
 import {
+  buildLimitClauseForEngine,
   extractReferencedTablesInStatement,
   formatCompletionIdentifier,
   formatTemplatePreview,
   normalizeLiveTemplate,
+  resolveLiveTemplateForContext,
   useLiveTemplates,
   type SqlLiveTemplate,
 } from '../utils/liveTemplates';
@@ -100,6 +102,7 @@ const props = defineProps<{
   fontSize?: number;
   wordWrap?: boolean;
   schemaMap?: Record<string, string[]>;
+  maxRowsLimit?: number | null;
   runLabel?: string;
   explainLabel?: string;
   copyConsoleLabel?: string;
@@ -493,7 +496,8 @@ function maybeTriggerPlaceholderCompletion(v: EditorView) {
 
 function expandLiveTemplate(v: EditorView, tpl: SqlLiveTemplate, from: number, to: number) {
   closeCompletion(v);
-  const normalized = normalizeLiveTemplate(tpl.template);
+  const resolved = resolveLiveTemplateForContext(tpl.template, props.engineKey, props.maxRowsLimit);
+  const normalized = normalizeLiveTemplate(resolved);
   snippet(normalized)(v, null, from, to);
   v.focus();
   window.setTimeout(() => {
@@ -661,10 +665,31 @@ function pacerSqlCompletionSource(context: CompletionContext): CompletionResult 
     if (!tpl.enabled) continue;
     const abbrLow = tpl.abbrev.toLowerCase();
     if (!typed || abbrLow.startsWith(typed)) {
+      const hasLimitVar = /\$\{LIMIT_CLAUSE\}|\$LIMIT_CLAUSE\$|\$\{LIMIT\}|\$LIMIT\$/i.test(
+        tpl.template,
+      );
+      let limitBadge = '';
+      if (hasLimitVar) {
+        if (props.maxRowsLimit === null) {
+          limitBadge = ' · 不限行';
+        } else {
+          const eng = (props.engineKey || 'mysql').toLowerCase();
+          const numLim =
+            typeof props.maxRowsLimit === 'number' && props.maxRowsLimit > 0
+              ? Math.trunc(props.maxRowsLimit)
+              : 100;
+          const clause = buildLimitClauseForEngine(props.engineKey, props.maxRowsLimit).trim();
+          const tag =
+            (eng.includes('sqlserver') || eng.includes('mssql')) && !/\border\s+by\b/i.test(tpl.template)
+              ? `TOP ${numLim}`
+              : clause || `LIMIT ${numLim}`;
+          limitBadge = ` · ${tag}`;
+        }
+      }
       options.push({
         label: tpl.abbrev,
-        detail: `${tpl.description} [Tab]`,
-        info: formatTemplatePreview(tpl.template),
+        detail: `${tpl.description}${limitBadge} [Tab]`,
+        info: formatTemplatePreview(tpl.template, props.engineKey, props.maxRowsLimit),
         type: 'template',
         boost: abbrLow === typed ? 99 : 70,
         apply: (v, _completion, from, to) => expandLiveTemplate(v, tpl, from, to),

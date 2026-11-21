@@ -385,7 +385,12 @@ impl DbBackend for MySqlBackend {
             let _ = conn.execute(use_sql.as_str()).await;
         }
         let trimmed = sql.trim().trim_end_matches(';');
-        let explain_sql = if trimmed.to_ascii_uppercase().starts_with("EXPLAIN") {
+        let upper = trimmed.to_ascii_uppercase();
+        let explain_sql = if upper.starts_with("EXPLAIN")
+            || upper.starts_with("ANALYZE ")
+            || upper.starts_with("ANALYZE\n")
+            || upper.starts_with("ANALYZE\t")
+        {
             trimmed.to_string()
         } else {
             format!("EXPLAIN {trimmed}")
