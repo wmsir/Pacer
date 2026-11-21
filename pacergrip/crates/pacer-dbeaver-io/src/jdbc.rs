@@ -2,18 +2,48 @@ use std::collections::BTreeMap;
 
 use pacer_core::{CoreError, CoreResult, DbEngineType};
 
-/// Structured representation extracted from a DataGrip JDBC connection string.
+/// Structured representation extracted from a JDBC or native database connection URL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedJdbcUrl {
     pub db_type: DbEngineType,
     pub host: Option<String>,
     pub port: Option<u16>,
     pub database: Option<String>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub socket_path: Option<String>,
     pub params: BTreeMap<String, String>,
     pub raw_url: String,
 }
 
-/// Parses a JDBC URL and refines engine type using optional DataGrip `<driver-ref>` and `<jdbc-driver>`.
+/// Parses either a `jdbc:...` URL or a native URI (`mysql://`, `postgresql://`, `sqlite://`).
+/// Refines engine type using optional driver hints (e.g. `TiDB` / `OceanBase` over `jdbc:mysql://`).
+pub fn parse_connection_url(
+    raw_url: &str,
+    driver_ref: Option<&str>,
+    driver_class: Option<&str>,
+) -> CoreResult<ParsedJdbcUrl> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err(CoreError::ParseError("连接 URL 不能为空".to_string()));
+    }
+
+    let normalized = if strip_prefix_ci(trimmed, "jdbc:").is_some() {
+        trimmed.to_string()
+    } else if trimmed.contains("://") || strip_prefix_ci(trimmed, "sqlite:").is_some() {
+        format!("jdbc:{trimmed}")
+    } else {
+        return Err(CoreError::ParseError(format!(
+            "无效的连接 URL（需要 jdbc: 或 scheme:// 前缀）: {trimmed}"
+        )));
+    };
+
+    let mut parsed = parse_jdbc_url(&normalized, driver_ref, driver_class)?;
+    parsed.raw_url = trimmed.to_string();
+    Ok(parsed)
+}
+
+/// Parses a JDBC URL and refines engine type using optional driver hints.
 pub fn parse_jdbc_url(
     raw_url: &str,
     driver_ref: Option<&str>,
@@ -24,8 +54,9 @@ pub fn parse_jdbc_url(
         return Err(CoreError::ParseError("empty JDBC URL".to_string()));
     }
 
-    let after_jdbc = strip_prefix_ci(trimmed, "jdbc:")
-        .ok_or_else(|| CoreError::ParseError(format!("invalid JDBC URL (missing jdbc:): {trimmed}")))?;
+    let after_jdbc = strip_prefix_ci(trimmed, "jdbc:").ok_or_else(|| {
+        CoreError::ParseError(format!("invalid JDBC URL (missing jdbc:): {trimmed}"))
+    })?;
 
     let mut parsed = if let Some(rest) = strip_prefix_ci(after_jdbc, "oracle:") {
         parse_oracle_url(trimmed, rest)?
@@ -39,7 +70,6 @@ pub fn parse_jdbc_url(
         parse_standard_url(trimmed, after_jdbc)?
     };
 
-    // Refine engine type using DataGrip's driver-ref or driver-class (e.g. TiDB/OceanBase over jdbc:mysql://).
     if let Some(refined) = refine_engine_from_hints(&parsed.db_type, driver_ref, driver_class) {
         parsed.db_type = refined;
     }
@@ -49,6 +79,81 @@ pub fn parse_jdbc_url(
     }
 
     Ok(parsed)
+}
+
+/// Builds a canonical JDBC URL matching standard JetBrains/DBeaver driver conventions.
+/// Notably, TiDB uses `jdbc:mysql://host:port[/db]` (compatible with MySQL Connector/J).
+pub fn build_jdbc_url(
+    db_type: &DbEngineType,
+    host: Option<&str>,
+    port: Option<u16>,
+    database: Option<&str>,
+    params: &BTreeMap<String, String>,
+    socket_path: Option<&str>,
+) -> String {
+    let h = host.filter(|s| !s.trim().is_empty()).unwrap_or("localhost");
+    let p = port.or_else(|| db_type.default_port());
+    let port_part = p.map(|n| format!(":{n}")).unwrap_or_default();
+    let db = database.map(str::trim).unwrap_or_default();
+    let db_slash = if db.is_empty() {
+        String::new()
+    } else {
+        format!("/{db}")
+    };
+
+    let mut effective_params = params.clone();
+    if let Some(sock) = socket_path.map(str::trim).filter(|s| !s.is_empty()) {
+        effective_params
+            .entry("socket".to_string())
+            .or_insert_with(|| sock.to_string());
+    }
+
+    let base = match db_type {
+        DbEngineType::Sqlite => format!("jdbc:sqlite:{db}"),
+        DbEngineType::Oracle => format!("jdbc:oracle:thin:@//{h}{port_part}{db_slash}"),
+        DbEngineType::SqlServer => {
+            if db.is_empty() {
+                format!("jdbc:sqlserver://{h}{port_part}")
+            } else {
+                format!("jdbc:sqlserver://{h}{port_part};databaseName={db}")
+            }
+        }
+        DbEngineType::Dameng => format!("jdbc:dm://{h}{port_part}{db_slash}"),
+        DbEngineType::Kingbase => format!("jdbc:kingbase8://{h}{port_part}{db_slash}"),
+        DbEngineType::OpenGauss => format!("jdbc:opengauss://{h}{port_part}{db_slash}"),
+        DbEngineType::PostgreSql => format!("jdbc:postgresql://{h}{port_part}{db_slash}"),
+        DbEngineType::MariaDb => format!("jdbc:mariadb://{h}{port_part}{db_slash}"),
+        DbEngineType::OceanBase => format!("jdbc:oceanbase://{h}{port_part}{db_slash}"),
+        DbEngineType::ClickHouse => format!("jdbc:clickhouse://{h}{port_part}{db_slash}"),
+        // TiDB and MySQL both use standard `jdbc:mysql://host:port[/db]`.
+        DbEngineType::TiDb | DbEngineType::MySql | DbEngineType::Unknown(_) => {
+            format!("jdbc:mysql://{h}{port_part}{db_slash}")
+        }
+    };
+
+    if effective_params.is_empty() {
+        return base;
+    }
+
+    let sep = if matches!(db_type, DbEngineType::SqlServer) {
+        ";"
+    } else {
+        "&"
+    };
+    let joiner = if matches!(db_type, DbEngineType::SqlServer) {
+        ";"
+    } else if base.contains('?') {
+        "&"
+    } else {
+        "?"
+    };
+    let qs = effective_params
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(sep);
+
+    format!("{base}{joiner}{qs}")
 }
 
 fn strip_prefix_ci<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
@@ -90,7 +195,6 @@ fn parse_standard_url(raw_url: &str, after_jdbc: &str) -> CoreResult<ParsedJdbcU
     };
 
     let scheme_part = &after_jdbc[..scheme_end];
-    // Handle sub-protocols like `mysql:replication://` or `mysql:loadbalance://`.
     let primary_scheme = scheme_part.split(':').next().unwrap_or(scheme_part);
     let db_type = DbEngineType::from_str_loose(primary_scheme);
 
@@ -110,7 +214,7 @@ fn parse_standard_url(raw_url: &str, after_jdbc: &str) -> CoreResult<ParsedJdbcU
         None => (before_semi, None),
     };
 
-    let (host, port) = parse_authority_host_port(authority);
+    let (username, password, host, port) = parse_authority(authority);
 
     let mut params = BTreeMap::new();
     if let Some(q) = query_part {
@@ -132,22 +236,34 @@ fn parse_standard_url(raw_url: &str, after_jdbc: &str) -> CoreResult<ParsedJdbcU
                 .cloned()
         });
 
+    let socket_path = params
+        .get("socket")
+        .or_else(|| params.get("socketPath"))
+        .or_else(|| params.get("unixSocket"))
+        .cloned();
+
+    let effective_user = username.or_else(|| {
+        params
+            .get("user")
+            .or_else(|| params.get("username"))
+            .cloned()
+    });
+    let effective_pass = password.or_else(|| params.get("password").cloned());
+
     Ok(ParsedJdbcUrl {
         db_type,
         host,
         port,
         database,
+        username: effective_user,
+        password: effective_pass,
+        socket_path,
         params,
         raw_url: raw_url.to_string(),
     })
 }
 
 fn parse_oracle_url(raw_url: &str, after_oracle: &str) -> CoreResult<ParsedJdbcUrl> {
-    // Examples:
-    // thin:@//10.0.0.1:1521/orclpdb1
-    // thin:@10.0.0.1:1521:ORCL
-    // thin:@10.0.0.1:1521/orclpdb1
-    // thin:@(DESCRIPTION=(ADDRESS=(HOST=10.0.0.1)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=orcl)))
     let target = after_oracle
         .split('@')
         .nth(1)
@@ -164,6 +280,9 @@ fn parse_oracle_url(raw_url: &str, after_oracle: &str) -> CoreResult<ParsedJdbcU
             host,
             port: port.or(Some(1521)),
             database,
+            username: None,
+            password: None,
+            socket_path: None,
             params: BTreeMap::new(),
             raw_url: raw_url.to_string(),
         });
@@ -180,7 +299,7 @@ fn parse_oracle_url(raw_url: &str, after_oracle: &str) -> CoreResult<ParsedJdbcU
     let mut database = None;
 
     if let Some((authority, db_part)) = clean.split_once('/') {
-        let (h, p) = parse_authority_host_port(authority);
+        let (_, _, h, p) = parse_authority(authority);
         host = h;
         port = p;
         let db_trimmed = db_part.trim();
@@ -188,7 +307,6 @@ fn parse_oracle_url(raw_url: &str, after_oracle: &str) -> CoreResult<ParsedJdbcU
             database = Some(db_trimmed.to_string());
         }
     } else {
-        // Legacy SID syntax: host:port:SID or host:SID
         let parts: Vec<&str> = clean.split(':').collect();
         match parts.as_slice() {
             [h, p, sid] => {
@@ -221,6 +339,9 @@ fn parse_oracle_url(raw_url: &str, after_oracle: &str) -> CoreResult<ParsedJdbcU
         host,
         port: port.or(Some(1521)),
         database,
+        username: None,
+        password: None,
+        socket_path: None,
         params,
         raw_url: raw_url.to_string(),
     })
@@ -230,9 +351,8 @@ fn parse_sqlserver_url(raw_url: &str, after_sqlserver: &str) -> CoreResult<Parse
     let trimmed = after_sqlserver.strip_prefix("//").unwrap_or(after_sqlserver);
     let mut segments = trimmed.split(';');
     let authority_raw = segments.next().unwrap_or("");
-    // Strip optional `\\instanceName` from `host\instance:1433` or `host:1433\instance`.
     let authority = authority_raw.split('\\').next().unwrap_or(authority_raw);
-    let (host, port) = parse_authority_host_port(authority);
+    let (username, password, host, port) = parse_authority(authority);
 
     let mut params = BTreeMap::new();
     for seg in segments {
@@ -255,15 +375,19 @@ fn parse_sqlserver_url(raw_url: &str, after_sqlserver: &str) -> CoreResult<Parse
         host,
         port: port.or(Some(1433)),
         database,
+        username,
+        password,
+        socket_path: None,
         params,
         raw_url: raw_url.to_string(),
     })
 }
 
 fn parse_sqlite_url(raw_url: &str, after_sqlite: &str) -> ParsedJdbcUrl {
-    let (path_part, query_part) = match after_sqlite.find('?') {
-        Some(idx) => (&after_sqlite[..idx], Some(&after_sqlite[idx + 1..])),
-        None => (after_sqlite, None),
+    let stripped = after_sqlite.strip_prefix("//").unwrap_or(after_sqlite);
+    let (path_part, query_part) = match stripped.find('?') {
+        Some(idx) => (&stripped[..idx], Some(&stripped[idx + 1..])),
+        None => (stripped, None),
     };
     let mut params = BTreeMap::new();
     if let Some(q) = query_part {
@@ -274,42 +398,51 @@ fn parse_sqlite_url(raw_url: &str, after_sqlite: &str) -> ParsedJdbcUrl {
         host: None,
         port: None,
         database: non_empty(path_part),
+        username: None,
+        password: None,
+        socket_path: None,
         params,
         raw_url: raw_url.to_string(),
     }
 }
 
-fn parse_authority_host_port(authority: &str) -> (Option<String>, Option<u16>) {
-    // If multiple hosts are comma-separated (e.g. replica sets), take the first primary endpoint.
+fn parse_authority(
+    authority: &str,
+) -> (Option<String>, Option<String>, Option<String>, Option<u16>) {
     let first_endpoint = authority.split(',').next().unwrap_or("").trim();
-    // Strip optional userinfo (`user:pass@host:port`).
-    let host_port = first_endpoint
-        .rsplit_once('@')
-        .map(|(_, hp)| hp)
-        .unwrap_or(first_endpoint)
-        .trim();
+    let (userinfo, host_port) = match first_endpoint.rsplit_once('@') {
+        Some((u, hp)) => (Some(u), hp.trim()),
+        None => (None, first_endpoint.trim()),
+    };
+
+    let (username, password) = match userinfo {
+        Some(info) => match info.split_once(':') {
+            Some((u, p)) => (non_empty(u), non_empty(p)),
+            None => (non_empty(info), None),
+        },
+        None => (None, None),
+    };
 
     if host_port.is_empty() {
-        return (None, None);
+        return (username, password, None, None);
     }
 
-    // Handle bracketed IPv6 literals `[::1]:3306`.
     if let Some(rest) = host_port.strip_prefix('[') {
         if let Some((ip, tail)) = rest.split_once(']') {
             let port = tail
                 .strip_prefix(':')
                 .and_then(|p| p.trim().parse::<u16>().ok());
-            return (non_empty(ip), port);
+            return (username, password, non_empty(ip), port);
         }
     }
 
     if let Some((h, p)) = host_port.rsplit_once(':') {
         if let Ok(parsed_port) = p.trim().parse::<u16>() {
-            return (non_empty(h), Some(parsed_port));
+            return (username, password, non_empty(h), Some(parsed_port));
         }
     }
 
-    (non_empty(host_port), None)
+    (username, password, non_empty(host_port), None)
 }
 
 fn parse_kv_pairs(raw: &str, sep: char, out: &mut BTreeMap<String, String>) {

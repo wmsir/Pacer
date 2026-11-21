@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use pacer_core::{ConnectionMode, ConnectionProfile, EnvLevel};
 
-/// Specificity level of a fingerprint match between a DataGrip import and a Pacer instance.
+/// Specificity level of a fingerprint match between an imported profile and a Pacer instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum MatchKind {
@@ -12,7 +12,7 @@ pub enum MatchKind {
     Unmatched,
 }
 
-/// Result of matching a locally imported DataGrip profile against Pacer-managed instances.
+/// Result of matching a locally imported profile against Pacer-managed instances.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MatchResult {
@@ -25,7 +25,7 @@ pub struct MatchResult {
     pub upgrade_recommended: bool,
 }
 
-/// Matches locally imported DataGrip connections against Pacer-managed profiles by fingerprint & name.
+/// Matches locally imported connections against Pacer-managed profiles by fingerprint & name.
 pub fn match_profiles_with_pacer(
     local: &[ConnectionProfile],
     pacer_profiles: &[ConnectionProfile],

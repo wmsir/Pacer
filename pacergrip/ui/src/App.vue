@@ -8,12 +8,12 @@ import {
   deleteConnection,
   executeSql,
   explainSql,
-  exportDataGripXml,
+  exportDbeaverJson,
   extractStatementAtCursor,
   formatSql,
   getTableDdl,
-  importDataGripPath,
-  importDataGripXml,
+  importDbeaverPath,
+  importDbeaverText,
   isTauriRuntime,
   listColumns,
   listConnections,
@@ -322,13 +322,13 @@ const ddlTitle = ref<string>('');
 const historyEntries = ref<QueryHistoryEntry[]>([]);
 const astAnalysis = ref<ScriptAnalysis | null>(null);
 const busy = ref(false);
-const statusMessage = ref('就绪 · 支持 DataGrip XML 连接导入与 Markdown 选中执行 SQL');
+const statusMessage = ref('就绪 · 支持 DBeaver 连接导入、URL 双向绑定与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
 
 // Modals State
 const activeModal = ref<ActiveModalKind>('none');
 const editingProfile = ref<ConnectionProfile | null>(null);
-const exportedXml = ref('');
+const exportedJson = ref('');
 const dangerContext = ref<DangerModalContext | null>(null);
 const pendingDangerAction = ref<(() => Promise<void>) | null>(null);
 const passwordProfile = ref<ConnectionProfile | null>(null);
@@ -569,28 +569,21 @@ async function handleDbSelectChange(dbName: string) {
 async function handleSaveConnection(
   draft: ConnectionDraft,
   password: string | null,
-  testFirst: boolean,
+  closeAfter: boolean,
 ) {
   busy.value = true;
   try {
     const saved = await saveConnection(draft, password);
     connections.value = await listConnections();
+    editingProfile.value = saved;
     if (activeTab.value) {
       activeTab.value.profileId = saved.id;
     }
-    if (testFirst) {
-      const ping = await testConnection(saved.id, password);
-      if (ping.success) {
-        setStatus(`连接成功: ${saved.name} (${ping.latencyMs}ms · ${ping.serverVersion ?? 'OK'})`);
-        appendLog(`PING OK [${saved.name}] ${ping.latencyMs}ms ${ping.serverVersion ?? ''}`);
-        await loadDatabasesForProfile(saved, true);
-        activeModal.value = 'none';
-      } else {
-        setStatus(`已保存但连通性失败: ${ping.message}`, true);
-      }
-    } else {
-      setStatus(`已保存数据源: ${saved.name}`);
+    setStatus(`已保存数据源: ${saved.name}`);
+    appendLog(`SAVED [${saved.name}]`);
+    if (closeAfter) {
       activeModal.value = 'none';
+      void loadDatabasesForProfile(saved, true);
     }
   } catch (err) {
     setStatus(`保存数据源失败: ${String(err)}`, true);
@@ -669,43 +662,43 @@ async function handleSubmitPassword(profileId: string, password: string) {
   }
 }
 
-async function handleImportPath(path: string) {
+async function handleImportDbeaverPath(path: string, includePasswords: boolean) {
   busy.value = true;
   try {
-    const imported = await importDataGripPath(path);
+    const imported = await importDbeaverPath(path, includePasswords);
     connections.value = await listConnections();
-    setStatus(`已从 DataGrip 文件导入 ${imported.length} 个数据源`);
-    appendLog(`IMPORT DataGrip Path (${path}) -> ${imported.length} profile(s)`);
+    setStatus(`已从 DBeaver 导入 ${imported.length} 个数据源`);
+    appendLog(`IMPORT DBeaver Path (${path}) -> ${imported.length} profile(s)`);
     activeModal.value = 'none';
   } catch (err) {
-    setStatus(`导入 DataGrip 路径失败: ${String(err)}`, true);
+    setStatus(`导入 DBeaver 路径失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function handleImportXml(xml: string) {
+async function handleImportDbeaverText(text: string) {
   busy.value = true;
   try {
-    const imported = await importDataGripXml(xml);
+    const imported = await importDbeaverText(text);
     connections.value = await listConnections();
-    setStatus(`已从剪贴板 XML 导入 ${imported.length} 个数据源`);
-    appendLog(`IMPORT DataGrip XML -> ${imported.length} profile(s)`);
+    setStatus(`已从 DBeaver 配置解析导入 ${imported.length} 个数据源`);
+    appendLog(`IMPORT DBeaver Text -> ${imported.length} profile(s)`);
     activeModal.value = 'none';
   } catch (err) {
-    setStatus(`解析 DataGrip XML 失败: ${String(err)}`, true);
+    setStatus(`解析 DBeaver 配置失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function handleExportXml() {
+async function handleExportDbeaverJson() {
   busy.value = true;
   try {
-    exportedXml.value = await exportDataGripXml();
-    setStatus('已生成 DataGrip 兼容 dataSources.xml（不含明文密码）');
+    exportedJson.value = await exportDbeaverJson();
+    setStatus('已生成 DBeaver 兼容 data-sources.json（不含明文密码）');
   } catch (err) {
-    setStatus(`导出 XML 失败: ${String(err)}`, true);
+    setStatus(`导出 DBeaver JSON 失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
@@ -1325,7 +1318,7 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-open-folder', category: 'action', label: t('openFolder'), detail: '挂载本地目录到文件资源管理器', badge: '文件' },
     { id: 'act-demo-md', category: 'action', label: t('openDemoMd'), detail: '体验 Markdown 内联 CodeLens 与选中执行 SQL', badge: '示例' },
     { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
-    { id: 'act-import', category: 'action', label: t('importDataGrip'), detail: '导入 dataSources.xml / .idea / Settings .zip', badge: 'DataGrip' },
+    { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: 'Ctrl+N' },
     { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: 'Ctrl+Alt+L' },
     { id: 'act-theme', category: 'action', label: `切换主题 (${theme.value === 'dark' ? t('themeLight') : t('themeDark')})`, detail: '在 Darcula 深色与 IntelliJ 浅色主题间切换', badge: '主题' },
@@ -1599,13 +1592,13 @@ onBeforeUnmount(() => {
                 <span>{{ t('newConnection') }}...</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'import'">
-                <span>{{ t('importDataGrip') }}</span>
+                <span>{{ t('importDbeaver') }}</span>
               </button>
               <button
                 class="dropdown-item"
-                @click="openMenu = null; activeModal = 'import'; handleExportXml()"
+                @click="openMenu = null; activeModal = 'import'; handleExportDbeaverJson()"
               >
-                <span>{{ t('exportDataGrip') }}</span>
+                <span>{{ t('exportDbeaver') }}</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; handleInitDemoSqlite()">
@@ -1830,7 +1823,7 @@ onBeforeUnmount(() => {
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
           @new-connection="openConnectionModal(null)"
-          @import-datagrip="activeModal = 'import'"
+          @import-dbeaver="activeModal = 'import'"
           @init-demo="handleInitDemoSqlite"
           @toggle-profile="toggleProfileNode"
           @toggle-database="toggleDatabaseNode"
@@ -2528,13 +2521,13 @@ onBeforeUnmount(() => {
       :danger-context="dangerContext"
       :password-profile="passwordProfile"
       :search-items="searchItems"
-      :exported-xml="exportedXml"
+      :exported-json="exportedJson"
       :busy="busy"
       @close="activeModal = 'none'"
       @save-connection="handleSaveConnection"
-      @import-path="handleImportPath"
-      @import-xml="handleImportXml"
-      @export-xml="handleExportXml"
+      @import-dbeaver-path="handleImportDbeaverPath"
+      @import-dbeaver-text="handleImportDbeaverText"
+      @export-dbeaver-json="handleExportDbeaverJson"
       @reload-encoding="handleReloadEncoding"
       @convert-encoding="handleConvertEncoding"
       @confirm-danger="confirmDangerExecution"

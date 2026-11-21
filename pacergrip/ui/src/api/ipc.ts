@@ -16,6 +16,24 @@ export interface CapabilityFlags {
   canRelease: boolean;
 }
 
+export interface SshTunnelConfig {
+  id?: string | null;
+  host: string;
+  port: number;
+  username: string;
+  authType: string;
+  keyFile?: string | null;
+  enabled: boolean;
+}
+
+export interface SslConfig {
+  enabled: boolean;
+  caCert?: string | null;
+  clientCert?: string | null;
+  clientKey?: string | null;
+  mode?: string | null;
+}
+
 export interface DirectConfig {
   dbType: string | Record<string, string>;
   host?: string | null;
@@ -25,13 +43,16 @@ export interface DirectConfig {
   driverRef?: string | null;
   driverClass?: string | null;
   username?: string | null;
+  driverProperties?: Record<string, string>;
   readOnly: boolean;
-  ssh?: {
-    enabled: boolean;
-    host: string;
-    port: number;
-    username: string;
-  } | null;
+  ssh?: SshTunnelConfig | null;
+  ssl?: SslConfig | null;
+  schemaPattern?: string | null;
+  connectionType?: 'default' | 'socket' | 'urlOnly' | string | null;
+  authType?: 'userPassword' | 'noAuth' | string | null;
+  passwordSaveMode?: 'forever' | 'session' | 'never' | string | null;
+  socketPath?: string | null;
+  hasSavedPassword?: boolean;
 }
 
 export interface ConnectionFingerprint {
@@ -69,8 +90,25 @@ export interface ConnectionDraft {
   jdbcUrl?: string | null;
   username?: string | null;
   env?: EnvLevel;
+  color?: string | null;
   readOnly?: boolean;
   comment?: string | null;
+  connectionType?: 'default' | 'socket' | 'urlOnly' | string | null;
+  authType?: 'userPassword' | 'noAuth' | string | null;
+  passwordSaveMode?: 'forever' | 'session' | 'never' | string | null;
+  socketPath?: string | null;
+  driverProperties?: Record<string, string>;
+  sslMode?: string | null;
+  ssh?: SshTunnelConfig | null;
+  schemaPattern?: string | null;
+}
+
+export interface DbeaverDiscoveryItem {
+  path: string;
+  workspaceName: string;
+  format: string;
+  connectionCount: number;
+  hasCredentialsFile: boolean;
 }
 
 export interface PingMetrics {
@@ -279,15 +317,24 @@ export async function pickSaveFilePath(defaultPath?: string): Promise<string | n
   return typeof res === 'string' ? res : null;
 }
 
-export async function pickDataGripImportFile(): Promise<string | null> {
+export async function pickDbeaverImportFile(): Promise<string | null> {
   assertTauri();
   const res = await dialogOpen({
     multiple: false,
     directory: false,
     filters: [
-      { name: 'DataGrip Export (XML / ZIP)', extensions: ['xml', 'zip'] },
+      { name: 'DBeaver Connections (JSON / DBP / ZIP / XML)', extensions: ['json', 'dbp', 'zip', 'xml'] },
       { name: '所有文件', extensions: ['*'] },
     ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickDbeaverFolder(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: true,
   });
   return typeof res === 'string' ? res : null;
 }
@@ -318,24 +365,40 @@ export async function testConnection(
   return invoke('test_connection_cmd', { profileId, password: password ?? null });
 }
 
+export async function testConnectionDraft(
+  draft: ConnectionDraft,
+  password?: string | null,
+): Promise<PingMetrics> {
+  assertTauri();
+  return invoke('test_connection_draft_cmd', { draft, password: password ?? null });
+}
+
 export async function createDemoSqliteConnection(): Promise<ConnectionProfile> {
   assertTauri();
   return invoke('create_demo_sqlite_connection');
 }
 
-export async function importDataGripXml(xml: string): Promise<ConnectionProfile[]> {
-  assertTauri();
-  return invoke('import_datagrip_xml_cmd', { xml });
+export async function discoverDbeaver(): Promise<DbeaverDiscoveryItem[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('discover_dbeaver_cmd');
 }
 
-export async function importDataGripPath(path: string): Promise<ConnectionProfile[]> {
+export async function importDbeaverPath(
+  path: string,
+  includePasswords = true,
+): Promise<ConnectionProfile[]> {
   assertTauri();
-  return invoke('import_datagrip_path_cmd', { path });
+  return invoke('import_dbeaver_path_cmd', { path, includePasswords });
 }
 
-export async function exportDataGripXml(profileIds?: string[]): Promise<string> {
+export async function importDbeaverText(text: string): Promise<ConnectionProfile[]> {
   assertTauri();
-  return invoke('export_datagrip_xml_cmd', { profileIds: profileIds ?? null });
+  return invoke('import_dbeaver_text_cmd', { text });
+}
+
+export async function exportDbeaverJson(profileIds?: string[]): Promise<string> {
+  assertTauri();
+  return invoke('export_dbeaver_json_cmd', { profileIds: profileIds ?? null });
 }
 
 export async function listDatabases(

@@ -59,6 +59,11 @@ mod tests {
             ssl: None,
             read_only,
             schema_pattern: None,
+            connection_type: Some("default".to_string()),
+            auth_type: Some("noAuth".to_string()),
+            password_save_mode: Some("session".to_string()),
+            socket_path: None,
+            has_saved_password: false,
         }
     }
 
@@ -258,6 +263,11 @@ mod tests {
             ssl: None,
             read_only: false,
             schema_pattern: None,
+            connection_type: Some("default".to_string()),
+            auth_type: Some("userPassword".to_string()),
+            password_save_mode: Some("session".to_string()),
+            socket_path: None,
+            has_saved_password: false,
         };
         let err = match connect_direct(&cfg, Some("tiger")).await {
             Ok(_) => panic!("expected Unsupported error for Oracle"),

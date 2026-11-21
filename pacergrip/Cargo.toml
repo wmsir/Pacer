@@ -2,7 +2,7 @@
 resolver = "2"
 members = [
   "crates/pacer-core",
-  "crates/pacer-datagrip-io",
+  "crates/pacer-dbeaver-io",
   "crates/pacer-sql-ast",
   "crates/pacer-drivers",
   "crates/pacer-client",
@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "MIT"
 
@@ -31,3 +31,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "mysql", "postgres", "sqlite", "json", "chrono"] }
 encoding_rs = "0.8"
 chardetng = "0.1"
+aes = "0.8"
+cbc = "0.1"

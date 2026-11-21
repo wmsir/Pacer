@@ -1,5 +1,5 @@
 [package]
-name = "pacer-datagrip-io"
+name = "pacer-dbeaver-io"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,3 +11,5 @@ serde_json.workspace = true
 quick-xml.workspace = true
 zip.workspace = true
 uuid.workspace = true
+aes.workspace = true
+cbc.workspace = true

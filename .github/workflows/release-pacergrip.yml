@@ -106,7 +106,9 @@ jobs:
             - **JetBrains DataGrip New UI 桌面工作台**：默认简体中文（支持中英文切换）、Darcula 深色 / IntelliJ 浅色主题、居中 Run Widget、左右工具侧边栏、可拖拽分栏、随处搜索（`Ctrl+K`）。
             - **Markdown (`.md`) & SQL (`.sql`) 原生集成**：打开本地文件/目录、在 `.md` 中框选任意 SQL 按 `Ctrl+Enter` 直接执行、每个 ```` ```sql ```` 代码块内置 CodeLens 执行条（`▶ 执行 / ⚡ EXPLAIN / ⧉ 控制台打开`）与安全分栏预览。
             - **专业级状态栏与多编码无乱码**：实时显示光标行列、选区字符/行数、总行数、文件字节数、`CRLF/LF` 与 `UTF-8 / UTF-8 BOM / GBK / UTF-16 LE/BE / Windows-1252` 编码（支持指定编码重读与转码保存）。
-            - **原生异步 Rust SQL 驱动 (`sqlx`) & DataGrip 兼容**：支持 SQLite（内置示例库与示例 `.md` 手册）、MySQL / MariaDB / TiDB / OceanBase、PostgreSQL / openGauss / KingbaseES；支持 DataGrip XML / `.idea` / `.zip` 导入与无密码导出。
+            - **专业级连接配置 & URL 双向绑定**：支持 `Driver`（TiDB / MySQL / PostgreSQL / SQLite 等）、`default / Unix Socket / URL only`、`Host / Port / User / Password / Save (Forever / Until restart / Never) / Database` 与 `URL (Overrides settings above)` 实时双向绑定，支持底栏内联 `Test Connection`（实时显示 `TiDB 6.5.5` 等版本）与 `OK / Cancel / Apply`。
+            - **DBeaver 连接全兼容导入/导出**：支持一键扫描本机 DBeaver 工作区、导入 `data-sources.json` / `.dbp` 项目导出包 / `.dbeaver` 目录 / `.dbeaver-data-sources.xml`（并可选同步读取 `credentials-config.json` 密码），以及导出无密码 DBeaver `data-sources.json`（已移除 DataGrip 连接导入）。
+            - **原生异步 Rust SQL 驱动 (`sqlx`)**：支持 SQLite（内置示例库与示例 `.md` 手册）、TiDB 6.5.5+ / MySQL 5.7/8.0 / MariaDB / OceanBase、PostgreSQL / openGauss / KingbaseES（支持空 Database 集群级连接与 SSL 模式控制）。
             - **商业级结果集与安全防线**：CodeMirror 6 自动补全、多结果标签页、行列转置、单元格值检视器、CSV/JSON/Markdown/INSERT 导出、表结构与索引检视、高危 SQL 二次确认拦截，以及预留 `pacer-core::extension` 扩展插槽。
 
             **运行环境 / System Requirement**：Windows 10 / 11 (x64)。

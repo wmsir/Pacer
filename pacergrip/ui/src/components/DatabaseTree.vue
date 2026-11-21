@@ -24,7 +24,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'new-connection'): void;
-  (e: 'import-datagrip'): void;
+  (e: 'import-dbeaver'): void;
   (e: 'init-demo'): void;
   (e: 'toggle-profile', profile: ConnectionProfile): void;
   (e: 'toggle-database', profile: ConnectionProfile, dbName: string): void;
@@ -140,7 +140,7 @@ function closeContext() {
         <button class="icon-btn compact" :title="t('newConnection')" @click="emit('new-connection')">
           ＋
         </button>
-        <button class="icon-btn compact" :title="t('importDataGrip')" @click="emit('import-datagrip')">
+        <button class="icon-btn compact" :title="t('importDbeaver')" @click="emit('import-dbeaver')">
           ⤓
         </button>
         <button class="icon-btn compact" :title="t('openDemoDb')" @click="emit('init-demo')">

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
-use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow, PgSslMode};
 use sqlx::{Column, Executor, Row, TypeInfo, ValueRef};
 use tokio::sync::mpsc;
 
@@ -40,6 +40,10 @@ impl PostgresBackend {
             .port(port)
             .username(config.username.as_deref().unwrap_or("postgres"));
 
+        if let Some(ssl_mode) = resolve_pg_ssl_mode(config) {
+            opts = opts.ssl_mode(ssl_mode);
+        }
+
         if let Some(pwd) = password {
             opts = opts.password(pwd);
         }
@@ -60,6 +64,45 @@ impl PostgresBackend {
             engine_label: config.db_type.as_pacer_db_type().to_string(),
             engine_type: config.db_type.clone(),
         })
+    }
+}
+
+fn resolve_pg_ssl_mode(config: &DirectConfig) -> Option<PgSslMode> {
+    if let Some(ref ssl) = config.ssl {
+        if !ssl.enabled {
+            return Some(PgSslMode::Disable);
+        }
+        if let Some(ref mode) = ssl.mode {
+            return parse_pg_ssl_mode_str(mode);
+        }
+    }
+    for key in ["sslmode", "sslMode", "ssl-mode"] {
+        if let Some(val) = config.driver_properties.get(key) {
+            if let Some(mode) = parse_pg_ssl_mode_str(val) {
+                return Some(mode);
+            }
+        }
+    }
+    if let Some(ssl) = config.driver_properties.get("ssl") {
+        if ssl.eq_ignore_ascii_case("false") || ssl == "0" {
+            return Some(PgSslMode::Disable);
+        }
+        if ssl.eq_ignore_ascii_case("true") || ssl == "1" {
+            return Some(PgSslMode::Require);
+        }
+    }
+    None
+}
+
+fn parse_pg_ssl_mode_str(raw: &str) -> Option<PgSslMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "disable" | "disabled" | "false" | "off" => Some(PgSslMode::Disable),
+        "allow" => Some(PgSslMode::Allow),
+        "prefer" | "preferred" => Some(PgSslMode::Prefer),
+        "require" | "required" | "true" => Some(PgSslMode::Require),
+        "verify-ca" | "verify_ca" => Some(PgSslMode::VerifyCa),
+        "verify-full" | "verify_full" | "verify_identity" => Some(PgSslMode::VerifyFull),
+        _ => None,
     }
 }
 

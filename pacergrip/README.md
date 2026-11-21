@@ -26,10 +26,10 @@
    - **表结构与索引检视器**：跨 SQLite / MySQL / PostgreSQL 展示字段类型、主键、可空性及索引明细。
    - **高危 SQL 二次确认拦截**：内置 `sqlparser-rs` AST 静态分析器，自动识别 `DROP` / `TRUNCATE` / 缺 `WHERE` 的 `UPDATE`/`DELETE` 以及针对 `PROD` 数据源的写入变更，执行前弹窗强制确认。
 
-5. **DataGrip 连接全兼容 & 预留扩展架构**
-   - 支持导入 DataGrip 剪贴板 XML、`.idea/dataSources.xml` + `dataSources.local.xml` + `sshConfigs.xml` 与 Settings `.zip`，并可无密码安全导出回 DataGrip XML。
-   - 数据库密码仅缓存在当前桌面会话内存中，绝不写入磁盘或导出文件。
-   - 完整保留 `pacer-core::extension`（`GovernanceExtension` / `AiSqlExtension`）与 `pacer-client`（`--features pacer-extension`），保持独立 DataGrip 工具体验的同时可随时扩展治理与 AI 能力。
+5. **DBeaver 连接全兼容 & URL 双向绑定配置面板**
+   - 完整复刻专业级数据源配置弹窗：`Name` + `Color` + `Add comment`、`General / Options / SSH/SSL / Schemas / Advanced` 五标签页、`default / Unix Socket / URL only` 三模式切换、`Host / Port / User / Password / Save (Forever / Until restart / Never) / Database` 与 `URL (Overrides settings above)` 实时双向绑定，以及底栏内联 **`测试连接 (Test Connection)`**（实时展示服务端版本如 `TiDB 6.5.5` 与延迟）和 `OK / Cancel / Apply`。
+   - **DBeaver 连接导入与导出 (`pacer-dbeaver-io`)**：支持一键自动扫描本机 DBeaver 工作区（`%APPDATA%\DBeaverData\workspace6\...`）、导入 `data-sources.json` / `.dbp` 项目包 / `.dbeaver` 目录 / 旧版 `.dbeaver-data-sources.xml` / 粘贴文本，并支持可选解密读取 `credentials-config.json` 已保存密码；可无密码安全导出回 DBeaver `data-sources.json`。
+   - 完整保留 `pacer-core::extension`（`GovernanceExtension` / `AiSqlExtension`）与 `pacer-client`（`--features pacer-extension`）。
 
 ## 工作区结构
 
@@ -42,7 +42,7 @@ Pacer/
     ├── crates/
     │   ├── pacer-core/        # ConnectionProfile, DbBackend trait, 文件/索引 DTO 与扩展插槽
     │   ├── pacer-drivers/     # 原生异步 sqlx 驱动 (SQLite, MySQL/MariaDB/TiDB/OceanBase, PostgreSQL/openGauss/Kingbase)
-    │   ├── pacer-datagrip-io/ # DataGrip XML / .idea / sshConfigs.xml / .zip 解析与导出
+    │   ├── pacer-dbeaver-io/  # DBeaver data-sources.json / .dbp / credentials-config.json / XML 导入导出与 URL 解析
     │   ├── pacer-sql-ast/     # sqlparser-rs AST 拆分、光标语句提取、Markdown SQL 块提取、格式化与风险检测
     │   └── pacer-client/      # 可选 wmsir/Pacer REST SDK（由 Cargo feature `pacer-extension` 控制）
     ├── src-tauri/             # Tauri v2 原生宿主（连接管理、流式查询、多编码文件读写、系统弹窗）

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow, MySqlSslMode};
 use sqlx::{Column, Executor, Row, TypeInfo, ValueRef};
 use tokio::sync::mpsc;
 
@@ -40,6 +40,16 @@ impl MySqlBackend {
             .host(host)
             .port(port)
             .username(config.username.as_deref().unwrap_or("root"));
+
+        if config.connection_type.as_deref() == Some("socket") {
+            if let Some(sock) = config.socket_path.as_deref().filter(|s| !s.trim().is_empty()) {
+                opts = opts.socket(sock);
+            }
+        }
+
+        if let Some(ssl_mode) = resolve_mysql_ssl_mode(config) {
+            opts = opts.ssl_mode(ssl_mode);
+        }
 
         if let Some(pwd) = password {
             opts = opts.password(pwd);
@@ -83,39 +93,56 @@ impl DbBackend for MySqlBackend {
     }
 
     async fn list_databases(&self) -> CoreResult<Vec<DatabaseMeta>> {
-        let rows = sqlx::query(
-            "SELECT s.SCHEMA_NAME AS schema_name, \
-                    s.DEFAULT_CHARACTER_SET_NAME AS charset, \
-                    s.DEFAULT_COLLATION_NAME AS collation, \
-                    COUNT(t.TABLE_NAME) AS table_count, \
-                    CAST(COALESCE(SUM(t.DATA_LENGTH + t.INDEX_LENGTH) / 1048576.0, 0) AS DOUBLE) AS size_mb \
-             FROM information_schema.SCHEMATA s \
-             LEFT JOIN information_schema.TABLES t ON s.SCHEMA_NAME = t.TABLE_SCHEMA \
-             GROUP BY s.SCHEMA_NAME, s.DEFAULT_CHARACTER_SET_NAME, s.DEFAULT_COLLATION_NAME \
-             ORDER BY s.SCHEMA_NAME",
+        // Universal query compatible with MySQL 5.6/5.7/8.0, MariaDB, OceanBase, and TiDB 6.5.5+
+        // (avoids MySQL 8.0-only `CAST(... AS DOUBLE)` and heavy cross-table joins on large clusters).
+        let primary = sqlx::query(
+            "SELECT SCHEMA_NAME AS schema_name, \
+                    DEFAULT_CHARACTER_SET_NAME AS charset, \
+                    DEFAULT_COLLATION_NAME AS collation \
+             FROM information_schema.SCHEMATA \
+             ORDER BY SCHEMA_NAME",
         )
         .fetch_all(&self.pool)
-        .await
-        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+        .await;
 
-        let mut out = Vec::with_capacity(rows.len());
-        for row in rows {
-            let name: String = row.try_get("schema_name").unwrap_or_default();
-            let is_sys = matches!(
-                name.to_ascii_lowercase().as_str(),
-                "information_schema" | "performance_schema" | "mysql" | "sys"
-            );
-            let table_count: i64 = row.try_get("table_count").unwrap_or(0);
-            let size_mb: f64 = row.try_get("size_mb").unwrap_or(0.0);
-            out.push(DatabaseMeta {
-                name,
-                charset: row.try_get("charset").ok(),
-                collation: row.try_get("collation").ok(),
-                table_count: u64::try_from(table_count).ok(),
-                data_size_mb: Some((size_mb * 100.0).round() / 100.0),
-                is_system: is_sys,
-                comment: None,
-            });
+        let mut out = Vec::new();
+        match primary {
+            Ok(rows) => {
+                out.reserve(rows.len());
+                for row in rows {
+                    let name: String = row.try_get("schema_name").unwrap_or_default();
+                    let is_sys = is_mysql_system_schema(&name);
+                    out.push(DatabaseMeta {
+                        name,
+                        charset: row.try_get("charset").ok(),
+                        collation: row.try_get("collation").ok(),
+                        table_count: None,
+                        data_size_mb: None,
+                        is_system: is_sys,
+                        comment: None,
+                    });
+                }
+            }
+            Err(_) => {
+                // Fallback for highly restricted accounts that can run `SHOW DATABASES`.
+                let rows = sqlx::query("SHOW DATABASES")
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                for row in rows {
+                    let name: String = row.try_get::<String, _>(0).unwrap_or_default();
+                    let is_sys = is_mysql_system_schema(&name);
+                    out.push(DatabaseMeta {
+                        name,
+                        charset: None,
+                        collation: None,
+                        table_count: None,
+                        data_size_mb: None,
+                        is_system: is_sys,
+                        comment: None,
+                    });
+                }
+            }
         }
         Ok(out)
     }
@@ -384,6 +411,57 @@ impl DbBackend for MySqlBackend {
 
     fn capabilities(&self) -> CapabilityFlags {
         CapabilityFlags::direct_full(self.read_only)
+    }
+}
+
+fn is_mysql_system_schema(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "information_schema" | "performance_schema" | "mysql" | "sys" | "metrics_schema"
+    )
+}
+
+fn resolve_mysql_ssl_mode(config: &DirectConfig) -> Option<MySqlSslMode> {
+    if let Some(ref ssl) = config.ssl {
+        if !ssl.enabled {
+            return Some(MySqlSslMode::Disabled);
+        }
+        if let Some(ref mode) = ssl.mode {
+            return parse_mysql_ssl_mode_str(mode);
+        }
+    }
+    for key in ["sslMode", "ssl-mode", "sslmode"] {
+        if let Some(val) = config.driver_properties.get(key) {
+            if let Some(mode) = parse_mysql_ssl_mode_str(val) {
+                return Some(mode);
+            }
+        }
+    }
+    if let Some(use_ssl) = config
+        .driver_properties
+        .get("useSSL")
+        .or_else(|| config.driver_properties.get("ssl"))
+    {
+        if use_ssl.eq_ignore_ascii_case("false") || use_ssl == "0" {
+            return Some(MySqlSslMode::Disabled);
+        }
+        if use_ssl.eq_ignore_ascii_case("true") || use_ssl == "1" {
+            return Some(MySqlSslMode::Required);
+        }
+    }
+    None
+}
+
+fn parse_mysql_ssl_mode_str(raw: &str) -> Option<MySqlSslMode> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "disabled" | "disable" | "false" | "off" | "none" => Some(MySqlSslMode::Disabled),
+        "preferred" | "prefer" => Some(MySqlSslMode::Preferred),
+        "required" | "require" | "true" => Some(MySqlSslMode::Required),
+        "verify_ca" | "verify-ca" => Some(MySqlSslMode::VerifyCa),
+        "verify_identity" | "verify-identity" | "verify_full" | "verify-full" => {
+            Some(MySqlSslMode::VerifyIdentity)
+        }
+        _ => None,
     }
 }
 

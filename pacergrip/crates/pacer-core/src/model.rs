@@ -204,6 +204,21 @@ pub struct DirectConfig {
     pub ssl: Option<SslConfig>,
     pub read_only: bool,
     pub schema_pattern: Option<String>,
+    /// Connection mode: `"default"`, `"socket"`, or `"urlOnly"`.
+    #[serde(default)]
+    pub connection_type: Option<String>,
+    /// Authentication mode: `"userPassword"` or `"noAuth"`.
+    #[serde(default)]
+    pub auth_type: Option<String>,
+    /// Password persistence strategy: `"forever"`, `"session"`, or `"never"`.
+    #[serde(default)]
+    pub password_save_mode: Option<String>,
+    /// Optional Unix domain socket path when `connection_type == "socket"`.
+    #[serde(default)]
+    pub socket_path: Option<String>,
+    /// Indicates whether a password is already saved (either in encrypted store or current session).
+    #[serde(default)]
+    pub has_saved_password: bool,
 }
 
 /// Execution mode governing whether queries run locally or through Pacer governance proxy.
@@ -546,4 +561,15 @@ pub struct WorkspaceFileEntry {
     pub is_dir: bool,
     pub size: u64,
     pub extension: Option<String>,
+}
+
+/// Auto-discovered local DBeaver workspace connection file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbeaverDiscoveryItem {
+    pub path: String,
+    pub workspace_name: String,
+    pub format: String,
+    pub connection_count: usize,
+    pub has_credentials_file: bool,
 }
