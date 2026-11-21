@@ -15,11 +15,13 @@ const props = defineProps<{
   showRecentFiles: boolean;
   activeFilePath: string | null;
   dockSide: 'left' | 'right';
+  workspaceDir?: string;
   showDemoManual?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'mount-folder'): void;
+  (e: 'open-workspace-dir'): void;
   (e: 'toggle-root-dir'): void;
   (e: 'close-mounted-dir'): void;
   (e: 'toggle-dir', dirPath: string): void;
@@ -76,11 +78,71 @@ defineExpose({ scrollToActiveFile });
 <template>
   <div style="display: flex; flex-direction: column; height: 100%; width: 100%">
     <div class="tw-header">
-      <span style="display: inline-flex; align-items: center; gap: 6px">
+      <span class="tw-title" :title="t('toolFiles')">
         <IdeIcon name="folder-open" :size="14" />
-        <span>{{ t('toolFiles') }}</span>
+        <span class="tw-title-text">{{ t('toolFiles') }}</span>
       </span>
       <div class="tw-actions">
+        <button
+          class="icon-btn compact"
+          :class="{ active: showRecentFiles }"
+          :title="showRecentFiles ? '隐藏最近打开的文件' : '显示最近打开的文件'"
+          @click="emit('toggle-show-recent')"
+        >
+          <IdeIcon name="clock" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
+          title="全部折叠目录树"
+          @click="emit('collapse-all-dirs')"
+        >
+          <IdeIcon name="collapse-all" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
+          :title="dockSide === 'right' ? '将文件面板移至左侧' : '将文件面板移至右侧'"
+          @click="emit('toggle-dock-side')"
+        >
+          <IdeIcon :name="dockSide === 'right' ? 'dock-left' : 'dock-right'" :size="13" />
+        </button>
+      </div>
+    </div>
+
+    <div class="file-toolbar-strip">
+      <div style="display: flex; align-items: center; gap: 2px">
+        <button
+          class="icon-btn compact"
+          :title="t('openFile')"
+          @click="emit('open-file-dialog')"
+        >
+          <IdeIcon name="sql-file" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
+          :title="t('openFolder')"
+          @click="emit('mount-folder')"
+        >
+          <IdeIcon name="folder" :size="13" />
+        </button>
+        <button
+          v-if="workspaceDir"
+          class="icon-btn compact"
+          :title="`打开 Pacer 工作空间目录 (${workspaceDir})`"
+          @click="emit('open-workspace-dir')"
+        >
+          <IdeIcon name="project" :size="13" color="var(--accent)" />
+        </button>
+        <button
+          v-if="mountedDir"
+          class="icon-btn compact"
+          :title="t('btnRefresh')"
+          @click="emit('refresh-dir')"
+        >
+          <IdeIcon name="refresh" :size="13" />
+        </button>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 2px">
         <button
           class="icon-btn compact"
           :disabled="!activeFilePath"
@@ -97,50 +159,6 @@ defineExpose({ scrollToActiveFile });
         >
           <IdeIcon name="reveal" :size="13" />
         </button>
-        <button
-          class="icon-btn compact"
-          title="全部折叠目录树"
-          @click="emit('collapse-all-dirs')"
-        >
-          <IdeIcon name="collapse-all" :size="13" />
-        </button>
-        <button
-          class="icon-btn compact"
-          :title="t('openFile')"
-          @click="emit('open-file-dialog')"
-        >
-          <IdeIcon name="sql-file" :size="13" />
-        </button>
-        <button
-          class="icon-btn compact"
-          :title="t('openFolder')"
-          @click="emit('mount-folder')"
-        >
-          <IdeIcon name="folder" :size="13" />
-        </button>
-        <button
-          v-if="mountedDir"
-          class="icon-btn compact"
-          :title="t('btnRefresh')"
-          @click="emit('refresh-dir')"
-        >
-          <IdeIcon name="refresh" :size="13" />
-        </button>
-        <button
-          class="icon-btn compact"
-          :class="{ active: showRecentFiles }"
-          :title="showRecentFiles ? '隐藏最近打开的文件' : '显示最近打开的文件'"
-          @click="emit('toggle-show-recent')"
-        >
-          <IdeIcon name="clock" :size="13" />
-        </button>
-        <button
-          class="icon-btn compact"
-          :title="dockSide === 'right' ? '将本地文件面板移至左侧' : '将本地文件面板移至右侧'"
-          @click="emit('toggle-dock-side')"
-        >
-          <IdeIcon :name="dockSide === 'right' ? 'dock-left' : 'dock-right'" :size="13" />
-        </button>
       </div>
     </div>
 
@@ -149,17 +167,6 @@ defineExpose({ scrollToActiveFile });
     </div>
 
     <div ref="bodyEl" class="tw-body">
-      <div style="display: flex; gap: 6px; padding: 4px 2px 8px; flex-wrap: wrap">
-        <button class="btn btn-primary btn-sm" @click="emit('open-file-dialog')">
-          <IdeIcon name="sql-file" :size="12" />
-          打开 .md / .sql
-        </button>
-        <button v-if="showDemoManual !== false" class="btn btn-sm" @click="emit('open-demo-md')">
-          <IdeIcon name="md-file" :size="12" />
-          示例手册
-        </button>
-      </div>
-
       <template v-if="mountedDir">
         <!-- Root Mounted Folder Row (Collapsible Pure Tree, No "Up" Button) -->
         <div
@@ -223,10 +230,22 @@ defineExpose({ scrollToActiveFile });
 
       <div v-else class="empty-state" style="padding: 10px 6px">
         {{ t('emptyFilesHint') }}
-        <div style="margin-top: 8px">
+        <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap">
+          <button class="btn btn-primary btn-sm" @click="emit('open-file-dialog')">
+            <IdeIcon name="sql-file" :size="12" />
+            打开 .md / .sql
+          </button>
           <button class="btn btn-sm" @click="emit('mount-folder')">
             <IdeIcon name="folder-open" :size="13" />
             {{ t('openFolder') }}
+          </button>
+          <button v-if="workspaceDir" class="btn btn-sm" @click="emit('open-workspace-dir')">
+            <IdeIcon name="project" :size="12" />
+            工作空间
+          </button>
+          <button v-if="showDemoManual !== false" class="btn btn-sm" @click="emit('open-demo-md')">
+            <IdeIcon name="md-file" :size="12" />
+            示例手册
           </button>
         </div>
       </div>

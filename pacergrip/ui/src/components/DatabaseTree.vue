@@ -181,9 +181,9 @@ function closeContext() {
 <template>
   <div style="display: flex; flex-direction: column; width: 100%; height: 100%" @click="closeContext">
     <div class="tw-header">
-      <span style="display: inline-flex; align-items: center; gap: 6px">
+      <span class="tw-title" :title="t('toolDatabase')">
         <IdeIcon name="database" :size="14" color="#4D9BFF" />
-        <span>{{ t('toolDatabase') }}</span>
+        <span class="tw-title-text">{{ t('toolDatabase') }}</span>
       </span>
       <div class="tw-actions">
         <button class="icon-btn compact" :title="t('newProject')" @click="emit('new-project')">

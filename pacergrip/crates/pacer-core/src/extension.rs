@@ -77,7 +77,7 @@ pub trait AiSqlExtension: Send + Sync {
     async fn optimize_sql(&self, sql: &str, engine: &DbEngineType) -> CoreResult<String>;
 }
 
-/// Runtime registry of optional IDE extensions (empty by default in standalone DataGrip mode).
+/// Runtime registry of optional IDE extensions (empty by default in standalone Pacer mode).
 #[derive(Default, Clone)]
 pub struct ExtensionRegistry {
     governance: Vec<Arc<dyn GovernanceExtension>>,

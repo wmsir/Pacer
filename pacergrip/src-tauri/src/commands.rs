@@ -5,7 +5,7 @@ use std::sync::{Arc, RwLock};
 use aes::Aes128;
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use chrono::Local;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::{mpsc, RwLock as AsyncRwLock};
@@ -56,10 +56,11 @@ pub struct AppState {
     pub history: RwLock<Vec<QueryHistoryEntry>>,
     pub extensions: ExtensionRegistry,
     pub storage_dir: PathBuf,
+    pub is_portable: bool,
 }
 
 impl AppState {
-    pub fn new(storage_dir: PathBuf) -> Self {
+    pub fn new(storage_dir: PathBuf, is_portable: bool) -> Self {
         let mut projects = load_projects_from_disk(&storage_dir);
         if projects.is_empty() {
             projects.push(default_workspace_project());
@@ -86,6 +87,8 @@ impl AppState {
             }
         }
         let history = load_history_from_disk(&storage_dir);
+        let _ = std::fs::create_dir_all(storage_dir.join("consoles"));
+        let _ = std::fs::create_dir_all(storage_dir.join("plugins"));
         Self {
             projects: RwLock::new(projects),
             connections: RwLock::new(connections),
@@ -95,6 +98,7 @@ impl AppState {
             history: RwLock::new(history),
             extensions: ExtensionRegistry::new(),
             storage_dir,
+            is_portable,
         }
     }
 
@@ -439,7 +443,7 @@ fn resolve_direct_from_draft(
                 if !matches!(parsed.db_type, DbEngineType::Unknown(_)) {
                     db_type = parsed.db_type;
                 }
-                // URL overrides settings above (DataGrip / DBeaver standard behavior)
+                // URL overrides settings above (standard URL binding behavior)
                 if parsed.host.is_some() {
                     host = parsed.host;
                 }
@@ -1213,4 +1217,200 @@ pub fn reveal_in_explorer_cmd(path: String) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceInfoDto {
+    pub workspace_dir: String,
+    pub consoles_dir: String,
+    pub plugins_dir: String,
+    pub is_portable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSnippetItem {
+    pub title: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    pub sql: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSqlRule {
+    pub code: String,
+    #[serde(default)]
+    pub level: String,
+    pub pattern: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPluginManifest {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub author: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub snippets: Vec<PluginSnippetItem>,
+    #[serde(default)]
+    pub sql_rules: Vec<PluginSqlRule>,
+    #[serde(default)]
+    pub manifest_path: String,
+}
+
+fn sanitize_console_filename(raw: &str) -> String {
+    let base = raw
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    let mut cleaned: String = base
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            _ if c.is_control() => '_',
+            _ => c,
+        })
+        .collect();
+    while cleaned.contains("..") {
+        cleaned = cleaned.replace("..", "_");
+    }
+    let cleaned = cleaned.trim_matches('.').trim();
+    if cleaned.is_empty() {
+        return "console_1.sql".to_string();
+    }
+    if cleaned.to_ascii_lowercase().ends_with(".sql") {
+        cleaned.to_string()
+    } else {
+        format!("{cleaned}.sql")
+    }
+}
+
+fn normalize_display_path(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+#[tauri::command]
+pub fn get_workspace_info_cmd(state: State<'_, AppState>) -> WorkspaceInfoDto {
+    let consoles = state.storage_dir.join("consoles");
+    let plugins = state.storage_dir.join("plugins");
+    WorkspaceInfoDto {
+        workspace_dir: normalize_display_path(&state.storage_dir),
+        consoles_dir: normalize_display_path(&consoles),
+        plugins_dir: normalize_display_path(&plugins),
+        is_portable: state.is_portable,
+    }
+}
+
+#[tauri::command]
+pub fn save_console_scratch_cmd(
+    state: State<'_, AppState>,
+    file_name: String,
+    content: String,
+) -> Result<String, String> {
+    let consoles_dir = state.storage_dir.join("consoles");
+    std::fs::create_dir_all(&consoles_dir).map_err(|e| e.to_string())?;
+    let safe_name = sanitize_console_filename(&file_name);
+    let target = consoles_dir.join(safe_name);
+    std::fs::write(&target, content.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(normalize_display_path(&target))
+}
+
+fn scan_plugins_dir(plugins_dir: &Path) -> Vec<LocalPluginManifest> {
+    if !plugins_dir.is_dir() {
+        return Vec::new();
+    }
+    let mut manifests = Vec::new();
+    let Ok(entries) = std::fs::read_dir(plugins_dir) else {
+        return manifests;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let candidate = if path.is_dir() {
+            path.join("pacer-plugin.json")
+        } else if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".pacer-plugin.json"))
+        {
+            path
+        } else {
+            continue;
+        };
+        if !candidate.is_file() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&candidate) else {
+            continue;
+        };
+        let Ok(mut parsed) = serde_json::from_str::<LocalPluginManifest>(&raw) else {
+            continue;
+        };
+        parsed.manifest_path = normalize_display_path(&candidate);
+        manifests.push(parsed);
+    }
+    manifests.sort_by_key(|a| a.name.to_ascii_lowercase());
+    manifests
+}
+
+#[tauri::command]
+pub fn list_local_plugins_cmd(state: State<'_, AppState>) -> Result<Vec<LocalPluginManifest>, String> {
+    let plugins_dir = state.storage_dir.join("plugins");
+    let _ = std::fs::create_dir_all(&plugins_dir);
+    Ok(scan_plugins_dir(&plugins_dir))
+}
+
+#[tauri::command]
+pub fn create_sample_plugin_cmd(
+    state: State<'_, AppState>,
+) -> Result<Vec<LocalPluginManifest>, String> {
+    let plugin_dir = state.storage_dir.join("plugins").join("team-sql-pack");
+    std::fs::create_dir_all(&plugin_dir).map_err(|e| e.to_string())?;
+    let manifest_file = plugin_dir.join("pacer-plugin.json");
+    if !manifest_file.is_file() {
+        let sample = LocalPluginManifest {
+            id: "team-sql-pack".to_string(),
+            name: "团队规范与高频 SQL 插件包".to_string(),
+            version: "1.0.0".to_string(),
+            author: Some("Pacer Workspace".to_string()),
+            description: "放在 pacer-workspace/plugins 目录下的 JSON 本地插件示例，无需重编译即可热加载 SQL 模板与团队安全审计规则。".to_string(),
+            enabled: true,
+            snippets: vec![
+                PluginSnippetItem {
+                    title: "查看当前库表体积排行".to_string(),
+                    category: Some("扩展模板".to_string()),
+                    sql: "SELECT table_name, table_rows,\n  ROUND((data_length + index_length) / 1024 / 1024, 2) AS size_mb\nFROM information_schema.tables\nWHERE table_schema = DATABASE()\nORDER BY size_mb DESC\nLIMIT 20;".to_string(),
+                },
+                PluginSnippetItem {
+                    title: "按时间范围统计订单汇总".to_string(),
+                    category: Some("扩展模板".to_string()),
+                    sql: "SELECT DATE(created_at) AS biz_day, COUNT(*) AS cnt, SUM(total_amount) AS total_amt\nFROM orders\nGROUP BY DATE(created_at)\nORDER BY biz_day DESC;".to_string(),
+                },
+            ],
+            sql_rules: vec![PluginSqlRule {
+                code: "TEAM_NO_TRUNCATE".to_string(),
+                level: "HIGH".to_string(),
+                pattern: "TRUNCATE TABLE".to_string(),
+                message: "团队规范插件拦截：禁止直接执行 TRUNCATE TABLE，请先备份数据或提交变更审批。".to_string(),
+            }],
+            manifest_path: String::new(),
+        };
+        let json = serde_json::to_string_pretty(&sample).map_err(|e| e.to_string())?;
+        std::fs::write(&manifest_file, json).map_err(|e| e.to_string())?;
+    }
+    Ok(scan_plugins_dir(&state.storage_dir.join("plugins")))
 }

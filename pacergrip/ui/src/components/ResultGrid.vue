@@ -1096,7 +1096,7 @@ const astWarnings = computed(
                 </tbody>
               </table>
 
-              <!-- Standard Editable DataGrip Grid -->
+              <!-- Standard Editable Pacer Result Grid -->
               <table v-else class="dg-grid">
                 <thead>
                   <tr>

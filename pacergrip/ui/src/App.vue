@@ -6,6 +6,7 @@ import {
   assignConnectionProject,
   createDemoMarkdownFile,
   createDemoSqliteConnection,
+  createSamplePlugin,
   deleteConnection,
   deleteProject,
   executeSql,
@@ -14,6 +15,7 @@ import {
   extractStatementAtCursor,
   formatSql,
   getTableDdl,
+  getWorkspaceInfo,
   importDbeaverPath,
   importDbeaverText,
   isTauriRuntime,
@@ -22,6 +24,7 @@ import {
   listDatabases,
   listExtensions,
   listIndexes,
+  listLocalPlugins,
   listProjects,
   listQueryHistory,
   listTables,
@@ -32,6 +35,7 @@ import {
   pickTextFileToOpen,
   revealInExplorer,
   saveConnection,
+  saveConsoleScratch,
   saveProject,
   saveTextFile,
   testConnection,
@@ -42,6 +46,7 @@ import {
   type DirectConfig,
   type ExtensionMeta,
   type IndexMeta,
+  type LocalPluginManifest,
   type MarkdownSqlBlock,
   type OpenedFileDto,
   type ProjectDraft,
@@ -49,6 +54,7 @@ import {
   type ScriptAnalysis,
   type TableMeta,
   type WorkspaceFileEntry,
+  type WorkspaceInfoDto,
   type WorkspaceProject,
 } from './api/ipc';
 import {
@@ -296,6 +302,10 @@ const fileExplorerRef = ref<InstanceType<typeof FileExplorer> | null>(null);
 const recentFiles = ref<string[]>(loadJsonStorage<string[]>('pacergrip.recentFiles', []));
 const showRecentFiles = ref<boolean>(localStorage.getItem('pacer.showRecentFiles') !== '0');
 const customSnippets = ref<SqlSnippet[]>(loadJsonStorage<SqlSnippet[]>('pacergrip.snippets', []));
+const workspaceInfo = ref<WorkspaceInfoDto | null>(null);
+const localPlugins = ref<LocalPluginManifest[]>([]);
+const consoleScratchPaths = reactive<Record<string, string>>({});
+const lastSavedScratchContent: Record<string, string> = {};
 const snippetFilter = ref('');
 const closedTabsStack = ref<EditorTab[]>([]);
 
@@ -309,7 +319,20 @@ function loadJsonStorage<T>(key: string, fallback: T): T {
 }
 
 const allSnippets = computed(() => {
-  const merged = [...customSnippets.value, ...BUILTIN_SNIPPETS];
+  const pluginSnippets: SqlSnippet[] = [];
+  for (const plg of localPlugins.value) {
+    if (!plg.enabled) continue;
+    for (let i = 0; i < plg.snippets.length; i++) {
+      const s = plg.snippets[i];
+      pluginSnippets.push({
+        id: `plugin-${plg.id}-${i}`,
+        title: s.title,
+        category: s.category || plg.name,
+        sql: s.sql,
+      });
+    }
+  }
+  const merged = [...customSnippets.value, ...pluginSnippets, ...BUILTIN_SNIPPETS];
   const q = snippetFilter.value.trim().toLowerCase();
   if (!q) return merged;
   return merged.filter(
@@ -1280,6 +1303,22 @@ async function runStatementsWithGuard(
       s.warnings.filter((w) => w.level === 'HIGH' || w.level === 'CRITICAL'),
     ) ?? [];
 
+  const joinedUpper = joined.toUpperCase();
+  for (const plg of localPlugins.value) {
+    if (!plg.enabled) continue;
+    for (const rule of plg.sqlRules) {
+      const pat = rule.pattern.trim().toUpperCase();
+      if (pat && joinedUpper.includes(pat)) {
+        highWarnings.push({
+          code: rule.code,
+          level: rule.level === 'CRITICAL' ? 'CRITICAL' : 'HIGH',
+          message: `[插件 ${plg.name}] ${rule.message}`,
+          statementIndex: 0,
+        });
+      }
+    }
+  }
+
   const isProdWrite =
     profile.env === 'PROD' &&
     analysis !== null &&
@@ -1797,6 +1836,16 @@ function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: strin
   tabs.value.push(tab);
   activeTabId.value = id;
   scheduleAstInspect();
+  if (isTauriRuntime()) {
+    void saveConsoleScratch(tab.title, tab.content)
+      .then((p) => {
+        if (p) {
+          consoleScratchPaths[tab.id] = p;
+          lastSavedScratchContent[tab.id] = tab.content;
+        }
+      })
+      .catch(() => {});
+  }
 }
 
 function pushClosedTabs(list: EditorTab[]) {
@@ -2666,6 +2715,40 @@ interface SavedSessionTab {
   readOnly: boolean;
 }
 
+function openWorkspaceDirInTree() {
+  const dir = workspaceInfo.value?.workspaceDir;
+  if (!dir) return;
+  openFilesPanel();
+  void loadDirectory(dir);
+}
+
+async function refreshLocalPlugins() {
+  if (!isTauriRuntime()) return;
+  try {
+    localPlugins.value = await listLocalPlugins();
+    setStatus(`已加载 ${localPlugins.value.length} 个本地工作空间插件`);
+  } catch (err) {
+    setStatus(`扫描本地插件失败: ${String(err)}`, true);
+  }
+}
+
+async function handleCreateSamplePlugin() {
+  if (!isTauriRuntime()) return;
+  try {
+    localPlugins.value = await createSamplePlugin();
+    setStatus('已在 pacer-workspace/plugins 生成示例插件，立即热加载生效');
+    if (mountedDir.value && workspaceInfo.value?.workspaceDir) {
+      const mNorm = mountedDir.value.toLowerCase();
+      const wNorm = workspaceInfo.value.workspaceDir.toLowerCase();
+      if (wNorm.startsWith(mNorm) || mNorm.startsWith(wNorm)) {
+        await loadDirectory(mountedDir.value);
+      }
+    }
+  } catch (err) {
+    setStatus(`生成示例插件失败: ${String(err)}`, true);
+  }
+}
+
 let sessionSaveTimer: number | null = null;
 function scheduleSaveSession() {
   if (sessionSaveTimer !== null) window.clearTimeout(sessionSaveTimer);
@@ -2692,7 +2775,22 @@ function scheduleSaveSession() {
     } catch {
       // non-fatal
     }
-  }, 350);
+    if (isTauriRuntime()) {
+      for (const tab of tabs.value) {
+        if (!tab.path && lastSavedScratchContent[tab.id] !== tab.content) {
+          const snapshot = tab.content;
+          void saveConsoleScratch(tab.title, snapshot)
+            .then((savedPath) => {
+              if (savedPath) {
+                consoleScratchPaths[tab.id] = savedPath;
+                lastSavedScratchContent[tab.id] = snapshot;
+              }
+            })
+            .catch(() => {});
+        }
+      }
+    }
+  }, 400);
 }
 
 async function restoreEditorSession() {
@@ -2792,9 +2890,24 @@ onMounted(async () => {
   await restoreEditorSession();
   await refreshHistory();
   if (isTauriRuntime()) {
+    workspaceInfo.value = await getWorkspaceInfo().catch(() => null);
     extensions.value = await listExtensions().catch(() => []);
-    if (mountedDir.value) {
-      await loadDirectory(mountedDir.value);
+    localPlugins.value = await listLocalPlugins().catch(() => []);
+    for (const tab of tabs.value) {
+      if (!tab.path) {
+        void saveConsoleScratch(tab.title, tab.content)
+          .then((savedPath) => {
+            if (savedPath) {
+              consoleScratchPaths[tab.id] = savedPath;
+              lastSavedScratchContent[tab.id] = tab.content;
+            }
+          })
+          .catch(() => {});
+      }
+    }
+    const dirToMount = mountedDir.value || workspaceInfo.value?.workspaceDir || '';
+    if (dirToMount) {
+      await loadDirectory(dirToMount);
     }
   }
   scheduleAstInspect();
@@ -2996,7 +3109,21 @@ onBeforeUnmount(() => {
                 <span class="shortcut-hint">{{ keymap.getDisplay('openKeymap') }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; toggleFilesDockSide()">
-                <span>本地文件面板停靠：移至{{ filesDockSide === 'right' ? '左侧' : '右侧' }}</span>
+                <span>文件与脚本面板停靠：移至{{ filesDockSide === 'right' ? '左侧' : '右侧' }}</span>
+              </button>
+              <button
+                v-if="workspaceInfo"
+                class="dropdown-item"
+                @click="openMenu = null; openWorkspaceDirInTree()"
+              >
+                <span>在文件树中打开工作空间 (pacer-workspace)</span>
+              </button>
+              <button
+                v-if="workspaceInfo"
+                class="dropdown-item"
+                @click="openMenu = null; handleRevealInExplorer(workspaceInfo.workspaceDir)"
+              >
+                <span>在资源管理器打开工作空间目录</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; applyTheme('dark')">
@@ -3055,7 +3182,7 @@ onBeforeUnmount(() => {
         </nav>
       </div>
 
-      <!-- Centered DataGrip Run Widget -->
+      <!-- Centered Pacer Run Widget -->
       <div class="header-center">
         <div class="run-widget">
           <span
@@ -3329,8 +3456,10 @@ onBeforeUnmount(() => {
           :show-recent-files="showRecentFiles"
           :active-file-path="activeTab?.path ?? null"
           :dock-side="filesDockSide"
+          :workspace-dir="workspaceInfo?.workspaceDir ?? ''"
           :show-demo-manual="showDemoManual"
           @mount-folder="mountFolderDialog"
+          @open-workspace-dir="openWorkspaceDirInTree"
           @toggle-root-dir="toggleRootDirExpanded"
           @close-mounted-dir="closeMountedDir"
           @toggle-dir="toggleFileDir"
@@ -3350,7 +3479,10 @@ onBeforeUnmount(() => {
         <!-- SQL Snippets Tool Window -->
         <div v-else-if="leftTool === 'snippets'" style="display: flex; flex-direction: column; height: 100%">
           <div class="tw-header">
-            <span>{{ t('toolSnippets') }}</span>
+            <span class="tw-title">
+              <IdeIcon name="snippets" :size="14" />
+              <span class="tw-title-text">{{ t('toolSnippets') }}</span>
+            </span>
             <div class="tw-actions">
               <button
                 class="icon-btn compact"
@@ -3545,7 +3677,12 @@ onBeforeUnmount(() => {
 
             <template v-else-if="!activeTab.cursor.selectedText.trim()">
               <span style="font-size: 11px; color: var(--text-secondary)">
-                {{ activeTab.path || '临时查询控制台（按 Ctrl+S 可保存为 .sql / .md）' }}
+                {{
+                  activeTab.path ||
+                  (consoleScratchPaths[activeTab.id]
+                    ? `工作空间临时脚本: ${consoleScratchPaths[activeTab.id]}`
+                    : '临时查询控制台（按 Ctrl+S 可保存为 .sql / .md）')
+                }}
               </span>
             </template>
           </div>
@@ -3574,18 +3711,18 @@ onBeforeUnmount(() => {
             </span>
 
             <button
-              v-if="activeTab.path"
+              v-if="activeTab.path || consoleScratchPaths[activeTab.id]"
               class="icon-btn compact"
               title="在文件树中定位当前文件"
-              @click="locateActiveFileInTree"
+              @click="locateFileInTreeByPath(activeTab.path || consoleScratchPaths[activeTab.id])"
             >
               <IdeIcon name="locate" :size="13" />
             </button>
             <button
-              v-if="activeTab.path"
+              v-if="activeTab.path || consoleScratchPaths[activeTab.id]"
               class="icon-btn compact"
               title="在系统资源管理器中打开所在位置"
-              @click="handleRevealInExplorer(activeTab.path)"
+              @click="handleRevealInExplorer(activeTab.path || consoleScratchPaths[activeTab.id])"
             >
               <IdeIcon name="reveal" :size="13" />
             </button>
@@ -3806,8 +3943,10 @@ onBeforeUnmount(() => {
           :show-recent-files="showRecentFiles"
           :active-file-path="activeTab?.path ?? null"
           :dock-side="filesDockSide"
+          :workspace-dir="workspaceInfo?.workspaceDir ?? ''"
           :show-demo-manual="showDemoManual"
           @mount-folder="mountFolderDialog"
+          @open-workspace-dir="openWorkspaceDirInTree"
           @toggle-root-dir="toggleRootDirExpanded"
           @close-mounted-dir="closeMountedDir"
           @toggle-dir="toggleFileDir"
@@ -3932,34 +4071,139 @@ onBeforeUnmount(() => {
           </div>
         </template>
 
-        <!-- Reserved Extension Slots Panel -->
+        <!-- Pacer Extension Center (Hot-Loaded Local Plugins + Native Rust Traits) -->
         <template v-else-if="rightTool === 'extensions'">
           <div class="tw-header">
-            <span>{{ t('extModalTitle') }}</span>
+            <span class="tw-title">
+              <IdeIcon name="extensions" :size="14" />
+              <span class="tw-title-text">{{ t('extModalTitle') }}</span>
+            </span>
+            <div class="tw-actions">
+              <button
+                class="icon-btn compact"
+                title="重新扫描本地扩展插件"
+                @click="refreshLocalPlugins"
+              >
+                <IdeIcon name="refresh" :size="13" />
+              </button>
+            </div>
           </div>
-          <div class="tw-body" style="padding: 10px; font-size: 12px; line-height: 1.6">
-            <p style="margin: 0 0 8px">{{ t('extEmptyP1') }}</p>
+          <div class="tw-body" style="padding: 10px; font-size: 12px; line-height: 1.55">
+            <p style="margin: 0 0 6px">{{ t('extEmptyP1') }}</p>
             <p style="margin: 0 0 10px; color: var(--text-secondary)">{{ t('extEmptyP2') }}</p>
 
+            <!-- 1. Local Workspace JSON Plugin Pack -->
             <div
               style="
-                padding: 8px;
+                padding: 8px 10px;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--bg-chrome);
+                margin-bottom: 10px;
+              "
+            >
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px">
+                <strong>工作空间本地插件（热加载）</strong>
+                <span class="pill pill-dev">{{ localPlugins.length }} 个已加载</span>
+              </div>
+              <div
+                v-if="workspaceInfo"
+                style="
+                  font-family: var(--font-mono);
+                  font-size: 10.5px;
+                  color: var(--text-secondary);
+                  word-break: break-all;
+                  margin-bottom: 8px;
+                "
+              >
+                目录: {{ workspaceInfo.pluginsDir }}
+                <span class="pill pill-neutral" style="margin-left: 4px">
+                  {{ workspaceInfo.isPortable ? 'EXE 同级工作空间' : '系统数据目录' }}
+                </span>
+              </div>
+              <div style="display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px">
+                <button class="btn btn-primary btn-sm" @click="handleCreateSamplePlugin">
+                  生成示例插件包
+                </button>
+                <button
+                  v-if="workspaceInfo"
+                  class="btn btn-sm"
+                  @click="handleRevealInExplorer(workspaceInfo.pluginsDir)"
+                >
+                  打开插件目录
+                </button>
+                <button class="btn btn-sm" @click="refreshLocalPlugins">
+                  重新扫描
+                </button>
+              </div>
+              <div style="font-size: 11px; color: var(--text-secondary)">
+                扩展方法：在插件目录下新建 <code>&lt;插件名&gt;/pacer-plugin.json</code>，配置
+                <code>snippets</code>（自动加入「SQL 代码片段」）与 <code>sqlRules</code>（自动注入执行安全拦截规则），无需重新编译即可即时生效。
+              </div>
+
+              <div v-if="localPlugins.length > 0" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px">
+                <div
+                  v-for="plg in localPlugins"
+                  :key="plg.id"
+                  style="
+                    padding: 6px 8px;
+                    border: 1px solid var(--border);
+                    border-radius: 5px;
+                    background: var(--bg-editor);
+                  "
+                >
+                  <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px">
+                    <strong style="font-size: 11.5px; overflow: hidden; text-overflow: ellipsis">
+                      {{ plg.name }}
+                    </strong>
+                    <span class="pill pill-neutral">v{{ plg.version || '1.0' }}</span>
+                  </div>
+                  <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px">
+                    {{ plg.description }}
+                  </div>
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 4px; font-size: 10.5px; color: var(--text-muted)">
+                    <span>模板 {{ plg.snippets.length }} 条 · 审计规则 {{ plg.sqlRules.length }} 条</span>
+                    <button
+                      class="cell-inline-btn"
+                      @click="openLocalFileByPath(plg.manifestPath)"
+                    >
+                      编辑 JSON
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. Native Rust Trait Extension Hooks -->
+            <div
+              style="
+                padding: 8px 10px;
                 border: 1px solid var(--border);
                 border-radius: 6px;
                 background: var(--bg-chrome);
                 margin-bottom: 8px;
               "
             >
-              <div style="font-weight: 700; margin-bottom: 4px">已预留 Trait 插槽</div>
-              <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary)">
-                • pacer_core::extension::GovernanceExtension<br />
-                • pacer_core::extension::AiSqlExtension<br />
-                • Cargo feature: <strong>pacer-extension</strong>
+              <div style="font-weight: 700; margin-bottom: 6px">Rust 内核 Trait 扩展接口</div>
+              <div
+                style="
+                  font-family: var(--font-mono);
+                  font-size: 10.8px;
+                  color: var(--text-secondary);
+                  word-break: break-all;
+                  display: flex;
+                  flex-direction: column;
+                  gap: 4px;
+                "
+              >
+                <div>1. <code>pacer_core::extension::GovernanceExtension</code>（执行前审批拦截 &amp; 审计上报）</div>
+                <div>2. <code>pacer_core::extension::AiSqlExtension</code>（Text2SQL &amp; 查询优化）</div>
+                <div>3. 编译开关：<code>cargo build --features pacer-extension</code></div>
               </div>
             </div>
 
             <div v-if="extensions.length > 0">
-              <div style="font-weight: 700; margin-bottom: 6px">已注册扩展</div>
+              <div style="font-weight: 700; margin-bottom: 6px">已启用内核插件</div>
               <div
                 v-for="ext in extensions"
                 :key="ext.id"
@@ -3980,7 +4224,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <div v-else style="font-size: 11px; color: var(--text-muted)">
-              当前未启用外部治理插件（独立原生 DataGrip 模式）。
+              当前未启用编译期内核插件（纯原生独立运行模式）。
             </div>
           </div>
         </template>

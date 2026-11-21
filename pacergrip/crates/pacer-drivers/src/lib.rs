@@ -27,7 +27,7 @@ pub async fn connect_direct(
             Ok(Arc::new(PostgresBackend::connect(config, password).await?))
         }
         other => Err(CoreError::Unsupported(format!(
-            "Direct native driver for {:?} is not yet bundled (requires external ODBC/OCI runtime); DataGrip XML import/export & AST parsing remain supported.",
+            "Direct native driver for {:?} is not yet bundled (requires external ODBC/OCI runtime); URL / DBeaver config import & AST parsing remain supported.",
             other
         ))),
     }

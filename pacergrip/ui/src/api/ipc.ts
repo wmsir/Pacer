@@ -607,3 +607,58 @@ export async function listExtensions(): Promise<ExtensionMeta[]> {
   if (!isTauriRuntime()) return [];
   return invoke('list_extensions_cmd');
 }
+
+export interface WorkspaceInfoDto {
+  workspaceDir: string;
+  consolesDir: string;
+  pluginsDir: string;
+  isPortable: boolean;
+}
+
+export interface PluginSnippetItem {
+  title: string;
+  category?: string | null;
+  sql: string;
+}
+
+export interface PluginSqlRule {
+  code: string;
+  level: string;
+  pattern: string;
+  message: string;
+}
+
+export interface LocalPluginManifest {
+  id: string;
+  name: string;
+  version: string;
+  author?: string | null;
+  description: string;
+  enabled: boolean;
+  snippets: PluginSnippetItem[];
+  sqlRules: PluginSqlRule[];
+  manifestPath: string;
+}
+
+export async function getWorkspaceInfo(): Promise<WorkspaceInfoDto | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke('get_workspace_info_cmd');
+}
+
+export async function saveConsoleScratch(
+  fileName: string,
+  content: string,
+): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke('save_console_scratch_cmd', { fileName, content });
+}
+
+export async function listLocalPlugins(): Promise<LocalPluginManifest[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('list_local_plugins_cmd');
+}
+
+export async function createSamplePlugin(): Promise<LocalPluginManifest[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('create_sample_plugin_cmd');
+}

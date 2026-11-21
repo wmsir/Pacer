@@ -1845,10 +1845,10 @@ onBeforeUnmount(() => {
             :class="{ 'btn-primary': userKeymap.activePreset.value === 'idea' }"
             @click="
               userKeymap.applyPreset('idea');
-              emit('notify', '已切换为 IDEA / DataGrip 默认快捷键方案');
+              emit('notify', '已切换为 JetBrains IDEA 默认快捷键方案');
             "
           >
-            IDEA / DataGrip 默认
+            JetBrains IDEA 默认
           </button>
           <button
             class="btn btn-sm"

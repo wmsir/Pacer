@@ -1,4 +1,4 @@
-/* JetBrains DataGrip New UI (Darcula Dark & IntelliJ Light) Design System */
+/* Pacer Native Database IDE Design System */
 
 :root,
 :root[data-theme='dark'] {
@@ -294,7 +294,7 @@ code,
   font-family: var(--font-mono);
 }
 
-/* DataGrip Center Run Widget */
+/* Pacer Center Run Widget */
 .run-widget {
   display: inline-flex;
   align-items: center;
@@ -460,17 +460,47 @@ code,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 10px;
+  gap: 6px;
+  padding: 0 8px 0 10px;
   border-bottom: 1px solid var(--border);
   font-weight: 600;
   font-size: 12px;
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.tw-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tw-title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tw-actions {
   display: flex;
   align-items: center;
   gap: 2px;
+  flex-shrink: 0;
+}
+
+.file-toolbar-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-chrome);
+  flex-shrink: 0;
 }
 
 .tw-search {
@@ -720,7 +750,7 @@ code,
   flex-direction: column;
 }
 
-/* CodeMirror 6 Custom DataGrip Theme */
+/* CodeMirror 6 Custom Pacer Theme */
 .cm-host {
   flex: 1;
   min-height: 0;

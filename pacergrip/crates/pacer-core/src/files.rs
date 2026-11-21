@@ -101,7 +101,7 @@ pub fn save_text_file(
     })
 }
 
-/// Lists direct children of a local directory for the DataGrip Files Explorer tool window.
+/// Lists direct children of a local directory for the Pacer Files Explorer tool window.
 pub fn list_workspace_files(dir_path: &Path) -> CoreResult<Vec<WorkspaceFileEntry>> {
     if !dir_path.is_dir() {
         return Err(CoreError::InvalidConfig(format!(
