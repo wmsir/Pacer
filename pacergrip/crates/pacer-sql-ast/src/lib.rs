@@ -5,7 +5,7 @@ use sqlparser::dialect::{
 };
 use sqlparser::parser::Parser;
 
-use pacer_core::DbEngineType;
+use pacer_core::{DbEngineType, MarkdownSqlBlock};
 
 /// High-level access category for routing between direct/read-only query and Pacer ticket flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -647,6 +647,496 @@ pub fn extract_expected_rows_hint(sql: &str) -> Option<i64> {
     None
 }
 
+/// Returns the individual SQL statement span containing `cursor_char_offset` (0-based UTF-8 char index).
+pub fn extract_statement_at_cursor(sql: &str, cursor_char_offset: usize) -> Option<String> {
+    let cursor_byte = sql
+        .char_indices()
+        .nth(cursor_char_offset)
+        .map(|(idx, _)| idx)
+        .unwrap_or(sql.len());
+
+    let spans = split_sql_statement_spans(sql);
+    if spans.is_empty() {
+        return None;
+    }
+
+    // Prefer the span directly containing cursor_byte; otherwise pick the nearest preceding non-empty span.
+    for (start, end) in &spans {
+        if cursor_byte >= *start && cursor_byte <= *end {
+            let candidate = sql[*start..*end].trim();
+            if !candidate.is_empty() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    for (start, end) in spans.iter().rev() {
+        if *start <= cursor_byte {
+            let candidate = sql[*start..*end].trim();
+            if !candidate.is_empty() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    spans
+        .first()
+        .map(|(s, e)| sql[*s..*e].trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
+    let bytes = sql.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0usize;
+    let mut i = 0usize;
+
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut in_backtick = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        let next = bytes.get(i + 1).copied();
+
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block_comment {
+            if b == b'*' && next == Some(b'/') {
+                in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_single {
+            if b == b'\\' {
+                i += 2;
+                continue;
+            }
+            if b == b'\'' {
+                if next == Some(b'\'') {
+                    i += 2;
+                    continue;
+                }
+                in_single = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_double {
+            if b == b'"' {
+                if next == Some(b'"') {
+                    i += 2;
+                    continue;
+                }
+                in_double = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_backtick {
+            if b == b'`' {
+                in_backtick = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        if b == b'-' && next == Some(b'-') {
+            in_line_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'/' && next == Some(b'*') {
+            in_block_comment = true;
+            i += 2;
+            continue;
+        }
+        if b == b'\'' {
+            in_single = true;
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            in_double = true;
+            i += 1;
+            continue;
+        }
+        if b == b'`' {
+            in_backtick = true;
+            i += 1;
+            continue;
+        }
+
+        if b == b';' {
+            if !sql[start..i].trim().is_empty() {
+                out.push((start, i));
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+
+    if start < sql.len() && !sql[start..].trim().is_empty() {
+        out.push((start, sql.len()));
+    }
+    out
+}
+
+/// Extracts all fenced SQL code blocks from a Markdown document with 1-based line numbers.
+pub fn extract_markdown_sql_blocks(markdown: &str) -> Vec<MarkdownSqlBlock> {
+    let lines: Vec<&str> = markdown.lines().collect();
+    let mut blocks = Vec::new();
+    let mut last_heading: Option<String> = None;
+
+    let mut i = 0usize;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        if let Some(heading_rest) = trimmed.strip_prefix('#') {
+            let title = heading_rest.trim_start_matches('#').trim();
+            if !title.is_empty() {
+                last_heading = Some(title.to_string());
+            }
+            i += 1;
+            continue;
+        }
+
+        let fence_char = if trimmed.starts_with("```") {
+            Some('`')
+        } else if trimmed.starts_with("~~~") {
+            Some('~')
+        } else {
+            None
+        };
+
+        if let Some(fc) = fence_char {
+            let fence_len = trimmed.chars().take_while(|&c| c == fc).count();
+            let info = trimmed[fence_len..].trim();
+            let lang_token = info
+                .split(|c: char| c.is_whitespace() || c == ',' || c == '{')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+
+            let start_line = i + 1;
+            let content_start_line = i + 2;
+            let mut j = i + 1;
+            let mut body_lines = Vec::new();
+
+            while j < lines.len() {
+                let close_trimmed = lines[j].trim();
+                let close_len = close_trimmed.chars().take_while(|&c| c == fc).count();
+                if close_len >= fence_len && close_trimmed[close_len..].trim().is_empty() {
+                    break;
+                }
+                body_lines.push(lines[j]);
+                j += 1;
+            }
+
+            let end_line = (j + 1).min(lines.len());
+            let content_end_line = if body_lines.is_empty() {
+                content_start_line
+            } else {
+                content_start_line + body_lines.len() - 1
+            };
+
+            if is_sql_fence_lang(&lang_token) {
+                let sql = body_lines.join("\n").trim().to_string();
+                if !sql.is_empty() {
+                    blocks.push(MarkdownSqlBlock {
+                        index: blocks.len(),
+                        language: lang_token,
+                        start_line,
+                        end_line,
+                        content_start_line,
+                        content_end_line,
+                        sql,
+                        title: last_heading.clone(),
+                    });
+                }
+            }
+
+            i = j + 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    blocks
+}
+
+fn is_sql_fence_lang(lang: &str) -> bool {
+    matches!(
+        lang,
+        "sql"
+            | "mysql"
+            | "mariadb"
+            | "postgresql"
+            | "postgres"
+            | "pgsql"
+            | "plpgsql"
+            | "sqlite"
+            | "sqlite3"
+            | "oracle"
+            | "plsql"
+            | "tsql"
+            | "mssql"
+            | "sqlserver"
+            | "dm"
+            | "dameng"
+            | "kingbase"
+            | "opengauss"
+            | "tidb"
+            | "oceanbase"
+            | "clickhouse"
+            | "ddl"
+            | "dml"
+    )
+}
+
+/// Lightweight, comment- and string-safe SQL formatter inspired by DataGrip's Reformat Code (`Ctrl+Alt+L`).
+pub fn format_sql(sql: &str) -> String {
+    let stmts = split_sql_statements(sql);
+    if stmts.is_empty() {
+        return sql.trim().to_string();
+    }
+
+    let formatted: Vec<String> = stmts.iter().map(|s| format_single_sql(s)).collect();
+    let has_trailing_semi = sql.trim_end().ends_with(';');
+    let mut joined = formatted.join(";\n\n");
+    if has_trailing_semi || stmts.len() > 1 {
+        joined.push(';');
+    }
+    joined
+}
+
+fn format_single_sql(raw: &str) -> String {
+    #[derive(Debug)]
+    enum Tok {
+        Word(String),
+        Quoted(String),
+        Comment(String),
+        Punct(char),
+    }
+
+    let chars: Vec<char> = raw.chars().collect();
+    let mut toks = Vec::new();
+    let mut i = 0usize;
+
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+        if c == '-' && chars.get(i + 1) == Some(&'-') {
+            let start = i;
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            toks.push(Tok::Comment(chars[start..i].iter().collect()));
+            continue;
+        }
+        if c == '/' && chars.get(i + 1) == Some(&'*') {
+            let start = i;
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(chars.len());
+            toks.push(Tok::Comment(chars[start..i].iter().collect()));
+            continue;
+        }
+        if c == '\'' || c == '"' || c == '`' {
+            let quote = c;
+            let start = i;
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\\' && quote == '\'' {
+                    i += 2;
+                    continue;
+                }
+                if chars[i] == quote {
+                    i += 1;
+                    if chars.get(i) == Some(&quote) {
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+                i += 1;
+            }
+            toks.push(Tok::Quoted(chars[start..i].iter().collect()));
+            continue;
+        }
+        if c.is_alphanumeric() || c == '_' || c == '$' {
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '$')
+            {
+                i += 1;
+            }
+            toks.push(Tok::Word(chars[start..i].iter().collect()));
+            continue;
+        }
+        toks.push(Tok::Punct(c));
+        i += 1;
+    }
+
+    let keywords = [
+        "SELECT", "DISTINCT", "FROM", "WHERE", "AND", "OR", "NOT", "IN", "IS", "NULL", "AS",
+        "ON", "JOIN", "INNER", "LEFT", "RIGHT", "FULL", "OUTER", "CROSS", "GROUP", "BY",
+        "HAVING", "ORDER", "ASC", "DESC", "LIMIT", "OFFSET", "UNION", "ALL", "INSERT", "INTO",
+        "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "INDEX", "VIEW", "IF", "EXISTS",
+        "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "DEFAULT", "UNIQUE", "ALTER", "ADD", "COLUMN",
+        "DROP", "TRUNCATE", "CASE", "WHEN", "THEN", "ELSE", "END", "BETWEEN", "LIKE", "WITH",
+        "RECURSIVE", "EXPLAIN", "SHOW", "PRAGMA",
+    ];
+
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut idx = 0usize;
+
+    while idx < toks.len() {
+        match &toks[idx] {
+            Tok::Comment(c) => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(c);
+                out.push('\n');
+                idx += 1;
+            }
+            Tok::Quoted(q) => {
+                push_space_if_needed(&mut out);
+                out.push_str(q);
+                idx += 1;
+            }
+            Tok::Punct(p) => {
+                match p {
+                    '(' => {
+                        if out.ends_with(' ')
+                            || out.is_empty()
+                            || out.ends_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+                        {
+                            out.push('(');
+                        } else {
+                            out.push(' ');
+                            out.push('(');
+                        }
+                        depth += 1;
+                    }
+                    ')' => {
+                        depth = depth.saturating_sub(1);
+                        out.push(')');
+                    }
+                    ',' => {
+                        out.push(',');
+                        out.push(' ');
+                    }
+                    '.' => {
+                        out.push('.');
+                    }
+                    _ => {
+                        push_space_if_needed(&mut out);
+                        out.push(*p);
+                    }
+                }
+                idx += 1;
+            }
+            Tok::Word(w) => {
+                let upper = w.to_ascii_uppercase();
+                let next_upper = match toks.get(idx + 1) {
+                    Some(Tok::Word(nw)) => Some(nw.to_ascii_uppercase()),
+                    _ => None,
+                };
+
+                if depth == 0 {
+                    // Two-word clause headers.
+                    if let Some(ref nu) = next_upper {
+                        let two = format!("{upper} {nu}");
+                        if matches!(
+                            two.as_str(),
+                            "LEFT JOIN"
+                                | "RIGHT JOIN"
+                                | "INNER JOIN"
+                                | "FULL JOIN"
+                                | "CROSS JOIN"
+                                | "GROUP BY"
+                                | "ORDER BY"
+                                | "UNION ALL"
+                                | "INSERT INTO"
+                                | "DELETE FROM"
+                        ) {
+                            if !out.is_empty() && !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str(&two);
+                            idx += 2;
+                            continue;
+                        }
+                    }
+
+                    if matches!(
+                        upper.as_str(),
+                        "SELECT" | "FROM" | "WHERE" | "JOIN" | "HAVING" | "LIMIT" | "OFFSET"
+                            | "SET" | "VALUES" | "UNION" | "UPDATE"
+                    ) {
+                        if !out.is_empty() && !out.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        out.push_str(&upper);
+                        idx += 1;
+                        continue;
+                    }
+
+                    if matches!(upper.as_str(), "AND" | "OR") {
+                        if !out.is_empty() && !out.ends_with('\n') {
+                            out.push('\n');
+                        }
+                        out.push_str("  ");
+                        out.push_str(&upper);
+                        idx += 1;
+                        continue;
+                    }
+                }
+
+                push_space_if_needed(&mut out);
+                if keywords.contains(&upper.as_str()) {
+                    out.push_str(&upper);
+                } else {
+                    out.push_str(w);
+                }
+                idx += 1;
+            }
+        }
+    }
+
+    out.trim().to_string()
+}
+
+fn push_space_if_needed(out: &mut String) {
+    if out.is_empty()
+        || out.ends_with('\n')
+        || out.ends_with(' ')
+        || out.ends_with('(')
+        || out.ends_with('.')
+    {
+        return;
+    }
+    out.push(' ');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,5 +1226,63 @@ mod tests {
         let res_sel = analyze_sql(cte_select, &DbEngineType::Sqlite);
         assert_eq!(res_sel.overall_kind, SqlAccessKind::ReadOnly);
         assert!(!res_sel.requires_ticket);
+    }
+
+    #[test]
+    fn test_extract_markdown_sql_blocks() {
+        let md = r#"# 订单排查手册
+
+## 1. 查询今日VIP订单
+
+```sql
+SELECT id, order_no
+FROM orders
+WHERE status = 'PAID';
+```
+
+普通文本说明：
+
+```json
+{"ignore": true}
+```
+
+### 2. PostgreSQL 聚合统计
+
+```postgresql
+SELECT customer_id, SUM(total_amount)
+FROM orders
+GROUP BY customer_id;
+```
+"#;
+        let blocks = extract_markdown_sql_blocks(md);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].language, "sql");
+        assert_eq!(blocks[0].title.as_deref(), Some("1. 查询今日VIP订单"));
+        assert!(blocks[0].sql.contains("SELECT id, order_no"));
+        assert_eq!(blocks[1].language, "postgresql");
+        assert_eq!(blocks[1].title.as_deref(), Some("2. PostgreSQL 聚合统计"));
+        assert!(blocks[1].sql.contains("GROUP BY customer_id"));
+    }
+
+    #[test]
+    fn test_extract_statement_at_cursor_picks_containing_statement() {
+        let sql = "SELECT 1;\nSELECT id, name FROM customers WHERE id = 2;\nSELECT 3;";
+        let cursor_in_second = sql.find("customers").unwrap();
+        let stmt = extract_statement_at_cursor(sql, cursor_in_second).unwrap();
+        assert_eq!(stmt, "SELECT id, name FROM customers WHERE id = 2");
+    }
+
+    #[test]
+    fn test_format_sql_pretty_clauses_and_preserves_strings() {
+        let formatted = format_sql(
+            "select id, name, 'where from' as lbl from customers left join orders on customers.id = orders.customer_id where status = 'PAID' and total_amount > 100 order by id desc limit 20;",
+        );
+        assert!(formatted.contains("SELECT"));
+        assert!(formatted.contains("\nFROM customers"));
+        assert!(formatted.contains("\nLEFT JOIN orders"));
+        assert!(formatted.contains("\nWHERE status = 'PAID'"));
+        assert!(formatted.contains("\n  AND total_amount > 100"));
+        assert!(formatted.contains("'where from'"));
+        assert!(formatted.contains("\nLIMIT 20;"));
     }
 }

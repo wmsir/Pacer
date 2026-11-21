@@ -12,14 +12,22 @@ use uuid::Uuid;
 use pacer_core::{
     AuditEvent, CapabilityFlags, ColumnMeta, ConnectionFingerprint, ConnectionMode,
     ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType, DirectConfig, EnvLevel,
-    ExplainResult, ExtensionMeta, ExtensionRegistry, PingMetrics, PreExecuteDecision, QueryChunk,
-    QueryHistoryEntry, QueryReq, QuerySummary, TableMeta,
+    ExplainResult, ExtensionMeta, ExtensionRegistry, FileStatsDto, IndexMeta, MarkdownSqlBlock,
+    OpenedFileDto, PingMetrics, PreExecuteDecision, QueryChunk, QueryHistoryEntry, QueryReq,
+    QuerySummary, TableMeta, WorkspaceFileEntry,
 };
 use pacer_datagrip_io::{
     export_to_datagrip_xml, import_from_path, parse_datagrip_xml, parse_jdbc_url,
 };
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
-use pacer_sql_ast::{analyze_sql, ScriptAnalysis};
+use pacer_sql_ast::{
+    analyze_sql, extract_markdown_sql_blocks, extract_statement_at_cursor, format_sql,
+    ScriptAnalysis,
+};
+
+use crate::files::{
+    ensure_demo_markdown_file, list_workspace_files, open_text_file, save_text_file,
+};
 
 #[cfg(feature = "pacer-extension")]
 pub use pacer_client::PacerClient;
@@ -645,4 +653,62 @@ pub fn list_query_history_cmd(state: State<'_, AppState>) -> Result<Vec<QueryHis
 #[tauri::command]
 pub fn list_extensions_cmd(state: State<'_, AppState>) -> Vec<ExtensionMeta> {
     state.extensions.list_extensions()
+}
+
+#[tauri::command]
+pub async fn list_indexes_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: String,
+    table_name: String,
+) -> Result<Vec<IndexMeta>, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend
+        .list_indexes(&db_name, &table_name)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub fn format_sql_cmd(sql: String) -> String {
+    format_sql(&sql)
+}
+
+#[tauri::command]
+pub fn extract_statement_at_cursor_cmd(sql: String, cursor_offset: usize) -> Option<String> {
+    extract_statement_at_cursor(&sql, cursor_offset)
+}
+
+#[tauri::command]
+pub fn extract_markdown_sql_blocks_cmd(content: String) -> Vec<MarkdownSqlBlock> {
+    extract_markdown_sql_blocks(&content)
+}
+
+#[tauri::command]
+pub fn open_text_file_cmd(
+    path: String,
+    encoding_override: Option<String>,
+) -> Result<OpenedFileDto, String> {
+    open_text_file(Path::new(&path), encoding_override.as_deref()).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn save_text_file_cmd(
+    path: String,
+    content: String,
+    encoding: String,
+    line_ending: String,
+    with_bom: bool,
+) -> Result<FileStatsDto, String> {
+    save_text_file(Path::new(&path), &content, &encoding, &line_ending, with_bom).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn list_workspace_files_cmd(dir_path: String) -> Result<Vec<WorkspaceFileEntry>, String> {
+    list_workspace_files(Path::new(&dir_path)).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn create_demo_markdown_file_cmd(state: State<'_, AppState>) -> Result<OpenedFileDto, String> {
+    ensure_demo_markdown_file(&state.storage_dir).map_err(map_err)
 }

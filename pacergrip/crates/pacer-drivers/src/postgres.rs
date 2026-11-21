@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DirectConfig,
-    ExplainResult, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    ExplainResult, IndexMeta, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
@@ -172,6 +172,46 @@ impl DbBackend for PostgresBackend {
                 default_value: row.try_get("column_default").ok().flatten(),
                 comment: None,
                 masking_rule: None,
+            })
+            .collect())
+    }
+
+    async fn list_indexes(&self, db: &str, table: &str) -> CoreResult<Vec<IndexMeta>> {
+        let schema = if db.is_empty() { "public" } else { db };
+        let rows = sqlx::query(
+            "SELECT indexname, indexdef \
+             FROM pg_indexes \
+             WHERE schemaname = $1 AND tablename = $2 \
+             ORDER BY indexname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                let name: String = row.try_get("indexname").unwrap_or_default();
+                let def: String = row.try_get("indexdef").unwrap_or_default();
+                let unique = def.to_ascii_uppercase().contains("UNIQUE");
+                let columns = def
+                    .rfind('(')
+                    .and_then(|start| def[start + 1..].find(')').map(|end| &def[start + 1..start + 1 + end]))
+                    .map(|cols| {
+                        cols.split(',')
+                            .map(|c| c.trim().trim_matches('"').to_string())
+                            .filter(|c| !c.is_empty())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                IndexMeta {
+                    name,
+                    unique,
+                    columns,
+                    index_type: Some("BTREE".to_string()),
+                }
             })
             .collect())
     }

@@ -1,12 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useI18n } from './i18n';
 import {
   analyzeSql,
+  createDemoMarkdownFile,
   createDemoSqliteConnection,
   deleteConnection,
   executeSql,
   explainSql,
   exportDataGripXml,
+  extractStatementAtCursor,
+  formatSql,
   getTableDdl,
   importDataGripPath,
   importDataGripXml,
@@ -15,337 +19,583 @@ import {
   listConnections,
   listDatabases,
   listExtensions,
+  listIndexes,
   listQueryHistory,
   listTables,
+  listWorkspaceFiles,
+  openTextFile,
+  pickDirectoryToMount,
+  pickSaveFilePath,
+  pickTextFileToOpen,
   saveConnection,
+  saveTextFile,
   testConnection,
   type ColumnMeta,
   type ConnectionDraft,
   type ConnectionProfile,
   type DatabaseMeta,
-  type DirectConfig,
-  type EnvLevel,
   type ExtensionMeta,
+  type IndexMeta,
+  type MarkdownSqlBlock,
+  type OpenedFileDto,
   type QueryHistoryEntry,
-  type QuerySummary,
   type ScriptAnalysis,
   type TableMeta,
+  type WorkspaceFileEntry,
 } from './api/ipc';
+import {
+  BUILTIN_SNIPPETS,
+  countLines,
+  estimateUtf8Bytes,
+  extractMarkdownSqlBlocksLocal,
+  formatBytes,
+  parseMarkdownSegments,
+  type SqlSnippet,
+} from './utils/sqlTools';
+import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
+import DatabaseTree from './components/DatabaseTree.vue';
+import FileExplorer from './components/FileExplorer.vue';
+import ResultGrid, { type ResultTabItem } from './components/ResultGrid.vue';
+import Modals, {
+  type ActiveModalKind,
+  type DangerModalContext,
+  type EncodingModalContext,
+  type SearchEverywhereItem,
+} from './components/Modals.vue';
 
-interface ConsoleTab {
+interface EditorTab {
   id: string;
   title: string;
-  sql: string;
+  path: string | null;
+  fileKind: string;
+  content: string;
+  savedContent: string;
+  encoding: string;
+  hasBom: boolean;
+  lineEnding: 'CRLF' | 'LF';
+  byteSize: number;
+  readOnly: boolean;
   profileId: string;
   dbName: string;
+  mdViewMode: 'source' | 'split' | 'preview';
+  cursor: EditorCursorTelemetry;
 }
 
-const tauriReady = isTauriRuntime();
+const { t, locale, toggleLocale } = useI18n();
+
+// Theme (Darcula Dark default, IntelliJ Light toggle)
+const theme = ref<'dark' | 'light'>(
+  localStorage.getItem('pacergrip.theme') === 'light' ? 'light' : 'dark',
+);
+
+function applyTheme(next: 'dark' | 'light') {
+  theme.value = next;
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('pacergrip.theme', next);
+}
+
+function toggleTheme() {
+  applyTheme(theme.value === 'dark' ? 'light' : 'dark');
+}
+
+// Layout & Panels
+const leftTool = ref<'database' | 'files' | 'snippets' | null>('database');
+const rightTool = ref<'structure' | 'extensions' | null>('structure');
+const leftWidth = ref<number>(Number(localStorage.getItem('pacergrip.leftWidth')) || 276);
+const rightWidth = ref<number>(Number(localStorage.getItem('pacergrip.rightWidth')) || 280);
+const bottomHeight = ref<number>(Number(localStorage.getItem('pacergrip.bottomHeight')) || 270);
+const openMenu = ref<'file' | 'edit' | 'database' | 'tools' | 'help' | null>(null);
+
+// Resize Dragging
+const draggingPane = ref<'left' | 'right' | 'bottom' | null>(null);
+let dragStartPos = 0;
+let dragStartSize = 0;
+
+function startResize(pane: 'left' | 'right' | 'bottom', e: MouseEvent) {
+  e.preventDefault();
+  draggingPane.value = pane;
+  dragStartPos = pane === 'bottom' ? e.clientY : e.clientX;
+  dragStartSize =
+    pane === 'left' ? leftWidth.value : pane === 'right' ? rightWidth.value : bottomHeight.value;
+  window.addEventListener('mousemove', onResizeMove);
+  window.addEventListener('mouseup', stopResize);
+}
+
+function onResizeMove(e: MouseEvent) {
+  if (!draggingPane.value) return;
+  if (draggingPane.value === 'left') {
+    const next = Math.max(200, Math.min(480, dragStartSize + (e.clientX - dragStartPos)));
+    leftWidth.value = next;
+  } else if (draggingPane.value === 'right') {
+    const next = Math.max(210, Math.min(460, dragStartSize - (e.clientX - dragStartPos)));
+    rightWidth.value = next;
+  } else if (draggingPane.value === 'bottom') {
+    const next = Math.max(130, Math.min(540, dragStartSize - (e.clientY - dragStartPos)));
+    bottomHeight.value = next;
+  }
+}
+
+function stopResize() {
+  if (draggingPane.value === 'left') {
+    localStorage.setItem('pacergrip.leftWidth', String(leftWidth.value));
+  } else if (draggingPane.value === 'right') {
+    localStorage.setItem('pacergrip.rightWidth', String(rightWidth.value));
+  } else if (draggingPane.value === 'bottom') {
+    localStorage.setItem('pacergrip.bottomHeight', String(bottomHeight.value));
+  }
+  draggingPane.value = null;
+  window.removeEventListener('mousemove', onResizeMove);
+  window.removeEventListener('mouseup', stopResize);
+}
+
+// Database State
 const connections = ref<ConnectionProfile[]>([]);
+const databasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
+const tablesByKey = reactive<Record<string, TableMeta[]>>({});
+const columnsByKey = reactive<Record<string, ColumnMeta[]>>({});
+const indexesByKey = reactive<Record<string, IndexMeta[]>>({});
+const expandedProfiles = reactive<Record<string, boolean>>({});
+const expandedDatabases = reactive<Record<string, boolean>>({});
+const expandedTables = reactive<Record<string, boolean>>({});
 const extensions = ref<ExtensionMeta[]>([]);
 
-const databasesByProfile = ref<Record<string, DatabaseMeta[]>>({});
-const tablesByKey = ref<Record<string, TableMeta[]>>({});
-const columnsByKey = ref<Record<string, ColumnMeta[]>>({});
-const expandedProfiles = ref<Record<string, boolean>>({});
-const expandedDatabases = ref<Record<string, boolean>>({});
-const expandedTables = ref<Record<string, boolean>>({});
+// Right Panel: Inspected Table Structure
+const inspectedTable = ref<{ profileId: string; dbName: string; tableName: string } | null>(null);
 
-const consoles = ref<ConsoleTab[]>([
-  {
-    id: 'console-1',
-    title: 'console_1.sql',
-    sql: 'SELECT c.full_name, c.tier, o.order_no, o.total_amount, o.status\nFROM orders o\nJOIN customers c ON o.customer_id = c.id\nORDER BY o.id;',
-    profileId: '',
-    dbName: '',
-  },
-]);
-const activeConsoleId = ref('console-1');
-let consoleSeq = 1;
-
-const activeConsole = computed(
-  () => consoles.value.find((c) => c.id === activeConsoleId.value) ?? consoles.value[0],
-);
-
-const activeProfile = computed(
-  () => connections.value.find((p) => p.id === activeConsole.value?.profileId) ?? null,
-);
-
-const availableDatabases = computed<DatabaseMeta[]>(() => {
-  if (!activeProfile.value) return [];
-  return databasesByProfile.value[activeProfile.value.id] ?? [];
+const inspectedColumns = computed(() => {
+  if (!inspectedTable.value) return [];
+  const k = `${inspectedTable.value.profileId}:${inspectedTable.value.dbName}:${inspectedTable.value.tableName}`;
+  return columnsByKey[k] ?? [];
 });
 
-const astAnalysis = ref<ScriptAnalysis | null>(null);
-const activeOutputTab = ref<'grid' | 'ddl' | 'history'>('grid');
-const gridColumns = ref<string[]>([]);
-const gridRows = ref<Record<string, unknown>[]>([]);
-const gridFilter = ref('');
-const querySummary = ref<QuerySummary | null>(null);
-const ddlText = ref('');
-const ddlTargetLabel = ref('');
-const historyEntries = ref<QueryHistoryEntry[]>([]);
-
-const statusBanner = ref<{ text: string; isError: boolean } | null>(null);
-const busy = ref(false);
-
-const showConnModal = ref(false);
-const editingProfileId = ref<string | null>(null);
-const connForm = ref<{
-  name: string;
-  dbType: string;
-  host: string;
-  port: string;
-  database: string;
-  username: string;
-  password: string;
-  jdbcUrl: string;
-  env: EnvLevel;
-  readOnly: boolean;
-  comment: string;
-}>({
-  name: '',
-  dbType: 'sqlite',
-  host: 'localhost',
-  port: '',
-  database: '',
-  username: '',
-  password: '',
-  jdbcUrl: '',
-  env: 'DEV',
-  readOnly: false,
-  comment: '',
+const inspectedIndexes = computed(() => {
+  if (!inspectedTable.value) return [];
+  const k = `${inspectedTable.value.profileId}:${inspectedTable.value.dbName}:${inspectedTable.value.tableName}`;
+  return indexesByKey[k] ?? [];
 });
 
-const showImportModal = ref(false);
-const importXmlText = ref('');
-const importPathText = ref('');
-const exportedXmlPreview = ref('');
+// Files Explorer & Snippets State
+const mountedDir = ref<string>(localStorage.getItem('pacergrip.mountedDir') || '');
+const workspaceEntries = ref<WorkspaceFileEntry[]>([]);
+const recentFiles = ref<string[]>(loadJsonStorage<string[]>('pacergrip.recentFiles', []));
+const customSnippets = ref<SqlSnippet[]>(loadJsonStorage<SqlSnippet[]>('pacergrip.snippets', []));
+const snippetFilter = ref('');
 
-const showExtensionsModal = ref(false);
+function loadJsonStorage<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
 
-const passwordPrompt = ref<{
-  visible: boolean;
-  profileId: string;
-  profileName: string;
-  value: string;
-  onConfirm: ((pwd: string) => Promise<void>) | null;
-}>({
-  visible: false,
-  profileId: '',
-  profileName: '',
-  value: '',
-  onConfirm: null,
-});
-
-const ENGINE_OPTIONS = [
-  { value: 'sqlite', label: 'SQLite (Native)', defaultPort: '' },
-  { value: 'mySql', label: 'MySQL (Native)', defaultPort: '3306' },
-  { value: 'mariaDb', label: 'MariaDB (Native)', defaultPort: '3306' },
-  { value: 'postgreSql', label: 'PostgreSQL (Native)', defaultPort: '5432' },
-  { value: 'tiDb', label: 'TiDB (MySQL Protocol)', defaultPort: '4000' },
-  { value: 'oceanBase', label: 'OceanBase (MySQL Protocol)', defaultPort: '2881' },
-  { value: 'openGauss', label: 'openGauss (PG Protocol)', defaultPort: '5432' },
-  { value: 'kingbase', label: 'KingbaseES (PG Protocol)', defaultPort: '54321' },
-  { value: 'oracle', label: 'Oracle (Import/AST)', defaultPort: '1521' },
-  { value: 'dameng', label: 'Dameng DM8 (Import/AST)', defaultPort: '5236' },
-  { value: 'sqlServer', label: 'SQL Server (Import/AST)', defaultPort: '1433' },
-];
-
-const filteredGridRows = computed(() => {
-  const needle = gridFilter.value.trim().toLowerCase();
-  if (!needle) return gridRows.value;
-  return gridRows.value.filter((row) =>
-    gridColumns.value.some((col) =>
-      String(row[col] ?? '')
-        .toLowerCase()
-        .includes(needle),
-    ),
+const allSnippets = computed(() => {
+  const merged = [...customSnippets.value, ...BUILTIN_SNIPPETS];
+  const q = snippetFilter.value.trim().toLowerCase();
+  if (!q) return merged;
+  return merged.filter(
+    (s) =>
+      s.title.toLowerCase().includes(q) ||
+      s.category.toLowerCase().includes(q) ||
+      s.sql.toLowerCase().includes(q),
   );
 });
 
-function engineKey(dbType: string | Record<string, string>): string {
-  if (typeof dbType === 'string') return dbType;
-  return Object.values(dbType)[0] ?? 'unknown';
+// Editor Tabs State
+let consoleCounter = 1;
+const defaultConsoleSql = `-- PacerGrip · DataGrip 风格原生 SQL 控制台
+-- 快捷键：Ctrl+Enter 执行当前语句或选中 SQL ｜ Ctrl+Shift+Enter 执行全部 ｜ Ctrl+O 打开 .md/.sql 文件
+-- 提示：支持打开 Markdown (.md) 运维/分析文档，选中任意 SQL 或点击代码块上方「▶ 执行」直接运行
+
+SELECT
+  c.full_name AS 客户名称,
+  c.country AS 国家地区,
+  c.tier AS 客户等级,
+  COUNT(o.id) AS 订单数,
+  ROUND(COALESCE(SUM(o.total_amount), 0), 2) AS 订单总额
+FROM customers c
+LEFT JOIN orders o ON o.customer_id = c.id
+GROUP BY c.id, c.full_name, c.country, c.tier
+ORDER BY 订单总额 DESC;
+`;
+
+function createEmptyCursor(content: string): EditorCursorTelemetry {
+  return {
+    line: 1,
+    col: 1,
+    lineCount: countLines(content),
+    charCount: content.length,
+    cursorOffset: 0,
+    selectedText: '',
+    selectedChars: 0,
+    selectedLines: 0,
+  };
 }
 
-function engineLabel(dbType: string | Record<string, string>): string {
-  return engineKey(dbType).toUpperCase();
-}
-
-function envClass(env: string): string {
-  if (env === 'PROD') return 'badge-prod';
-  if (env === 'TEST') return 'badge-test';
-  if (env === 'DEV') return 'badge-dev';
-  return 'badge-neutral';
-}
-
-function setBanner(text: string, isError = false) {
-  statusBanner.value = { text, isError };
-}
-
-let astTimer: ReturnType<typeof setTimeout> | null = null;
-watch(
-  [() => activeConsole.value?.sql, activeProfile],
-  () => {
-    if (astTimer) clearTimeout(astTimer);
-    astTimer = setTimeout(async () => {
-      if (!activeConsole.value) return;
-      try {
-        astAnalysis.value = await analyzeSql(
-          activeConsole.value.sql,
-          activeProfile.value?.dbType ?? 'sqlite',
-        );
-      } catch {
-        // Ignore transient AST parse noise while typing.
-      }
-    }, 150);
+const tabs = ref<EditorTab[]>([
+  {
+    id: 'console-1',
+    title: 'console_1.sql',
+    path: null,
+    fileKind: 'sql',
+    content: defaultConsoleSql,
+    savedContent: defaultConsoleSql,
+    encoding: 'UTF-8',
+    hasBom: false,
+    lineEnding: 'LF',
+    byteSize: estimateUtf8Bytes(defaultConsoleSql),
+    readOnly: false,
+    profileId: '',
+    dbName: '',
+    mdViewMode: 'source',
+    cursor: createEmptyCursor(defaultConsoleSql),
   },
-  { immediate: true },
+]);
+const activeTabId = ref<string>('console-1');
+const editorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
+
+const activeTab = computed(
+  () => tabs.value.find((tab) => tab.id === activeTabId.value) ?? tabs.value[0],
 );
 
-async function reloadConnections() {
-  connections.value = await listConnections();
-  if (activeConsole.value && !activeConsole.value.profileId && connections.value.length > 0) {
-    activeConsole.value.profileId = connections.value[0].id;
-    activeConsole.value.dbName =
-      (connections.value[0].fingerprint.database as string) || 'main';
+const activeProfile = computed(
+  () => connections.value.find((c) => c.id === activeTab.value?.profileId) ?? null,
+);
+
+const activeDatabases = computed(() =>
+  activeTab.value?.profileId ? databasesByProfile[activeTab.value.profileId] ?? [] : [],
+);
+
+const activeEngineKey = computed(() => {
+  const prof = activeProfile.value;
+  if (!prof) return 'sqlite';
+  return typeof prof.dbType === 'string' ? prof.dbType : Object.values(prof.dbType)[0] ?? 'sqlite';
+});
+
+const activeSchemaMap = computed<Record<string, string[]>>(() => {
+  const tab = activeTab.value;
+  if (!tab?.profileId || !tab.dbName) return {};
+  const tKey = `${tab.profileId}:${tab.dbName}`;
+  const tables = tablesByKey[tKey] ?? [];
+  const map: Record<string, string[]> = {};
+  for (const tbl of tables) {
+    const cKey = `${tab.profileId}:${tab.dbName}:${tbl.name}`;
+    const cols = columnsByKey[cKey] ?? [];
+    map[tbl.name] = cols.map((c) => c.name);
+  }
+  return map;
+});
+
+const isMarkdownTab = computed(() => activeTab.value?.fileKind === 'markdown');
+
+const activeMdBlocks = computed<MarkdownSqlBlock[]>(() => {
+  if (!isMarkdownTab.value || !activeTab.value) return [];
+  return extractMarkdownSqlBlocksLocal(activeTab.value.content);
+});
+
+const activeMdSegments = computed(() => {
+  if (!isMarkdownTab.value || !activeTab.value) return [];
+  return parseMarkdownSegments(activeTab.value.content);
+});
+
+const activeDialectLabel = computed(() => {
+  if (!activeTab.value) return 'SQL';
+  if (activeTab.value.fileKind === 'markdown') return 'Markdown + SQL';
+  if (activeTab.value.fileKind === 'json') return 'JSON';
+  if (activeTab.value.fileKind === 'xml') return 'XML';
+  const eng = activeEngineKey.value.toLowerCase();
+  if (eng.includes('sqlite')) return 'SQL (SQLite)';
+  if (eng.includes('postgres')) return 'SQL (PostgreSQL)';
+  if (eng.includes('mysql') || eng.includes('maria') || eng.includes('tidb')) return 'SQL (MySQL)';
+  return `SQL (${activeEngineKey.value})`;
+});
+
+// Services / Results / AST / History State
+const maxRowsLimit = ref<number | null>(1000);
+const activeServiceTab = ref<'result' | 'output' | 'ddl' | 'history' | 'problems'>('result');
+const resultTabs = ref<ResultTabItem[]>([]);
+const activeResultTabId = ref<string>('');
+const consoleLogs = ref<string[]>([]);
+const ddlText = ref<string>('');
+const ddlTitle = ref<string>('');
+const historyEntries = ref<QueryHistoryEntry[]>([]);
+const astAnalysis = ref<ScriptAnalysis | null>(null);
+const busy = ref(false);
+const statusMessage = ref('就绪 · 支持 DataGrip XML 连接导入与 Markdown 选中执行 SQL');
+const statusIsError = ref(false);
+
+// Modals State
+const activeModal = ref<ActiveModalKind>('none');
+const editingProfile = ref<ConnectionProfile | null>(null);
+const exportedXml = ref('');
+const dangerContext = ref<DangerModalContext | null>(null);
+const pendingDangerAction = ref<(() => Promise<void>) | null>(null);
+const passwordProfile = ref<ConnectionProfile | null>(null);
+const pendingAfterPassword = ref<(() => Promise<void>) | null>(null);
+
+const encodingModalContext = computed<EncodingModalContext | null>(() => {
+  const tab = activeTab.value;
+  if (!tab) return null;
+  return {
+    title: tab.title,
+    path: tab.path,
+    encoding: tab.encoding,
+    hasBom: tab.hasBom,
+    lineEnding: tab.lineEnding,
+    lineCount: tab.cursor.lineCount,
+    byteSize: tab.byteSize,
+  };
+});
+
+function setStatus(msg: string, isError = false) {
+  statusMessage.value = msg;
+  statusIsError.value = isError;
+}
+
+function appendLog(line: string) {
+  const ts = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  consoleLogs.value.push(`[${ts}] ${line}`);
+  if (consoleLogs.value.length > 500) {
+    consoleLogs.value.splice(0, consoleLogs.value.length - 500);
   }
 }
 
-async function handleCreateDemoDb() {
-  busy.value = true;
-  try {
-    const demo = await createDemoSqliteConnection();
-    await reloadConnections();
-    if (activeConsole.value) {
-      activeConsole.value.profileId = demo.id;
-      activeConsole.value.dbName = 'main';
+function isTabDirty(tab: EditorTab): boolean {
+  return tab.content !== tab.savedContent;
+}
+
+function updateTabContent(next: string) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  tab.content = next;
+  tab.byteSize = estimateUtf8Bytes(next);
+  tab.cursor.lineCount = countLines(next);
+  tab.cursor.charCount = next.length;
+  scheduleAstInspect();
+}
+
+function handleCursorChange(telemetry: EditorCursorTelemetry) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  tab.cursor = telemetry;
+  if (telemetry.selectedText.trim()) {
+    scheduleAstInspect();
+  }
+}
+
+// Debounced live AST analysis
+let astTimer: number | null = null;
+function scheduleAstInspect() {
+  if (astTimer !== null) window.clearTimeout(astTimer);
+  astTimer = window.setTimeout(() => {
+    void refreshAstInspection();
+  }, 320);
+}
+
+async function refreshAstInspection() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  let sqlCandidate = tab.cursor.selectedText.trim();
+  if (!sqlCandidate) {
+    if (tab.fileKind === 'markdown') {
+      const enclosing = findEnclosingMarkdownBlock(tab.cursor.line);
+      sqlCandidate = enclosing?.sql ?? activeMdBlocks.value[0]?.sql ?? '';
+    } else {
+      sqlCandidate = tab.content.trim();
     }
-    await toggleExpandProfile(demo, true);
-    setBanner(`已就绪示例 SQLite 数据库: ${demo.name}`);
-  } catch (err) {
-    setBanner(`创建示例数据库失败: ${String(err)}`, true);
-  } finally {
-    busy.value = false;
   }
-}
-
-function openNewConnectionModal() {
-  editingProfileId.value = null;
-  connForm.value = {
-    name: '',
-    dbType: 'sqlite',
-    host: 'localhost',
-    port: '',
-    database: '',
-    username: '',
-    password: '',
-    jdbcUrl: '',
-    env: 'DEV',
-    readOnly: false,
-    comment: '',
-  };
-  showConnModal.value = true;
-}
-
-function openEditConnectionModal(profile: ConnectionProfile) {
-  editingProfileId.value = profile.id;
-  const direct =
-    profile.mode.kind === 'direct' ? (profile.mode.config as DirectConfig) : undefined;
-  const eng = engineKey(profile.dbType);
-  connForm.value = {
-    name: profile.name,
-    dbType: eng,
-    host: direct?.host ?? profile.fingerprint.host ?? 'localhost',
-    port: String(direct?.port ?? profile.fingerprint.port ?? ''),
-    database: direct?.database ?? profile.fingerprint.database ?? '',
-    username: direct?.username ?? '',
-    password: '',
-    jdbcUrl: direct?.jdbcUrl ?? '',
-    env: profile.env === 'UNKNOWN' ? 'DEV' : profile.env,
-    readOnly: direct?.readOnly ?? !profile.capabilities.canDml,
-    comment: profile.comment ?? '',
-  };
-  showConnModal.value = true;
-}
-
-function onFormEngineChange() {
-  const opt = ENGINE_OPTIONS.find((o) => o.value === connForm.value.dbType);
-  if (opt && !editingProfileId.value) {
-    connForm.value.port = opt.defaultPort;
-  }
-}
-
-async function handleSaveConnection(testAfterSave = false) {
-  if (!connForm.value.name.trim()) {
-    setBanner('请输入连接名称', true);
+  if (!sqlCandidate) {
+    astAnalysis.value = null;
     return;
   }
+  try {
+    astAnalysis.value = await analyzeSql(sqlCandidate, activeEngineKey.value);
+  } catch {
+    // Keep last valid analysis on transient syntax state while typing
+  }
+}
+
+function findEnclosingMarkdownBlock(cursorLine: number): MarkdownSqlBlock | null {
+  return (
+    activeMdBlocks.value.find((b) => cursorLine >= b.startLine && cursorLine <= b.endLine) ?? null
+  );
+}
+
+// ==================== Connection & Metadata Operations ====================
+
+async function refreshConnections() {
+  if (!isTauriRuntime()) {
+    setStatus(t('browserFallbackNotice'));
+    return;
+  }
+  try {
+    let list = await listConnections();
+    if (list.length === 0) {
+      const demo = await createDemoSqliteConnection();
+      list = [demo];
+      appendLog(`自动初始化内置 SQLite 示例数据源: ${demo.name}`);
+    }
+    connections.value = list;
+    const first = list[0];
+    if (first && activeTab.value && !activeTab.value.profileId) {
+      activeTab.value.profileId = first.id;
+      await loadDatabasesForProfile(first, true);
+    }
+  } catch (err) {
+    setStatus(`加载数据源失败: ${String(err)}`, true);
+  }
+}
+
+async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFirst = false) {
+  try {
+    const dbs = await listDatabases(profile.id);
+    databasesByProfile[profile.id] = dbs;
+    expandedProfiles[profile.id] = true;
+    const defaultDb = dbs.find((d) => !d.isSystem)?.name ?? dbs[0]?.name ?? '';
+    if (autoSelectFirst && activeTab.value && activeTab.value.profileId === profile.id && defaultDb) {
+      activeTab.value.dbName = defaultDb;
+      await loadTablesForDb(profile, defaultDb);
+    }
+  } catch (err) {
+    const msg = String(err);
+    if (msg.toLowerCase().includes('password') || msg.includes('密码') || msg.includes('denied')) {
+      passwordProfile.value = profile;
+      pendingAfterPassword.value = () => loadDatabasesForProfile(profile, autoSelectFirst);
+      activeModal.value = 'password';
+      return;
+    }
+    setStatus(`加载库列表失败 (${profile.name}): ${msg}`, true);
+    appendLog(`ERROR [${profile.name}] ${msg}`);
+  }
+}
+
+async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
+  const key = `${profile.id}:${dbName}`;
+  try {
+    const tables = await listTables(profile.id, dbName);
+    tablesByKey[key] = tables;
+    expandedDatabases[key] = true;
+    // Prefetch first few tables' columns silently for instant SQL autocomplete
+    for (const tbl of tables.slice(0, 12)) {
+      const cKey = `${profile.id}:${dbName}:${tbl.name}`;
+      if (!columnsByKey[cKey]) {
+        listColumns(profile.id, dbName, tbl.name)
+          .then((cols) => {
+            columnsByKey[cKey] = cols;
+          })
+          .catch(() => {});
+      }
+    }
+  } catch (err) {
+    setStatus(`加载表列表失败 (${dbName}): ${String(err)}`, true);
+  }
+}
+
+async function toggleProfileNode(profile: ConnectionProfile) {
+  if (activeTab.value) {
+    activeTab.value.profileId = profile.id;
+  }
+  if (expandedProfiles[profile.id]) {
+    expandedProfiles[profile.id] = false;
+    return;
+  }
+  await loadDatabasesForProfile(profile, true);
+}
+
+async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
+  if (activeTab.value) {
+    activeTab.value.profileId = profile.id;
+    activeTab.value.dbName = dbName;
+  }
+  const key = `${profile.id}:${dbName}`;
+  if (expandedDatabases[key]) {
+    expandedDatabases[key] = false;
+    return;
+  }
+  await loadTablesForDb(profile, dbName);
+}
+
+async function loadTableMetadata(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const key = `${profile.id}:${dbName}:${tableName}`;
+  try {
+    const [cols, idxs] = await Promise.all([
+      listColumns(profile.id, dbName, tableName),
+      listIndexes(profile.id, dbName, tableName).catch(() => [] as IndexMeta[]),
+    ]);
+    columnsByKey[key] = cols;
+    indexesByKey[key] = idxs;
+  } catch (err) {
+    setStatus(`读取表元数据失败 (${tableName}): ${String(err)}`, true);
+  }
+}
+
+async function toggleTableNode(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const key = `${profile.id}:${dbName}:${tableName}`;
+  expandedTables[key] = !expandedTables[key];
+  if (expandedTables[key] && !columnsByKey[key]) {
+    await loadTableMetadata(profile, dbName, tableName);
+  }
+}
+
+async function selectTableNode(profile: ConnectionProfile, dbName: string, tableName: string) {
+  inspectedTable.value = { profileId: profile.id, dbName, tableName };
+  if (rightTool.value === null) {
+    rightTool.value = 'structure';
+  }
+  await loadTableMetadata(profile, dbName, tableName);
+}
+
+async function handleProfileSelectChange(profileId: string) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  tab.profileId = profileId;
+  tab.dbName = '';
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (prof) {
+    await loadDatabasesForProfile(prof, true);
+  }
+}
+
+async function handleDbSelectChange(dbName: string) {
+  const tab = activeTab.value;
+  if (!tab || !activeProfile.value) return;
+  tab.dbName = dbName;
+  if (dbName) {
+    await loadTablesForDb(activeProfile.value, dbName);
+  }
+}
+
+async function handleSaveConnection(
+  draft: ConnectionDraft,
+  password: string | null,
+  testFirst: boolean,
+) {
   busy.value = true;
   try {
-    const portNum = connForm.value.port.trim() ? Number(connForm.value.port.trim()) : null;
-    const draft: ConnectionDraft = {
-      id: editingProfileId.value,
-      name: connForm.value.name.trim(),
-      dbType: connForm.value.dbType,
-      host: connForm.value.dbType === 'sqlite' ? null : connForm.value.host.trim() || null,
-      port: connForm.value.dbType === 'sqlite' ? null : portNum,
-      database: connForm.value.database.trim() || null,
-      jdbcUrl: connForm.value.jdbcUrl.trim() || null,
-      username: connForm.value.username.trim() || null,
-      env: connForm.value.env,
-      readOnly: connForm.value.readOnly,
-      comment: connForm.value.comment.trim() || null,
-    };
-    const saved = await saveConnection(draft, connForm.value.password || null);
-    await reloadConnections();
-    if (activeConsole.value) {
-      activeConsole.value.profileId = saved.id;
-      activeConsole.value.dbName = (saved.fingerprint.database as string) || '';
+    const saved = await saveConnection(draft, password);
+    connections.value = await listConnections();
+    if (activeTab.value) {
+      activeTab.value.profileId = saved.id;
     }
-    if (testAfterSave) {
-      const ping = await testConnection(saved.id, connForm.value.password || null);
-      setBanner(`连接测试成功: ${ping.serverVersion ?? ''} (${ping.latencyMs} ms)`);
+    if (testFirst) {
+      const ping = await testConnection(saved.id, password);
+      if (ping.success) {
+        setStatus(`连接成功: ${saved.name} (${ping.latencyMs}ms · ${ping.serverVersion ?? 'OK'})`);
+        appendLog(`PING OK [${saved.name}] ${ping.latencyMs}ms ${ping.serverVersion ?? ''}`);
+        await loadDatabasesForProfile(saved, true);
+        activeModal.value = 'none';
+      } else {
+        setStatus(`已保存但连通性失败: ${ping.message}`, true);
+      }
     } else {
-      setBanner(`已保存连接: ${saved.name}`);
+      setStatus(`已保存数据源: ${saved.name}`);
+      activeModal.value = 'none';
     }
-    showConnModal.value = false;
   } catch (err) {
-    setBanner(`保存/测试连接失败: ${String(err)}`, true);
+    setStatus(`保存数据源失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
-  }
-}
-
-async function handleDeleteConnection(profile: ConnectionProfile) {
-  if (!window.confirm(`确认删除连接 "${profile.name}"？`)) return;
-  try {
-    await deleteConnection(profile.id);
-    await reloadConnections();
-    setBanner(`已删除连接: ${profile.name}`);
-  } catch (err) {
-    setBanner(`删除连接失败: ${String(err)}`, true);
-  }
-}
-
-function promptPasswordThen(profile: ConnectionProfile, action: (pwd: string) => Promise<void>) {
-  passwordPrompt.value = {
-    visible: true,
-    profileId: profile.id,
-    profileName: profile.name,
-    value: '',
-    onConfirm: action,
-  };
-}
-
-async function submitPasswordPrompt() {
-  const fn = passwordPrompt.value.onConfirm;
-  const pwd = passwordPrompt.value.value;
-  passwordPrompt.value.visible = false;
-  passwordPrompt.value.onConfirm = null;
-  if (fn) {
-    await fn(pwd);
   }
 }
 
@@ -353,826 +603,1944 @@ async function handleTestProfile(profile: ConnectionProfile) {
   busy.value = true;
   try {
     const ping = await testConnection(profile.id);
-    setBanner(`[${profile.name}] ${ping.serverVersion ?? 'Connected'} · ${ping.latencyMs} ms`);
-  } catch (err) {
-    const msg = String(err);
-    if (msg.toLowerCase().includes('access denied') || msg.toLowerCase().includes('password')) {
-      promptPasswordThen(profile, async (pwd) => {
-        try {
-          const ping = await testConnection(profile.id, pwd);
-          setBanner(`[${profile.name}] ${ping.serverVersion ?? 'Connected'} · ${ping.latencyMs} ms`);
-        } catch (err2) {
-          setBanner(`连接测试失败: ${String(err2)}`, true);
-        }
-      });
+    if (ping.success) {
+      setStatus(`连接测试成功: ${profile.name} (${ping.latencyMs}ms · ${ping.serverVersion ?? ''})`);
+      appendLog(`PING OK [${profile.name}] ${ping.latencyMs}ms`);
     } else {
-      setBanner(`连接测试失败: ${msg}`, true);
+      setStatus(`连接测试失败: ${ping.message}`, true);
     }
+  } catch (err) {
+    setStatus(`连接测试出错: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function toggleExpandProfile(profile: ConnectionProfile, forceOpen = false) {
-  const currentlyOpen = Boolean(expandedProfiles.value[profile.id]);
-  if (currentlyOpen && !forceOpen) {
-    expandedProfiles.value[profile.id] = false;
-    return;
-  }
-  if (activeConsole.value) {
-    activeConsole.value.profileId = profile.id;
-  }
+async function handleDeleteProfile(profile: ConnectionProfile) {
   try {
-    const dbs = await listDatabases(profile.id);
-    databasesByProfile.value[profile.id] = dbs;
-    expandedProfiles.value[profile.id] = true;
-    if (activeConsole.value && dbs.length > 0 && !activeConsole.value.dbName) {
-      const preferred = dbs.find((d) => !d.isSystem) ?? dbs[0];
-      activeConsole.value.dbName = preferred.name;
+    await deleteConnection(profile.id);
+    connections.value = await listConnections();
+    if (activeTab.value?.profileId === profile.id) {
+      activeTab.value.profileId = connections.value[0]?.id ?? '';
+      activeTab.value.dbName = '';
     }
+    setStatus(`已删除数据源: ${profile.name}`);
   } catch (err) {
-    const msg = String(err);
-    if (msg.toLowerCase().includes('access denied') || msg.toLowerCase().includes('password')) {
-      promptPasswordThen(profile, async (pwd) => {
-        try {
-          const dbs = await listDatabases(profile.id, pwd);
-          databasesByProfile.value[profile.id] = dbs;
-          expandedProfiles.value[profile.id] = true;
-        } catch (err2) {
-          setBanner(`加载数据库失败: ${String(err2)}`, true);
-        }
-      });
-    } else {
-      setBanner(`加载数据库失败: ${msg}`, true);
-    }
+    setStatus(`删除数据源失败: ${String(err)}`, true);
   }
 }
 
-async function toggleExpandDatabase(profile: ConnectionProfile, dbName: string) {
-  const key = `${profile.id}:${dbName}`;
-  if (activeConsole.value) {
-    activeConsole.value.profileId = profile.id;
-    activeConsole.value.dbName = dbName;
-  }
-  if (expandedDatabases.value[key]) {
-    expandedDatabases.value[key] = false;
-    return;
-  }
-  try {
-    tablesByKey.value[key] = await listTables(profile.id, dbName);
-    expandedDatabases.value[key] = true;
-  } catch (err) {
-    setBanner(`加载表失败: ${String(err)}`, true);
-  }
-}
-
-async function toggleExpandTable(profile: ConnectionProfile, dbName: string, tableName: string) {
-  const key = `${profile.id}:${dbName}:${tableName}`;
-  if (expandedTables.value[key]) {
-    expandedTables.value[key] = false;
-    return;
-  }
-  try {
-    columnsByKey.value[key] = await listColumns(profile.id, dbName, tableName);
-    expandedTables.value[key] = true;
-  } catch (err) {
-    setBanner(`加载字段失败: ${String(err)}`, true);
-  }
-}
-
-async function previewTop100(profile: ConnectionProfile, dbName: string, tableName: string) {
-  if (!activeConsole.value) return;
-  activeConsole.value.profileId = profile.id;
-  activeConsole.value.dbName = dbName;
-  const eng = engineKey(profile.dbType);
-  const quoted =
-    eng === 'postgreSql' || eng === 'openGauss' || eng === 'kingbase'
-      ? `"${dbName}"."${tableName}"`
-      : eng === 'sqlite'
-        ? `"${tableName}"`
-        : `\`${dbName}\`.\`${tableName}\``;
-  activeConsole.value.sql = `SELECT * FROM ${quoted} LIMIT 100;`;
-  await runSql();
-}
-
-async function viewTableDdl(profile: ConnectionProfile, dbName: string, tableName: string) {
+async function handleInitDemoSqlite() {
   busy.value = true;
   try {
-    ddlText.value = await getTableDdl(profile.id, dbName, tableName);
-    ddlTargetLabel.value = `${profile.name} · ${dbName}.${tableName}`;
-    activeOutputTab.value = 'ddl';
+    const demo = await createDemoSqliteConnection();
+    connections.value = await listConnections();
+    if (activeTab.value) {
+      activeTab.value.profileId = demo.id;
+    }
+    await loadDatabasesForProfile(demo, true);
+    setStatus(`示例 SQLite 数据库已就绪: ${demo.name}`);
   } catch (err) {
-    setBanner(`获取 DDL 失败: ${String(err)}`, true);
+    setStatus(`初始化示例库失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function runSql() {
-  if (!activeConsole.value || !activeProfile.value) {
-    setBanner('请先选择或创建数据库连接', true);
+async function handleSubmitPassword(profileId: string, password: string) {
+  busy.value = true;
+  try {
+    const ping = await testConnection(profileId, password);
+    if (!ping.success) {
+      setStatus(`认证失败: ${ping.message}`, true);
+      return;
+    }
+    activeModal.value = 'none';
+    setStatus(`认证成功 (${ping.latencyMs}ms)`);
+    if (pendingAfterPassword.value) {
+      const fn = pendingAfterPassword.value;
+      pendingAfterPassword.value = null;
+      await fn();
+    }
+  } catch (err) {
+    setStatus(`密码认证失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleImportPath(path: string) {
+  busy.value = true;
+  try {
+    const imported = await importDataGripPath(path);
+    connections.value = await listConnections();
+    setStatus(`已从 DataGrip 文件导入 ${imported.length} 个数据源`);
+    appendLog(`IMPORT DataGrip Path (${path}) -> ${imported.length} profile(s)`);
+    activeModal.value = 'none';
+  } catch (err) {
+    setStatus(`导入 DataGrip 路径失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleImportXml(xml: string) {
+  busy.value = true;
+  try {
+    const imported = await importDataGripXml(xml);
+    connections.value = await listConnections();
+    setStatus(`已从剪贴板 XML 导入 ${imported.length} 个数据源`);
+    appendLog(`IMPORT DataGrip XML -> ${imported.length} profile(s)`);
+    activeModal.value = 'none';
+  } catch (err) {
+    setStatus(`解析 DataGrip XML 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleExportXml() {
+  busy.value = true;
+  try {
+    exportedXml.value = await exportDataGripXml();
+    setStatus('已生成 DataGrip 兼容 dataSources.xml（不含明文密码）');
+  } catch (err) {
+    setStatus(`导出 XML 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+// ==================== Table Actions ====================
+
+async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tableName: string) {
+  if (activeTab.value) {
+    activeTab.value.profileId = profile.id;
+    activeTab.value.dbName = dbName;
+  }
+  const sql = `SELECT * FROM ${tableName} LIMIT 100;`;
+  await runStatementsWithGuard([sql], `${tableName} (前100行)`, profile, dbName);
+}
+
+async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableName: string) {
+  busy.value = true;
+  try {
+    const ddl = await getTableDdl(profile.id, dbName, tableName);
+    ddlText.value = ddl;
+    ddlTitle.value = `${profile.name} · ${dbName}.${tableName}`;
+    activeServiceTab.value = 'ddl';
+    setStatus(`已加载表 DDL: ${tableName}`);
+  } catch (err) {
+    setStatus(`获取 DDL 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const cKey = `${profile.id}:${dbName}:${tableName}`;
+  const cols = columnsByKey[cKey] ?? [];
+  const colList = cols.length > 0 ? cols.map((c) => `  ${c.name}`).join(',\n') : '  *';
+  const snippet = `SELECT\n${colList}\nFROM ${tableName}\nLIMIT 100;\n`;
+  editorRef.value?.insertText(snippet);
+  setStatus(`已生成 ${tableName} 查询语句到编辑器`);
+}
+
+// ==================== SQL Execution Engine (with High-Risk Guard) ====================
+
+async function runActiveEditor(runAll: boolean) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const prof = activeProfile.value;
+  if (!prof) {
+    setStatus('请先在顶部工具栏选择一个目标数据源', true);
     return;
   }
 
-  busy.value = true;
-  statusBanner.value = null;
-  gridColumns.value = [];
-  gridRows.value = [];
-  gridFilter.value = '';
-  querySummary.value = null;
-  activeOutputTab.value = 'grid';
+  // 1. Selected text ALWAYS has highest priority (works in .md, .sql, .txt!)
+  const selected = tab.cursor.selectedText.trim();
+  if (!runAll && selected) {
+    await runStatementsWithGuard([selected], '选中 SQL', prof, tab.dbName);
+    return;
+  }
 
-  try {
-    const summary = await executeSql(
-      activeProfile.value.id,
-      activeConsole.value.dbName || null,
-      activeConsole.value.sql,
-      1000,
-      (chunk) => {
-        if (gridColumns.value.length === 0 && chunk.columns.length > 0) {
-          gridColumns.value = chunk.columns;
-        }
-        gridRows.value.push(...chunk.rows);
-      },
-    );
-    querySummary.value = summary;
-    if (summary.isDmlOrDdl) {
-      setBanner(
-        `执行完成，影响行数: ${summary.affectedRows ?? 0} (${summary.durationMs} ms)`,
-      );
-      const dbKey = `${activeProfile.value.id}:${activeConsole.value.dbName}`;
-      if (expandedDatabases.value[dbKey]) {
-        tablesByKey.value[dbKey] = await listTables(
-          activeProfile.value.id,
-          activeConsole.value.dbName,
-        );
+  // 2. Markdown mode: execute enclosing SQL block or all fenced SQL blocks
+  if (tab.fileKind === 'markdown') {
+    if (runAll) {
+      if (activeMdBlocks.value.length === 0) {
+        setStatus(t('mdNoBlocks'), true);
+        return;
       }
+      await runStatementsWithGuard(
+        activeMdBlocks.value.map((b) => b.sql),
+        tab.title,
+        prof,
+        tab.dbName,
+      );
+      return;
     }
-    historyEntries.value = await listQueryHistory().catch(() => historyEntries.value);
-  } catch (err) {
-    setBanner(`执行失败: ${String(err)}`, true);
-    historyEntries.value = await listQueryHistory().catch(() => historyEntries.value);
-  } finally {
-    busy.value = false;
+    const block = findEnclosingMarkdownBlock(tab.cursor.line);
+    if (block) {
+      await runStatementsWithGuard(
+        [block.sql],
+        block.title ? `${block.title}` : `SQL #${block.index + 1}`,
+        prof,
+        tab.dbName,
+      );
+      return;
+    }
+    setStatus('请先选中要执行的 SQL 文本，或将光标移入 ```sql 代码块内，或点击代码块上方「▶ 执行」', true);
+    return;
+  }
+
+  // 3. Regular SQL console/file: single statement at cursor or full script
+  if (!runAll) {
+    const stmt = await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset);
+    const toRun = (stmt ?? tab.content).trim();
+    if (!toRun) {
+      setStatus('当前编辑器为空，无可执行的 SQL 语句', true);
+      return;
+    }
+    await runStatementsWithGuard([toRun], tab.title, prof, tab.dbName);
+  } else {
+    const full = tab.content.trim();
+    if (!full) {
+      setStatus('当前脚本为空', true);
+      return;
+    }
+    const analysis = await analyzeSql(full, activeEngineKey.value);
+    const stmts =
+      analysis.statements.length > 0
+        ? analysis.statements.map((s) => s.sql.trim()).filter(Boolean)
+        : [full];
+    await runStatementsWithGuard(stmts, tab.title, prof, tab.dbName);
   }
 }
 
-async function runExplain() {
-  if (!activeConsole.value || !activeProfile.value) return;
-  busy.value = true;
-  activeOutputTab.value = 'grid';
-  gridColumns.value = [];
-  gridRows.value = [];
+async function runMarkdownBlock(block: MarkdownSqlBlock) {
+  const prof = activeProfile.value;
+  if (!prof) {
+    setStatus('请先选择目标数据源再执行 Markdown SQL 代码块', true);
+    return;
+  }
+  const title = block.title ? `#${block.index + 1} ${block.title}` : `SQL 块 #${block.index + 1}`;
+  await runStatementsWithGuard([block.sql], title, prof, activeTab.value?.dbName ?? '');
+}
+
+async function explainMarkdownBlock(block: MarkdownSqlBlock) {
+  await runExplainSql(block.sql);
+}
+
+function openMarkdownBlockInConsole(block: MarkdownSqlBlock) {
+  const header = block.title ? `-- 来源文档: ${activeTab.value?.title} · ${block.title}\n` : '';
+  createNewConsoleTab(`${header}${block.sql}\n`);
+}
+
+async function runStatementsWithGuard(
+  statements: string[],
+  label: string,
+  profile: ConnectionProfile,
+  dbName: string,
+) {
+  const joined = statements.join(';\n');
+  let analysis: ScriptAnalysis | null = null;
   try {
-    const res = await explainSql(
-      activeProfile.value.id,
-      activeConsole.value.dbName || 'main',
-      activeConsole.value.sql,
-    );
-    gridColumns.value = res.columns;
-    gridRows.value = res.rows;
-    querySummary.value = {
-      success: res.success,
-      database: activeConsole.value.dbName || 'main',
-      totalRows: res.rows.length,
-      affectedRows: null,
-      isDmlOrDdl: false,
-      durationMs: res.durationMs,
-      maskedColumns: {},
-      errorMessage: res.errorMessage,
+    analysis = await analyzeSql(joined, profile.dbType);
+    astAnalysis.value = analysis;
+  } catch {
+    analysis = null;
+  }
+
+  const highWarnings =
+    analysis?.statements.flatMap((s) =>
+      s.warnings.filter((w) => w.level === 'HIGH' || w.level === 'CRITICAL'),
+    ) ?? [];
+
+  const isProdWrite =
+    profile.env === 'PROD' &&
+    analysis !== null &&
+    (analysis.overallKind === 'WRITE_DML' ||
+      analysis.overallKind === 'WRITE_DDL' ||
+      analysis.overallKind === 'ADMIN_OR_DCL');
+
+  if (highWarnings.length > 0 || isProdWrite) {
+    const warnings = [...highWarnings];
+    if (isProdWrite && warnings.length === 0) {
+      warnings.push({
+        code: 'PROD_WRITE_GUARD',
+        level: 'HIGH',
+        message: '目标数据源已标记为 PROD（生产环境），写操作需要人工二次确认。',
+        statementIndex: 0,
+      });
+    }
+    dangerContext.value = {
+      profileName: profile.name,
+      env: profile.env,
+      dbName,
+      sql: joined,
+      warnings: warnings.map((w) => ({ code: w.code, level: w.level, message: w.message })),
     };
+    pendingDangerAction.value = () => executeStatementsBatch(statements, label, profile, dbName);
+    activeModal.value = 'danger';
+    return;
+  }
+
+  await executeStatementsBatch(statements, label, profile, dbName);
+}
+
+async function confirmDangerExecution() {
+  activeModal.value = 'none';
+  if (pendingDangerAction.value) {
+    const fn = pendingDangerAction.value;
+    pendingDangerAction.value = null;
+    await fn();
+  }
+}
+
+async function executeStatementsBatch(
+  statements: string[],
+  label: string,
+  profile: ConnectionProfile,
+  dbName: string,
+) {
+  busy.value = true;
+  const newTabs: ResultTabItem[] = [];
+  let totalRowsAll = 0;
+  let totalMsAll = 0;
+  let lastError: string | null = null;
+
+  try {
+    for (let idx = 0; idx < statements.length; idx += 1) {
+      const sql = statements[idx].trim();
+      if (!sql) continue;
+      const tabId = `res-${Date.now()}-${idx}`;
+      const tabTitle = statements.length > 1 ? `${label} #${idx + 1}` : label;
+      const item: ResultTabItem = {
+        id: tabId,
+        title: tabTitle,
+        sql,
+        columns: [],
+        rows: [],
+        summary: null,
+      };
+      appendLog(`RUN [${profile.name}${dbName ? '/' + dbName : ''}] ${sql.replace(/\s+/g, ' ').slice(0, 140)}`);
+
+      const summary = await executeSql(
+        profile.id,
+        dbName || null,
+        sql,
+        maxRowsLimit.value,
+        (chunk) => {
+          if (item.columns.length === 0 && chunk.columns.length > 0) {
+            item.columns = chunk.columns;
+          }
+          if (chunk.rows.length > 0) {
+            item.rows.push(...chunk.rows);
+          }
+        },
+      );
+      item.summary = summary;
+      totalMsAll += summary.durationMs;
+      totalRowsAll += summary.totalRows;
+
+      if (summary.success) {
+        appendLog(
+          `OK (${summary.durationMs}ms · ${
+            summary.isDmlOrDdl
+              ? `影响 ${summary.affectedRows ?? 0} 行`
+              : `返回 ${summary.totalRows} 行`
+          })`,
+        );
+      } else {
+        lastError = summary.errorMessage ?? '执行失败';
+        appendLog(`ERROR (${summary.durationMs}ms): ${lastError}`);
+      }
+      newTabs.push(item);
+    }
+
+    if (newTabs.length > 0) {
+      resultTabs.value = [...newTabs, ...resultTabs.value].slice(0, 12);
+      activeResultTabId.value = newTabs[0].id;
+      activeServiceTab.value = lastError && newTabs[0].columns.length === 0 ? 'output' : 'result';
+    }
+
+    if (lastError) {
+      setStatus(`执行异常: ${lastError}`, true);
+    } else {
+      setStatus(
+        `执行成功 · ${newTabs.length} 条语句 · ${totalRowsAll} 行 · ${totalMsAll} ms (${profile.name})`,
+      );
+    }
+    await refreshHistory();
   } catch (err) {
-    setBanner(`EXPLAIN 失败: ${String(err)}`, true);
+    const msg = String(err);
+    appendLog(`FATAL: ${msg}`);
+    setStatus(`执行 SQL 出错: ${msg}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function handleImportDataGrip() {
+async function runExplainActive() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  let sql = tab.cursor.selectedText.trim();
+  if (!sql && tab.fileKind === 'markdown') {
+    sql = findEnclosingMarkdownBlock(tab.cursor.line)?.sql ?? '';
+  }
+  if (!sql) {
+    sql = (await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset)) ?? tab.content;
+  }
+  await runExplainSql(sql);
+}
+
+async function runExplainSql(sql: string) {
+  const prof = activeProfile.value;
+  if (!prof || !sql.trim()) {
+    setStatus('请先选择数据源并提供有效 SQL 以查看执行计划', true);
+    return;
+  }
   busy.value = true;
   try {
-    let imported: ConnectionProfile[] = [];
-    if (importXmlText.value.trim()) {
-      imported = await importDataGripXml(importXmlText.value);
-    } else if (importPathText.value.trim()) {
-      imported = await importDataGripPath(importPathText.value.trim());
-    }
-    await reloadConnections();
-    if (imported.length > 0 && activeConsole.value) {
-      activeConsole.value.profileId = imported[0].id;
-    }
-    setBanner(`成功导入并合并 ${imported.length} 个 DataGrip 连接`);
-    showImportModal.value = false;
+    const dbName = activeTab.value?.dbName || 'main';
+    const res = await explainSql(prof.id, dbName, sql.trim());
+    const tabId = `explain-${Date.now()}`;
+    const item: ResultTabItem = {
+      id: tabId,
+      title: `EXPLAIN (${res.durationMs}ms)`,
+      sql: sql.trim(),
+      columns: res.columns,
+      rows: res.rows,
+      summary: {
+        success: res.success,
+        database: dbName,
+        totalRows: res.rows.length,
+        affectedRows: null,
+        isDmlOrDdl: false,
+        durationMs: res.durationMs,
+        maskedColumns: {},
+        errorMessage: res.errorMessage ?? null,
+      },
+    };
+    resultTabs.value = [item, ...resultTabs.value].slice(0, 12);
+    activeResultTabId.value = tabId;
+    activeServiceTab.value = 'result';
+    appendLog(`EXPLAIN [${prof.name}] ${res.durationMs}ms -> ${res.rows.length} steps`);
+    setStatus(res.success ? `执行计划生成成功 (${res.durationMs}ms)` : `EXPLAIN 失败: ${res.errorMessage}`, !res.success);
   } catch (err) {
-    setBanner(`DataGrip 导入失败: ${String(err)}`, true);
+    setStatus(`EXPLAIN 出错: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
-async function handleExportDataGrip() {
+async function formatActiveSql() {
+  const tab = activeTab.value;
+  if (!tab || tab.readOnly) return;
+  if (tab.fileKind === 'markdown') {
+    setStatus('Markdown 文档暂不对全文执行 SQL 格式化；可在控制台打开单个 SQL 块后格式化');
+    return;
+  }
   try {
-    exportedXmlPreview.value = await exportDataGripXml();
-    showImportModal.value = true;
+    const formatted = await formatSql(tab.content);
+    updateTabContent(formatted);
+    setStatus('已完成 SQL 格式化');
   } catch (err) {
-    setBanner(`导出 DataGrip XML 失败: ${String(err)}`, true);
+    setStatus(`格式化失败: ${String(err)}`, true);
   }
 }
 
-function downloadTextFile(filename: string, content: string, mime: string) {
-  const blob = new Blob([content], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
+async function refreshHistory() {
+  if (!isTauriRuntime()) return;
+  try {
+    historyEntries.value = await listQueryHistory();
+  } catch {
+    // non-fatal
+  }
 }
 
-function exportResultCsv() {
-  if (gridColumns.value.length === 0) return;
-  const esc = (v: unknown) => {
-    if (v === null || v === undefined) return '';
-    const s = String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [
-    gridColumns.value.map(esc).join(','),
-    ...filteredGridRows.value.map((r) => gridColumns.value.map((c) => esc(r[c])).join(',')),
-  ];
-  downloadTextFile('query_result.csv', lines.join('\n'), 'text/csv;charset=utf-8');
+function closeResultTab(id: string) {
+  resultTabs.value = resultTabs.value.filter((r) => r.id !== id);
+  if (activeResultTabId.value === id) {
+    activeResultTabId.value = resultTabs.value[0]?.id ?? '';
+  }
 }
 
-function exportResultJson() {
-  if (filteredGridRows.value.length === 0) return;
-  downloadTextFile(
-    'query_result.json',
-    JSON.stringify(filteredGridRows.value, null, 2),
-    'application/json;charset=utf-8',
-  );
+function loadHistorySqlIntoEditor(entry: QueryHistoryEntry) {
+  createNewConsoleTab(entry.sql, entry.profileId, entry.database ?? '');
+  setStatus(`已从执行历史载入 SQL (${entry.profileName})`);
 }
 
-function addConsoleTab() {
-  consoleSeq += 1;
-  const id = `console-${consoleSeq}`;
-  consoles.value.push({
+// ==================== File & Markdown Operations ====================
+
+function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: string) {
+  consoleCounter += 1;
+  const id = `console-${Date.now()}-${consoleCounter}`;
+  const current = activeTab.value;
+  const tab: EditorTab = {
     id,
-    title: `console_${consoleSeq}.sql`,
-    sql: 'SELECT 1;',
-    profileId: activeConsole.value?.profileId ?? '',
-    dbName: activeConsole.value?.dbName ?? '',
-  });
-  activeConsoleId.value = id;
+    title: `console_${consoleCounter}.sql`,
+    path: null,
+    fileKind: 'sql',
+    content: initialSql,
+    savedContent: initialSql,
+    encoding: 'UTF-8',
+    hasBom: false,
+    lineEnding: 'LF',
+    byteSize: estimateUtf8Bytes(initialSql),
+    readOnly: false,
+    profileId: profileId ?? current?.profileId ?? connections.value[0]?.id ?? '',
+    dbName: dbName ?? current?.dbName ?? '',
+    mdViewMode: 'source',
+    cursor: createEmptyCursor(initialSql),
+  };
+  tabs.value.push(tab);
+  activeTabId.value = id;
+  scheduleAstInspect();
 }
 
-function closeConsoleTab(id: string) {
-  if (consoles.value.length <= 1) return;
-  const idx = consoles.value.findIndex((c) => c.id === id);
-  consoles.value = consoles.value.filter((c) => c.id !== id);
-  if (activeConsoleId.value === id) {
-    activeConsoleId.value = consoles.value[Math.max(0, idx - 1)].id;
+function closeEditorTab(id: string) {
+  if (tabs.value.length <= 1) {
+    createNewConsoleTab('');
+  }
+  const idx = tabs.value.findIndex((t) => t.id === id);
+  tabs.value = tabs.value.filter((t) => t.id !== id);
+  if (activeTabId.value === id) {
+    const next = tabs.value[Math.max(0, idx - 1)] ?? tabs.value[0];
+    if (next) activeTabId.value = next.id;
   }
 }
 
-function loadHistorySql(entry: QueryHistoryEntry) {
-  if (!activeConsole.value) return;
-  activeConsole.value.sql = entry.sql;
-  activeConsole.value.profileId = entry.profileId;
-  if (entry.database) {
-    activeConsole.value.dbName = entry.database;
+function recordRecentFile(path: string) {
+  const norm = path.replace(/\\/g, '/');
+  recentFiles.value = [norm, ...recentFiles.value.filter((p) => p !== norm)].slice(0, 12);
+  localStorage.setItem('pacergrip.recentFiles', JSON.stringify(recentFiles.value));
+}
+
+function openFileDtoInTab(dto: OpenedFileDto) {
+  const existing = tabs.value.find((t) => t.path && t.path === dto.path);
+  const defaultMdMode = window.innerWidth >= 1120 ? 'split' : 'source';
+  if (existing) {
+    existing.content = dto.content;
+    existing.savedContent = dto.content;
+    existing.encoding = dto.encoding;
+    existing.hasBom = dto.hasBom;
+    existing.lineEnding = dto.lineEnding === 'CRLF' ? 'CRLF' : 'LF';
+    existing.byteSize = dto.byteSize;
+    existing.fileKind = dto.fileKind;
+    existing.cursor = createEmptyCursor(dto.content);
+    activeTabId.value = existing.id;
+  } else {
+    const current = activeTab.value;
+    const id = `file-${Date.now()}`;
+    tabs.value.push({
+      id,
+      title: dto.name,
+      path: dto.path,
+      fileKind: dto.fileKind,
+      content: dto.content,
+      savedContent: dto.content,
+      encoding: dto.encoding,
+      hasBom: dto.hasBom,
+      lineEnding: dto.lineEnding === 'CRLF' ? 'CRLF' : 'LF',
+      byteSize: dto.byteSize,
+      readOnly: false,
+      profileId: current?.profileId ?? connections.value[0]?.id ?? '',
+      dbName: current?.dbName ?? '',
+      mdViewMode: dto.fileKind === 'markdown' ? defaultMdMode : 'source',
+      cursor: createEmptyCursor(dto.content),
+    });
+    activeTabId.value = id;
+  }
+  recordRecentFile(dto.path);
+  setStatus(
+    `已打开 ${dto.name} · ${dto.encoding} · ${dto.lineEnding} · 共 ${dto.lineCount} 行 · ${formatBytes(dto.byteSize)}${
+      dto.sqlBlocks.length > 0 ? ` · 检测到 ${dto.sqlBlocks.length} 个可执行 SQL 块` : ''
+    }`,
+  );
+  scheduleAstInspect();
+}
+
+async function openFileFromDialog() {
+  try {
+    const picked = await pickTextFileToOpen();
+    if (!picked) return;
+    await openLocalFileByPath(picked);
+  } catch (err) {
+    setStatus(`打开文件失败: ${String(err)}`, true);
   }
 }
 
-function onEditorKeyDown(ev: KeyboardEvent) {
-  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-    ev.preventDefault();
-    void runSql();
+async function openLocalFileByPath(path: string, encodingOverride?: string) {
+  busy.value = true;
+  try {
+    const dto = await openTextFile(path, encodingOverride);
+    openFileDtoInTab(dto);
+  } catch (err) {
+    setStatus(`读取文件失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
   }
 }
 
-function copyText(text: string) {
-  void navigator.clipboard?.writeText(text);
-  setBanner('已复制到剪贴板');
+async function openDemoMarkdownHandbook() {
+  busy.value = true;
+  try {
+    const dto = await createDemoMarkdownFile();
+    openFileDtoInTab(dto);
+  } catch (err) {
+    setStatus(`打开示例 Markdown 手册失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
 }
+
+async function saveActiveTab(forceSaveAs = false) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  try {
+    let targetPath = forceSaveAs ? null : tab.path;
+    if (!targetPath) {
+      targetPath = await pickSaveFilePath(tab.title);
+      if (!targetPath) return;
+    }
+    const stats = await saveTextFile(
+      targetPath,
+      tab.content,
+      tab.encoding,
+      tab.lineEnding,
+      tab.hasBom,
+    );
+    tab.path = stats.path;
+    tab.title = stats.path.split('/').pop() ?? tab.title;
+    tab.savedContent = tab.content;
+    tab.encoding = stats.encoding;
+    tab.hasBom = stats.hasBom;
+    tab.lineEnding = stats.lineEnding === 'CRLF' ? 'CRLF' : 'LF';
+    tab.byteSize = stats.byteSize;
+    if (tab.title.toLowerCase().endsWith('.md') || tab.title.toLowerCase().endsWith('.markdown')) {
+      tab.fileKind = 'markdown';
+    }
+    recordRecentFile(stats.path);
+    setStatus(
+      t('savedNotice', {
+        name: tab.title,
+        encoding: stats.encoding,
+        eol: stats.lineEnding,
+        lines: stats.lineCount,
+      }),
+    );
+    if (mountedDir.value) {
+      await loadDirectory(mountedDir.value);
+    }
+  } catch (err) {
+    setStatus(`保存文件失败: ${String(err)}`, true);
+  }
+}
+
+async function handleReloadEncoding(encoding: string) {
+  const tab = activeTab.value;
+  if (!tab?.path) return;
+  await openLocalFileByPath(tab.path, encoding);
+  activeModal.value = 'none';
+}
+
+function handleConvertEncoding(encoding: string, hasBom: boolean, lineEnding: 'CRLF' | 'LF') {
+  const tab = activeTab.value;
+  if (!tab) return;
+  tab.encoding = encoding;
+  tab.hasBom = hasBom;
+  tab.lineEnding = lineEnding;
+  // Force dirty indicator if user explicitly changed save encoding on a disk file
+  if (tab.path) {
+    tab.savedContent = tab.savedContent === tab.content ? `${tab.savedContent}\0__enc_dirty__` : tab.savedContent;
+  }
+  activeModal.value = 'none';
+  setStatus(`已切换保存格式为 ${encoding} (${lineEnding})，按 Ctrl+S 保存生效`);
+}
+
+function toggleLineEndingQuick() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  tab.lineEnding = tab.lineEnding === 'LF' ? 'CRLF' : 'LF';
+  setStatus(`当前行尾符已切换为 ${tab.lineEnding}`);
+}
+
+async function mountFolderDialog() {
+  try {
+    const dir = await pickDirectoryToMount();
+    if (!dir) return;
+    await loadDirectory(dir);
+    leftTool.value = 'files';
+  } catch (err) {
+    setStatus(`挂载本地目录失败: ${String(err)}`, true);
+  }
+}
+
+async function loadDirectory(dirPath: string) {
+  if (!dirPath) return;
+  try {
+    workspaceEntries.value = await listWorkspaceFiles(dirPath);
+    mountedDir.value = dirPath.replace(/\\/g, '/');
+    localStorage.setItem('pacergrip.mountedDir', mountedDir.value);
+  } catch (err) {
+    setStatus(`读取目录失败: ${String(err)}`, true);
+  }
+}
+
+// ==================== Snippets ====================
+
+function insertSnippetIntoEditor(sql: string) {
+  editorRef.value?.insertText(`\n${sql}\n`);
+  setStatus('已插入 SQL 代码片段到编辑器');
+}
+
+function saveCurrentAsSnippet() {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const sql = (tab.cursor.selectedText.trim() || tab.content.trim()).slice(0, 4000);
+  if (!sql) return;
+  const title = sql.split('\n')[0].replace(/^--\s*/, '').slice(0, 32) || '自定义 SQL 片段';
+  const entry: SqlSnippet = {
+    id: `custom-${Date.now()}`,
+    title,
+    category: '自定义',
+    sql,
+  };
+  customSnippets.value = [entry, ...customSnippets.value].slice(0, 40);
+  localStorage.setItem('pacergrip.snippets', JSON.stringify(customSnippets.value));
+  setStatus(`已保存代码片段: ${title}`);
+}
+
+function removeCustomSnippet(id: string) {
+  customSnippets.value = customSnippets.value.filter((s) => s.id !== id);
+  localStorage.setItem('pacergrip.snippets', JSON.stringify(customSnippets.value));
+}
+
+// ==================== Search Everywhere (Ctrl+K) ====================
+
+const searchItems = computed<SearchEverywhereItem[]>(() => {
+  const items: SearchEverywhereItem[] = [
+    { id: 'act-open-file', category: 'action', label: t('openFile'), detail: '打开本地 Markdown / SQL 文件并检测编码', badge: 'Ctrl+O' },
+    { id: 'act-open-folder', category: 'action', label: t('openFolder'), detail: '挂载本地目录到文件资源管理器', badge: '文件' },
+    { id: 'act-demo-md', category: 'action', label: t('openDemoMd'), detail: '体验 Markdown 内联 CodeLens 与选中执行 SQL', badge: '示例' },
+    { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
+    { id: 'act-import', category: 'action', label: t('importDataGrip'), detail: '导入 dataSources.xml / .idea / Settings .zip', badge: 'DataGrip' },
+    { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: 'Ctrl+N' },
+    { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: 'Ctrl+Alt+L' },
+    { id: 'act-theme', category: 'action', label: `切换主题 (${theme.value === 'dark' ? t('themeLight') : t('themeDark')})`, detail: '在 Darcula 深色与 IntelliJ 浅色主题间切换', badge: '主题' },
+    { id: 'act-lang', category: 'action', label: `切换界面语言 (${locale.value === 'zh-CN' ? 'English' : '简体中文'})`, detail: '中英文界面即时切换', badge: 'i18n' },
+    { id: 'act-encoding', category: 'action', label: t('encodingModalTitle'), detail: '重新解码 GBK/UTF-8 BOM 或转换保存编码', badge: '编码' },
+    { id: 'act-shortcuts', category: 'action', label: t('shortcutsTitle'), detail: '查看全部 DataGrip 兼容快捷键', badge: '帮助' },
+  ];
+
+  for (const prof of connections.value) {
+    items.push({
+      id: `conn-${prof.id}`,
+      category: 'connection',
+      label: prof.name,
+      detail: `${prof.env} · ${prof.fingerprint.host ?? prof.fingerprint.database ?? ''}`,
+      badge: '数据源',
+      payload: prof,
+    });
+  }
+
+  for (const [k, tables] of Object.entries(tablesByKey)) {
+    const sepIdx = k.indexOf(':');
+    if (sepIdx < 0) continue;
+    const profileId = k.slice(0, sepIdx);
+    const dbName = k.slice(sepIdx + 1);
+    const prof = connections.value.find((c) => c.id === profileId);
+    if (!prof) continue;
+    for (const tbl of tables) {
+      items.push({
+        id: `tbl-${k}-${tbl.name}`,
+        category: 'table',
+        label: tbl.name,
+        detail: `${prof.name} / ${dbName}`,
+        badge: '数据表',
+        payload: { profile: prof, dbName, tableName: tbl.name },
+      });
+    }
+  }
+
+  for (const tab of tabs.value) {
+    items.push({
+      id: `tab-${tab.id}`,
+      category: 'tab',
+      label: tab.title,
+      detail: tab.path ?? '查询控制台',
+      badge: tab.fileKind.toUpperCase(),
+      payload: tab.id,
+    });
+  }
+
+  for (const blk of activeMdBlocks.value) {
+    items.push({
+      id: `mdblk-${blk.index}`,
+      category: 'md-block',
+      label: `SQL 块 #${blk.index + 1}${blk.title ? ` · ${blk.title}` : ''}`,
+      detail: `第 ${blk.startLine}-${blk.endLine} 行 · ${blk.sql.slice(0, 60)}`,
+      badge: 'Markdown SQL',
+      payload: blk,
+    });
+  }
+
+  return items;
+});
+
+async function handleSelectSearchItem(item: SearchEverywhereItem) {
+  activeModal.value = 'none';
+  if (item.category === 'action') {
+    if (item.id === 'act-open-file') await openFileFromDialog();
+    else if (item.id === 'act-open-folder') await mountFolderDialog();
+    else if (item.id === 'act-demo-md') await openDemoMarkdownHandbook();
+    else if (item.id === 'act-new-conn') {
+      editingProfile.value = null;
+      activeModal.value = 'connection';
+    } else if (item.id === 'act-import') activeModal.value = 'import';
+    else if (item.id === 'act-new-console') createNewConsoleTab('');
+    else if (item.id === 'act-format') await formatActiveSql();
+    else if (item.id === 'act-theme') toggleTheme();
+    else if (item.id === 'act-lang') toggleLocale();
+    else if (item.id === 'act-encoding') activeModal.value = 'encoding';
+    else if (item.id === 'act-shortcuts') activeModal.value = 'shortcuts';
+  } else if (item.category === 'connection' && item.payload) {
+    const prof = item.payload as ConnectionProfile;
+    await handleProfileSelectChange(prof.id);
+    leftTool.value = 'database';
+  } else if (item.category === 'table' && item.payload) {
+    const p = item.payload as { profile: ConnectionProfile; dbName: string; tableName: string };
+    await selectTableNode(p.profile, p.dbName, p.tableName);
+    await handleQueryTop100(p.profile, p.dbName, p.tableName);
+  } else if (item.category === 'tab' && typeof item.payload === 'string') {
+    activeTabId.value = item.payload;
+  } else if (item.category === 'md-block' && item.payload) {
+    const blk = item.payload as MarkdownSqlBlock;
+    editorRef.value?.jumpToLine(blk.contentStartLine);
+  }
+}
+
+// ==================== Global Keyboard Shortcuts & Lifecycle ====================
+
+function onGlobalKeydown(e: KeyboardEvent) {
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    activeModal.value = activeModal.value === 'search' ? 'none' : 'search';
+  } else if (mod && e.key.toLowerCase() === 'o') {
+    e.preventDefault();
+    void openFileFromDialog();
+  } else if (mod && e.key.toLowerCase() === 's') {
+    e.preventDefault();
+    void saveActiveTab(e.shiftKey);
+  } else if (mod && e.key.toLowerCase() === 'n') {
+    e.preventDefault();
+    createNewConsoleTab('');
+  } else if (e.key === 'Escape') {
+    openMenu.value = null;
+    if (activeModal.value !== 'none') {
+      activeModal.value = 'none';
+    }
+  }
+}
+
+function onGlobalClick() {
+  openMenu.value = null;
+}
+
+async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    setStatus(t('copiedNotice'));
+  } catch {
+    setStatus('复制失败', true);
+  }
+}
+
+function onMdBlockJump(e: Event) {
+  const idx = Number((e.target as HTMLSelectElement).value);
+  const blk = activeMdBlocks.value[idx];
+  if (blk) {
+    editorRef.value?.jumpToLine(blk.contentStartLine);
+  }
+}
+
+function toggleLeftTool(tool: 'database' | 'files' | 'snippets') {
+  leftTool.value = leftTool.value === tool ? null : tool;
+}
+
+function toggleRightTool(tool: 'structure' | 'extensions') {
+  rightTool.value = rightTool.value === tool ? null : tool;
+}
+
+function openConnectionModal(profile: ConnectionProfile | null) {
+  editingProfile.value = profile;
+  activeModal.value = 'connection';
+}
+
+watch(activeTabId, () => {
+  scheduleAstInspect();
+});
 
 onMounted(async () => {
-  if (!tauriReady) {
-    setBanner('当前处于纯浏览器预览；请通过 `cargo tauri dev` 启动桌面端以启用原生 SQL 驱动与 DataGrip 导入。');
-    return;
+  applyTheme(theme.value);
+  window.addEventListener('keydown', onGlobalKeydown);
+  window.addEventListener('click', onGlobalClick);
+
+  await refreshConnections();
+  await refreshHistory();
+  if (isTauriRuntime()) {
+    extensions.value = await listExtensions().catch(() => []);
+    if (mountedDir.value) {
+      await loadDirectory(mountedDir.value);
+    }
   }
-  extensions.value = await listExtensions().catch(() => []);
-  await reloadConnections().catch(() => {});
-  if (connections.value.length === 0) {
-    await handleCreateDemoDb();
-  }
+  scheduleAstInspect();
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown);
+  window.removeEventListener('click', onGlobalClick);
+  window.removeEventListener('mousemove', onResizeMove);
+  window.removeEventListener('mouseup', stopResize);
 });
 </script>
 
 <template>
-  <div class="workbench">
-    <header class="topbar">
-      <div class="brand">
-        <span>PacerGrip</span>
-        <span class="brand-tag">Rust + Tauri v2 · DataGrip Native</span>
+  <div class="ide-shell">
+    <!-- ==================== 1. Top Header (38px JetBrains New UI) ==================== -->
+    <header class="ide-header">
+      <div class="header-left">
+        <div class="brand-mark" :title="t('appSubtitle')">
+          <span class="brand-logo">PG</span>
+          <span>{{ t('appTitle') }}</span>
+        </div>
+
+        <nav class="menu-bar" @click.stop>
+          <!-- 文件 -->
+          <div class="menu-trigger">
+            <button
+              class="menu-btn"
+              :class="{ open: openMenu === 'file' }"
+              @click="openMenu = openMenu === 'file' ? null : 'file'"
+            >
+              {{ t('menuFile') }}
+            </button>
+            <div v-if="openMenu === 'file'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; openFileFromDialog()">
+                <span>{{ t('openFile') }}</span>
+                <span class="shortcut-hint">Ctrl+O</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; mountFolderDialog()">
+                <span>{{ t('openFolder') }}</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; createNewConsoleTab('')">
+                <span>{{ t('newConsole') }}</span>
+                <span class="shortcut-hint">Ctrl+N</span>
+              </button>
+              <div class="dropdown-sep" />
+              <button class="dropdown-item" @click="openMenu = null; saveActiveTab(false)">
+                <span>{{ t('saveFile') }}</span>
+                <span class="shortcut-hint">Ctrl+S</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; saveActiveTab(true)">
+                <span>{{ t('saveFileAs') }}</span>
+                <span class="shortcut-hint">Ctrl+Shift+S</span>
+              </button>
+              <div class="dropdown-sep" />
+              <button class="dropdown-item" @click="openMenu = null; activeModal = 'encoding'">
+                <span>{{ t('encodingModalTitle') }}...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; openDemoMarkdownHandbook()">
+                <span>{{ t('openDemoMd') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 编辑 -->
+          <div class="menu-trigger">
+            <button
+              class="menu-btn"
+              :class="{ open: openMenu === 'edit' }"
+              @click="openMenu = openMenu === 'edit' ? null : 'edit'"
+            >
+              {{ t('menuEdit') }}
+            </button>
+            <div v-if="openMenu === 'edit'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; formatActiveSql()">
+                <span>{{ t('formatSql') }}</span>
+                <span class="shortcut-hint">Ctrl+Alt+L</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; saveCurrentAsSnippet()">
+                <span>保存当前 SQL 为代码片段</span>
+              </button>
+              <div class="dropdown-sep" />
+              <button
+                class="dropdown-item"
+                @click="openMenu = null; activeTab && (activeTab.readOnly = !activeTab.readOnly)"
+              >
+                <span>{{ activeTab?.readOnly ? '解除只读保护' : '设为只读模式' }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 数据库 -->
+          <div class="menu-trigger">
+            <button
+              class="menu-btn"
+              :class="{ open: openMenu === 'database' }"
+              @click="openMenu = openMenu === 'database' ? null : 'database'"
+            >
+              {{ t('menuDatabase') }}
+            </button>
+            <div v-if="openMenu === 'database'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; openConnectionModal(null)">
+                <span>{{ t('newConnection') }}...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; activeModal = 'import'">
+                <span>{{ t('importDataGrip') }}</span>
+              </button>
+              <button
+                class="dropdown-item"
+                @click="openMenu = null; activeModal = 'import'; handleExportXml()"
+              >
+                <span>{{ t('exportDataGrip') }}</span>
+              </button>
+              <div class="dropdown-sep" />
+              <button class="dropdown-item" @click="openMenu = null; handleInitDemoSqlite()">
+                <span>{{ t('openDemoDb') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 工具 -->
+          <div class="menu-trigger">
+            <button
+              class="menu-btn"
+              :class="{ open: openMenu === 'tools' }"
+              @click="openMenu = openMenu === 'tools' ? null : 'tools'"
+            >
+              {{ t('menuTools') }}
+            </button>
+            <div v-if="openMenu === 'tools'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; activeModal = 'search'">
+                <span>{{ t('searchEverywhere') }}</span>
+                <span class="shortcut-hint">Ctrl+K</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; toggleTheme()">
+                <span>切换深浅色主题 ({{ theme === 'dark' ? 'Darcula' : 'Light' }})</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; toggleLocale()">
+                <span>切换中英文 ({{ locale }})</span>
+              </button>
+              <div class="dropdown-sep" />
+              <button class="dropdown-item" @click="openMenu = null; rightTool = 'extensions'">
+                <span>{{ t('toolExtensions') }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 帮助 -->
+          <div class="menu-trigger">
+            <button
+              class="menu-btn"
+              :class="{ open: openMenu === 'help' }"
+              @click="openMenu = openMenu === 'help' ? null : 'help'"
+            >
+              {{ t('menuHelp') }}
+            </button>
+            <div v-if="openMenu === 'help'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; activeModal = 'shortcuts'">
+                <span>{{ t('shortcutsTitle') }}</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; openDemoMarkdownHandbook()">
+                <span>{{ t('openDemoMd') }}</span>
+              </button>
+            </div>
+          </div>
+        </nav>
       </div>
-      <div class="topbar-actions">
-        <button class="btn btn-primary" @click="openNewConnectionModal">+ 新建连接</button>
-        <button class="btn" :disabled="busy" @click="handleCreateDemoDb">示例 SQLite 库</button>
-        <button class="btn" @click="showImportModal = true">导入 / 导出 DataGrip XML</button>
-        <button class="btn" @click="showExtensionsModal = true">
-          扩展插槽 ({{ extensions.length }})
+
+      <!-- Centered DataGrip Run Widget -->
+      <div class="header-center">
+        <div class="run-widget">
+          <span
+            v-if="activeProfile"
+            class="env-dot"
+            :class="activeProfile.env"
+            style="margin-left: 4px"
+            :title="activeProfile.env"
+          />
+          <select
+            :value="activeTab?.profileId ?? ''"
+            title="当前执行数据源"
+            @change="handleProfileSelectChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ t('noConnectionSelected') }}</option>
+            <option v-for="prof in connections" :key="prof.id" :value="prof.id">
+              {{ prof.name }} [{{ prof.env }}]
+            </option>
+          </select>
+
+          <span class="run-widget-sep" />
+
+          <select
+            :value="activeTab?.dbName ?? ''"
+            title="当前执行数据库 / Schema"
+            @change="handleDbSelectChange(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ t('noSchemaSelected') }}</option>
+            <option v-for="db in activeDatabases" :key="db.name" :value="db.name">
+              {{ db.name }}
+            </option>
+          </select>
+
+          <span class="run-widget-sep" />
+
+          <button
+            class="icon-btn run-btn"
+            :disabled="busy || !activeProfile"
+            :title="activeTab?.cursor.selectedText.trim() ? t('runSelected') : t('runCurrent')"
+            @click="runActiveEditor(false)"
+          >
+            ▶
+            <span>
+              {{ activeTab?.cursor.selectedText.trim() ? t('runSelected') : '执行' }}
+            </span>
+          </button>
+
+          <button
+            class="icon-btn"
+            :disabled="busy || !activeProfile"
+            :title="t('runAll') + ' (Ctrl+Shift+Enter)'"
+            @click="runActiveEditor(true)"
+          >
+            ▶▶
+          </button>
+
+          <button
+            class="icon-btn"
+            :disabled="busy || !activeProfile"
+            :title="t('explainBtn')"
+            @click="runExplainActive"
+          >
+            ⚡
+          </button>
+
+          <button
+            class="icon-btn"
+            :disabled="busy || isMarkdownTab"
+            :title="t('formatSql') + ' (Ctrl+Alt+L)'"
+            @click="formatActiveSql"
+          >
+            ✨
+          </button>
+
+          <span class="run-widget-sep" />
+
+          <select
+            :value="maxRowsLimit === null ? '0' : String(maxRowsLimit)"
+            :title="t('maxRows')"
+            style="max-width: 82px"
+            @change="
+              maxRowsLimit =
+                ($event.target as HTMLSelectElement).value === '0'
+                  ? null
+                  : Number(($event.target as HTMLSelectElement).value)
+            "
+          >
+            <option value="100">100 行</option>
+            <option value="500">500 行</option>
+            <option value="1000">1000 行</option>
+            <option value="5000">5000 行</option>
+            <option value="0">{{ t('unlimited') }}</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Right Global Actions -->
+      <div class="header-right">
+        <button class="icon-btn" :title="t('searchEverywhere')" @click="activeModal = 'search'">
+          🔍 <span class="shortcut-hint">Ctrl+K</span>
+        </button>
+        <button
+          class="icon-btn"
+          :title="theme === 'dark' ? t('themeLight') : t('themeDark')"
+          @click="toggleTheme"
+        >
+          {{ theme === 'dark' ? '☀' : '🌙' }}
+        </button>
+        <button class="icon-btn" title="切换中英文界面" @click="toggleLocale">
+          {{ t('langSwitch') }}
+        </button>
+        <button class="btn btn-primary btn-sm" @click="openConnectionModal(null)">
+          + {{ t('newConnection') }}
         </button>
       </div>
     </header>
 
-    <div v-if="statusBanner" class="status-banner" :class="{ error: statusBanner.isError }">
-      <span>{{ statusBanner.text }}</span>
-      <button class="btn btn-xs" @click="statusBanner = null">×</button>
-    </div>
+    <!-- ==================== 2. IDE Main Body ==================== -->
+    <div class="ide-body">
+      <!-- Left 38px Tool Window Stripe -->
+      <aside class="tool-stripe left">
+        <button
+          class="stripe-btn"
+          :class="{ active: leftTool === 'database' }"
+          :title="t('toolDatabase')"
+          @click="toggleLeftTool('database')"
+        >
+          🗄
+          <span v-if="connections.length > 0" class="stripe-badge">{{ connections.length }}</span>
+        </button>
+        <button
+          class="stripe-btn"
+          :class="{ active: leftTool === 'files' }"
+          :title="t('toolFiles')"
+          @click="toggleLeftTool('files')"
+        >
+          📁
+        </button>
+        <button
+          class="stripe-btn"
+          :class="{ active: leftTool === 'snippets' }"
+          :title="t('toolSnippets')"
+          @click="toggleLeftTool('snippets')"
+        >
+          ✂
+        </button>
+      </aside>
 
-    <div class="main-split">
-      <aside class="sidebar">
-        <div class="sidebar-section">
-          <div class="section-header">
-            <span>Database Explorer ({{ connections.length }})</span>
+      <!-- Left Tool Window -->
+      <section
+        v-if="leftTool !== null"
+        class="tool-window left"
+        :style="{ width: `${leftWidth}px` }"
+      >
+        <DatabaseTree
+          v-if="leftTool === 'database'"
+          :connections="connections"
+          :active-profile-id="activeTab?.profileId ?? ''"
+          :active-db-name="activeTab?.dbName ?? ''"
+          :databases-by-profile="databasesByProfile"
+          :tables-by-key="tablesByKey"
+          :columns-by-key="columnsByKey"
+          :indexes-by-key="indexesByKey"
+          :expanded-profiles="expandedProfiles"
+          :expanded-databases="expandedDatabases"
+          :expanded-tables="expandedTables"
+          @new-connection="openConnectionModal(null)"
+          @import-datagrip="activeModal = 'import'"
+          @init-demo="handleInitDemoSqlite"
+          @toggle-profile="toggleProfileNode"
+          @toggle-database="toggleDatabaseNode"
+          @toggle-table="toggleTableNode"
+          @select-table="selectTableNode"
+          @query-top100="handleQueryTop100"
+          @view-ddl="handleViewDdl"
+          @gen-select="handleGenSelect"
+          @test-profile="handleTestProfile"
+          @edit-profile="openConnectionModal"
+          @delete-profile="handleDeleteProfile"
+          @copy-text="copyText"
+        />
+
+        <FileExplorer
+          v-else-if="leftTool === 'files'"
+          :mounted-dir="mountedDir"
+          :entries="workspaceEntries"
+          :recent-files="recentFiles"
+          @mount-folder="mountFolderDialog"
+          @open-dir="loadDirectory"
+          @open-file-dialog="openFileFromDialog"
+          @open-file="openLocalFileByPath"
+          @open-demo-md="openDemoMarkdownHandbook"
+          @refresh-dir="loadDirectory(mountedDir)"
+        />
+
+        <!-- SQL Snippets Tool Window -->
+        <div v-else-if="leftTool === 'snippets'" style="display: flex; flex-direction: column; height: 100%">
+          <div class="tw-header">
+            <span>{{ t('toolSnippets') }}</span>
+            <div class="tw-actions">
+              <button
+                class="icon-btn compact"
+                title="保存当前选中/编辑器 SQL 为片段"
+                @click="saveCurrentAsSnippet"
+              >
+                + 保存
+              </button>
+            </div>
           </div>
-
-          <div
-            v-for="p in connections"
-            :key="p.id"
-            class="conn-card"
-            :class="{ active: activeConsole?.profileId === p.id }"
-            @click="toggleExpandProfile(p)"
-          >
-            <div class="conn-title-row">
-              <span>{{ p.name }}</span>
-              <span class="badge" :class="envClass(p.env)">{{ p.env }}</span>
-            </div>
-            <div class="conn-meta">
-              <span class="badge badge-neutral">{{ engineLabel(p.dbType) }}</span>
-              <span>
-                {{
-                  p.fingerprint.host
-                    ? `${p.fingerprint.host}:${p.fingerprint.port ?? ''}`
-                    : p.fingerprint.database || 'local'
-                }}
-              </span>
-              <span v-if="!p.capabilities.canDml" class="badge badge-neutral">RO</span>
-            </div>
-            <div class="conn-actions" @click.stop>
-              <button class="btn btn-xs" @click="handleTestProfile(p)">Test</button>
-              <button class="btn btn-xs" @click="openEditConnectionModal(p)">Edit</button>
-              <button class="btn btn-xs btn-danger" @click="handleDeleteConnection(p)">Del</button>
-            </div>
-
-            <div v-if="expandedProfiles[p.id] && databasesByProfile[p.id]" class="tree-list" @click.stop>
-              <div v-for="db in databasesByProfile[p.id]" :key="db.name">
-                <div
-                  class="tree-node"
-                  :class="{
-                    selected:
-                      activeConsole?.profileId === p.id && activeConsole?.dbName === db.name,
-                  }"
-                  @click="toggleExpandDatabase(p, db.name)"
+          <div class="tw-search">
+            <input v-model="snippetFilter" class="field" placeholder="筛选 SQL 模板..." />
+          </div>
+          <div class="tw-body">
+            <div
+              v-for="snip in allSnippets"
+              :key="snip.id"
+              style="
+                padding: 8px;
+                margin-bottom: 6px;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--bg-chrome);
+              "
+            >
+              <div
+                style="
+                  display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                  gap: 6px;
+                  margin-bottom: 4px;
+                "
+              >
+                <span style="font-size: 12px; font-weight: 600">{{ snip.title }}</span>
+                <span class="pill pill-neutral">{{ snip.category }}</span>
+              </div>
+              <pre
+                style="
+                  margin: 0 0 6px;
+                  padding: 6px;
+                  background: var(--bg-editor);
+                  border-radius: 4px;
+                  font-family: var(--font-mono);
+                  font-size: 11px;
+                  max-height: 78px;
+                  overflow: hidden;
+                  color: var(--text-secondary);
+                "
+              >{{ snip.sql }}</pre>
+              <div style="display: flex; justify-content: flex-end; gap: 4px">
+                <button
+                  v-if="snip.id.startsWith('custom-')"
+                  class="btn btn-sm"
+                  @click="removeCustomSnippet(snip.id)"
                 >
-                  <span>{{ db.name }}</span>
-                  <span style="opacity: 0.6">{{ db.tableCount ?? '' }}</span>
-                </div>
-
-                <div
-                  v-if="
-                    expandedDatabases[`${p.id}:${db.name}`] &&
-                    tablesByKey[`${p.id}:${db.name}`]
-                  "
-                  class="tree-list"
-                >
-                  <div v-for="tbl in tablesByKey[`${p.id}:${db.name}`]" :key="tbl.name">
-                    <div class="tree-node" @click="toggleExpandTable(p, db.name, tbl.name)">
-                      <span>{{ tbl.name }}</span>
-                      <span class="tree-inline-actions" @click.stop>
-                        <button
-                          class="btn btn-xs"
-                          title="Query Top 100"
-                          @click="previewTop100(p, db.name, tbl.name)"
-                        >
-                          100
-                        </button>
-                        <button
-                          class="btn btn-xs"
-                          title="Show Table DDL"
-                          @click="viewTableDdl(p, db.name, tbl.name)"
-                        >
-                          DDL
-                        </button>
-                      </span>
-                    </div>
-
-                    <div
-                      v-if="
-                        expandedTables[`${p.id}:${db.name}:${tbl.name}`] &&
-                        columnsByKey[`${p.id}:${db.name}:${tbl.name}`]
-                      "
-                      class="tree-list"
-                    >
-                      <div
-                        v-for="col in columnsByKey[`${p.id}:${db.name}:${tbl.name}`]"
-                        :key="col.name"
-                        class="tree-node"
-                      >
-                        <span>{{ col.isPrimaryKey ? '🔑 ' : '' }}{{ col.name }}</span>
-                        <span style="opacity: 0.6">{{ col.dataType }}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                  {{ t('btnDelete') }}
+                </button>
+                <button class="btn btn-sm btn-primary" @click="insertSnippetIntoEditor(snip.sql)">
+                  {{ t('insertSnippet') }}
+                </button>
               </div>
             </div>
           </div>
         </div>
-      </aside>
+      </section>
 
-      <main class="center-pane">
-        <div class="console-tabs">
+      <!-- Left Vertical Resizer -->
+      <div
+        v-if="leftTool !== null"
+        class="resizer-v"
+        :class="{ dragging: draggingPane === 'left' }"
+        @mousedown="startResize('left', $event)"
+      />
+
+      <!-- ==================== Center Editor + Services Split ==================== -->
+      <main class="center-col">
+        <!-- Multi-tab Bar -->
+        <div class="editor-tabs-bar">
           <div
-            v-for="tab in consoles"
+            v-for="tab in tabs"
             :key="tab.id"
-            class="console-tab"
-            :class="{ active: tab.id === activeConsole?.id }"
-            @click="activeConsoleId = tab.id"
+            class="editor-tab"
+            :class="[
+              { active: tab.id === activeTabId },
+              tab.id === activeTabId && activeProfile ? `env-${activeProfile.env}` : '',
+            ]"
+            :title="tab.path ?? tab.title"
+            @click="activeTabId = tab.id"
           >
+            <span>{{ tab.fileKind === 'markdown' ? '📝' : '📜' }}</span>
             <span>{{ tab.title }}</span>
-            <span
-              v-if="consoles.length > 1"
-              class="tab-close"
-              @click.stop="closeConsoleTab(tab.id)"
+            <span v-if="isTabDirty(tab)" class="dirty-dot" title="未保存更改" />
+            <button
+              class="tab-close-btn"
+              title="关闭标签页"
+              @click.stop="closeEditorTab(tab.id)"
             >
               ×
-            </span>
+            </button>
           </div>
-          <button class="btn btn-xs" @click="addConsoleTab">+</button>
+
+          <button
+            class="icon-btn"
+            style="margin: 3px 4px"
+            :title="t('newConsole')"
+            @click="createNewConsoleTab('')"
+          >
+            +
+          </button>
+          <button
+            class="icon-btn"
+            style="margin: 3px 2px"
+            :title="t('openFile')"
+            @click="openFileFromDialog"
+          >
+            📂
+          </button>
+          <button
+            class="icon-btn"
+            style="margin: 3px 2px"
+            :title="t('openDemoMd')"
+            @click="openDemoMarkdownHandbook"
+          >
+            📝 示例手册
+          </button>
         </div>
 
-        <div v-if="activeConsole" class="editor-header">
-          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
-            <select v-model="activeConsole.profileId" class="field">
-              <option value="" disabled>选择连接...</option>
-              <option v-for="p in connections" :key="p.id" :value="p.id">
-                {{ p.name }} ({{ engineLabel(p.dbType) }})
-              </option>
-            </select>
-            <select
-              v-if="availableDatabases.length > 0"
-              v-model="activeConsole.dbName"
-              class="field"
+        <!-- Contextual Editor Sub-Toolbar -->
+        <div v-if="activeTab" class="editor-subbar">
+          <div class="subbar-group">
+            <button
+              v-if="activeTab.cursor.selectedText.trim()"
+              class="btn btn-sm btn-primary"
+              :disabled="busy || !activeProfile"
+              @click="runActiveEditor(false)"
             >
-              <option v-for="db in availableDatabases" :key="db.name" :value="db.name">
-                {{ db.name }}
-              </option>
-            </select>
-            <input
-              v-else
-              v-model="activeConsole.dbName"
-              class="field"
-              style="width: 140px"
-              placeholder="Schema / DB"
+              ▶ {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · Ctrl+Enter)
+            </button>
+
+            <template v-if="isMarkdownTab">
+              <div style="display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden">
+                <button
+                  class="icon-btn compact"
+                  :class="{ active: activeTab.mdViewMode === 'source' }"
+                  @click="activeTab.mdViewMode = 'source'"
+                >
+                  {{ t('mdSourceOnly') }}
+                </button>
+                <button
+                  class="icon-btn compact"
+                  :class="{ active: activeTab.mdViewMode === 'split' }"
+                  @click="activeTab.mdViewMode = 'split'"
+                >
+                  {{ t('mdSplitPreview') }}
+                </button>
+                <button
+                  class="icon-btn compact"
+                  :class="{ active: activeTab.mdViewMode === 'preview' }"
+                  @click="activeTab.mdViewMode = 'preview'"
+                >
+                  {{ t('mdPreviewOnly') }}
+                </button>
+              </div>
+
+              <select
+                v-if="activeMdBlocks.length > 0"
+                class="field"
+                style="width: auto; max-width: 240px; padding: 2px 6px; font-size: 11px"
+                @change="onMdBlockJump"
+              >
+                <option value="-1">
+                  {{ t('mdSqlBlocks') }} ({{ activeMdBlocks.length }}) — 选择跳转
+                </option>
+                <option v-for="blk in activeMdBlocks" :key="blk.index" :value="blk.index">
+                  #{{ blk.index + 1 }} {{ blk.title || blk.language }} (L{{ blk.startLine }}-L{{ blk.endLine }})
+                </option>
+              </select>
+
+              <span style="font-size: 11px; color: var(--text-secondary)">
+                {{ t('mdRunHint') }}
+              </span>
+            </template>
+
+            <template v-else-if="!activeTab.cursor.selectedText.trim()">
+              <span style="font-size: 11px; color: var(--text-secondary)">
+                {{ activeTab.path || '临时查询控制台（按 Ctrl+S 可保存为 .sql / .md）' }}
+              </span>
+            </template>
+          </div>
+
+          <div class="subbar-group">
+            <span
+              v-if="astAnalysis"
+              class="pill"
+              :class="
+                astAnalysis.overallKind === 'READ_ONLY'
+                  ? 'pill-dev'
+                  : astAnalysis.overallKind === 'WRITE_DML'
+                    ? 'pill-test'
+                    : 'pill-prod'
+              "
+              style="cursor: pointer"
+              title="点击查看 SQL 静态检查详情"
+              @click="activeServiceTab = 'problems'"
+            >
+              AST: {{ astAnalysis.overallKind }}
+              <template
+                v-if="astAnalysis.statements.reduce((a, s) => a + s.warnings.length, 0) > 0"
+              >
+                · ⚠ {{ astAnalysis.statements.reduce((a, s) => a + s.warnings.length, 0) }}
+              </template>
+            </span>
+
+            <button
+              class="btn btn-sm"
+              :disabled="!isTabDirty(activeTab) && Boolean(activeTab.path)"
+              @click="saveActiveTab(false)"
+            >
+              💾 {{ t('btnSave') }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Split Editor + Safe Markdown Preview -->
+        <div v-if="activeTab" class="editor-split-area">
+          <div
+            v-show="!isMarkdownTab || activeTab.mdViewMode !== 'preview'"
+            class="editor-pane"
+          >
+            <CodeEditor
+              ref="editorRef"
+              :model-value="activeTab.content"
+              :file-kind="activeTab.fileKind"
+              :engine-key="activeEngineKey"
+              :theme="theme"
+              :read-only="activeTab.readOnly"
+              :schema-map="activeSchemaMap"
+              @update:model-value="updateTabContent"
+              @cursor-change="handleCursorChange"
+              @run-shortcut="runActiveEditor"
+              @save-shortcut="saveActiveTab(false)"
+              @format-shortcut="formatActiveSql"
+              @run-md-block="runMarkdownBlock"
+              @explain-md-block="explainMarkdownBlock"
+              @open-md-block-console="openMarkdownBlockInConsole"
             />
           </div>
 
-          <div class="editor-toolbar">
-            <button class="btn btn-primary" :disabled="busy" @click="runSql">
-              运行 (Ctrl+Enter)
-            </button>
-            <button class="btn" :disabled="busy || !activeProfile" @click="runExplain">
-              EXPLAIN
-            </button>
-            <button class="btn" :disabled="gridRows.length === 0" @click="exportResultCsv">
-              导出 CSV
-            </button>
-            <button class="btn" :disabled="gridRows.length === 0" @click="exportResultJson">
-              导出 JSON
-            </button>
-            <button class="btn" @click="handleExportDataGrip">导出 XML</button>
+          <!-- XSS-safe Interactive Markdown Preview Pane (zero v-html) -->
+          <div
+            v-if="isMarkdownTab && activeTab.mdViewMode !== 'source'"
+            class="md-preview-pane"
+          >
+            <template v-for="(seg, idx) in activeMdSegments" :key="idx">
+              <component
+                :is="`h${Math.min(seg.level, 4)}`"
+                v-if="seg.kind === 'heading'"
+                style="cursor: pointer"
+                title="点击跳转到源码行"
+                @click="editorRef?.jumpToLine(seg.line)"
+              >
+                {{ seg.text }}
+              </component>
+
+              <hr
+                v-else-if="seg.kind === 'hr'"
+                style="border: none; border-top: 1px solid var(--border); margin: 12px 0"
+              />
+
+              <blockquote v-else-if="seg.kind === 'blockquote'">
+                {{ seg.text }}
+              </blockquote>
+
+              <ul v-else-if="seg.kind === 'list'" style="margin: 6px 0; padding-left: 20px">
+                <li v-for="(item, liIdx) in seg.items" :key="liIdx">{{ item }}</li>
+              </ul>
+
+              <p v-else-if="seg.kind === 'paragraph'" style="margin: 6px 0; white-space: pre-wrap">
+                {{ seg.text }}
+              </p>
+
+              <!-- Interactive Runnable SQL Card -->
+              <div v-else-if="seg.kind === 'sql-code'" class="md-sql-card">
+                <div class="md-sql-card-head">
+                  <span>
+                    SQL 块 #{{ seg.block.index + 1 }} · {{ seg.block.language.toUpperCase() }}
+                    · L{{ seg.block.startLine }}-L{{ seg.block.endLine }}
+                  </span>
+                  <div style="display: flex; gap: 5px">
+                    <button
+                      class="cm-md-sql-lens-btn"
+                      :disabled="busy || !activeProfile"
+                      @click="runMarkdownBlock(seg.block)"
+                    >
+                      ▶ {{ t('runBlock') }}
+                    </button>
+                    <button
+                      class="cm-md-sql-lens-btn secondary"
+                      :disabled="busy || !activeProfile"
+                      @click="explainMarkdownBlock(seg.block)"
+                    >
+                      ⚡ EXPLAIN
+                    </button>
+                    <button
+                      class="cm-md-sql-lens-btn secondary"
+                      @click="openMarkdownBlockInConsole(seg.block)"
+                    >
+                      ⧉ 控制台打开
+                    </button>
+                  </div>
+                </div>
+                <pre>{{ seg.block.sql }}</pre>
+              </div>
+
+              <div v-else-if="seg.kind === 'code'" class="md-sql-card">
+                <div class="md-sql-card-head">
+                  <span>{{ seg.language }}</span>
+                </div>
+                <pre>{{ seg.text }}</pre>
+              </div>
+            </template>
           </div>
         </div>
 
-        <div class="ast-ribbon">
-          <div style="display: flex; align-items: center; gap: 8px">
-            <span
-              class="badge"
-              :class="astAnalysis?.requiresTicket ? 'badge-test' : 'badge-dev'"
-            >
-              {{ astAnalysis?.overallKind ?? 'READ_ONLY' }}
-            </span>
-            <span style="color: var(--text-secondary)">
-              {{ astAnalysis?.statements.length ?? 0 }} statement(s)
-            </span>
-          </div>
-          <div style="color: #fcd34d; font-size: 11px">
-            {{
-              astAnalysis?.statements
-                .flatMap((s) => s.warnings)
-                .map((w) => `[${w.level}] ${w.message}`)
-                .join(' | ')
-            }}
-          </div>
-        </div>
-
-        <textarea
-          v-if="activeConsole"
-          v-model="activeConsole.sql"
-          class="sql-editor"
-          spellcheck="false"
-          @keydown="onEditorKeyDown"
+        <!-- Horizontal Resizer -->
+        <div
+          class="resizer-h"
+          :class="{ dragging: draggingPane === 'bottom' }"
+          @mousedown="startResize('bottom', $event)"
         />
 
-        <div class="output-tabs">
-          <div class="tab-buttons">
-            <button
-              class="tab-btn"
-              :class="{ active: activeOutputTab === 'grid' }"
-              @click="activeOutputTab = 'grid'"
-            >
-              结果集 ({{ filteredGridRows.length }})
-            </button>
-            <button
-              class="tab-btn"
-              :class="{ active: activeOutputTab === 'ddl' }"
-              @click="activeOutputTab = 'ddl'"
-            >
-              Table DDL
-            </button>
-            <button
-              class="tab-btn"
-              :class="{ active: activeOutputTab === 'history' }"
-              @click="activeOutputTab = 'history'"
-            >
-              历史记录 ({{ historyEntries.length }})
-            </button>
-          </div>
-
-          <div style="display: flex; align-items: center; gap: 8px">
-            <input
-              v-if="activeOutputTab === 'grid' && gridRows.length > 0"
-              v-model="gridFilter"
-              class="field"
-              style="width: 180px; padding: 3px 8px"
-              placeholder="过滤当前结果..."
-            />
-            <span v-if="querySummary" style="font-size: 11px; color: var(--text-secondary)">
-              {{ querySummary.durationMs }} ms ·
-              {{
-                querySummary.isDmlOrDdl
-                  ? `影响 ${querySummary.affectedRows ?? 0} 行`
-                  : `${querySummary.totalRows} 行`
-              }}
-            </span>
-          </div>
-        </div>
-
-        <div class="output-body">
-          <div v-if="activeOutputTab === 'grid'">
-            <div v-if="gridColumns.length === 0" style="color: var(--text-secondary)">
-              选择或新建连接，编写 SQL 后按 Ctrl+Enter 运行。支持流式分页渲染、DML 影响行数统计与 EXPLAIN 计划。
-            </div>
-            <div v-else class="data-table-wrap">
-              <table class="grid">
-                <thead>
-                  <tr>
-                    <th v-for="col in gridColumns" :key="col">{{ col }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, idx) in filteredGridRows" :key="idx">
-                    <td
-                      v-for="col in gridColumns"
-                      :key="col"
-                      :class="{ 'null-cell': row[col] === null }"
-                    >
-                      {{ row[col] === null ? '<NULL>' : row[col] }}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          <div v-else-if="activeOutputTab === 'ddl'" style="display: flex; flex-direction: column; gap: 8px">
-            <div style="display: flex; justify-content: space-between; align-items: center">
-              <strong>{{ ddlTargetLabel || '点击左侧表的 DDL 按钮查看建表语句' }}</strong>
-              <button v-if="ddlText" class="btn btn-xs" @click="copyText(ddlText)">复制 DDL</button>
-            </div>
-            <pre class="code-block">{{ ddlText || '暂无 DDL 内容' }}</pre>
-          </div>
-
-          <div v-else>
-            <div v-if="historyEntries.length === 0" style="color: var(--text-secondary)">
-              暂无执行历史记录。
-            </div>
-            <div v-else class="data-table-wrap">
-              <table class="grid">
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>连接</th>
-                    <th>状态</th>
-                    <th>耗时</th>
-                    <th>行数 / 影响</th>
-                    <th>SQL</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    v-for="h in historyEntries"
-                    :key="h.id"
-                    style="cursor: pointer"
-                    @click="loadHistorySql(h)"
-                  >
-                    <td>{{ h.timestamp }}</td>
-                    <td>{{ h.profileName }}</td>
-                    <td>
-                      <span class="badge" :class="h.success ? 'badge-dev' : 'badge-prod'">
-                        {{ h.success ? 'OK' : 'ERR' }}
-                      </span>
-                    </td>
-                    <td>{{ h.durationMs }} ms</td>
-                    <td>{{ h.affectedRows != null ? `aff: ${h.affectedRows}` : h.rowCount }}</td>
-                    <td>{{ h.sql }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+        <!-- Bottom Services / Result Grid Panel -->
+        <section class="services-panel" :style="{ height: `${bottomHeight}px` }">
+          <ResultGrid
+            :result-tabs="resultTabs"
+            :active-result-tab-id="activeResultTabId"
+            :active-service-tab="activeServiceTab"
+            :console-logs="consoleLogs"
+            :ddl-text="ddlText"
+            :ddl-title="ddlTitle"
+            :history-entries="historyEntries"
+            :ast-analysis="astAnalysis"
+            @update:active-service-tab="activeServiceTab = $event"
+            @update:active-result-tab-id="activeResultTabId = $event"
+            @close-result-tab="closeResultTab"
+            @load-history-sql="loadHistorySqlIntoEditor"
+            @notify="setStatus($event)"
+          />
+        </section>
       </main>
-    </div>
 
-    <!-- New / Edit Connection Modal -->
-    <div v-if="showConnModal" class="modal-backdrop" @click.self="showConnModal = false">
-      <div class="modal-card">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 12px">
-          <strong>{{ editingProfileId ? '编辑数据库连接' : '新建数据库连接' }}</strong>
-          <button class="btn" @click="showConnModal = false">关闭</button>
-        </div>
-        <div class="form-grid">
-          <div class="form-row">
-            <label>连接名称</label>
-            <input v-model="connForm.name" class="field" placeholder="例如 Local MySQL 8" />
-          </div>
-          <div class="form-row">
-            <label>数据库引擎</label>
-            <select v-model="connForm.dbType" class="field" @change="onFormEngineChange">
-              <option v-for="opt in ENGINE_OPTIONS" :key="opt.value" :value="opt.value">
-                {{ opt.label }}
-              </option>
-            </select>
-          </div>
-          <template v-if="connForm.dbType !== 'sqlite'">
-            <div class="form-row">
-              <label>Host</label>
-              <input v-model="connForm.host" class="field" placeholder="127.0.0.1" />
-            </div>
-            <div class="form-row">
-              <label>Port</label>
-              <input v-model="connForm.port" class="field" placeholder="3306" />
-            </div>
-          </template>
-          <div class="form-row">
-            <label>{{ connForm.dbType === 'sqlite' ? 'SQLite 文件路径' : 'Database / Schema' }}</label>
-            <input
-              v-model="connForm.database"
-              class="field"
-              :placeholder="connForm.dbType === 'sqlite' ? 'C:/data/app.db' : 'orders'"
-            />
-          </div>
-          <div class="form-row">
-            <label>环境标记</label>
-            <select v-model="connForm.env" class="field">
-              <option value="DEV">DEV</option>
-              <option value="TEST">TEST</option>
-              <option value="PROD">PROD</option>
-            </select>
-          </div>
-          <template v-if="connForm.dbType !== 'sqlite'">
-            <div class="form-row">
-              <label>用户名</label>
-              <input v-model="connForm.username" class="field" placeholder="root" />
-            </div>
-            <div class="form-row">
-              <label>密码（仅内存会话使用，绝不明文落盘）</label>
-              <input v-model="connForm.password" type="password" class="field" placeholder="******" />
-            </div>
-          </template>
-        </div>
-        <div class="form-row" style="margin-top: 10px">
-          <label>自定义 JDBC URL（可选，留空自动生成）</label>
-          <input v-model="connForm.jdbcUrl" class="field" placeholder="jdbc:mysql://localhost:3306/orders" />
-        </div>
-        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px">
-          <label style="display: flex; align-items: center; gap: 6px; font-size: 12px">
-            <input v-model="connForm.readOnly" type="checkbox" />
-            只读连接（拦截 DML / DDL）
-          </label>
-          <div style="display: flex; gap: 8px">
-            <button class="btn" :disabled="busy" @click="handleSaveConnection(true)">测试并保存</button>
-            <button class="btn btn-primary" :disabled="busy" @click="handleSaveConnection(false)">保存</button>
-          </div>
-        </div>
-      </div>
-    </div>
+      <!-- Right Vertical Resizer -->
+      <div
+        v-if="rightTool !== null"
+        class="resizer-v"
+        :class="{ dragging: draggingPane === 'right' }"
+        @mousedown="startResize('right', $event)"
+      />
 
-    <!-- Import / Export DataGrip XML Modal -->
-    <div v-if="showImportModal" class="modal-backdrop" @click.self="showImportModal = false">
-      <div class="modal-card">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 12px">
-          <strong>DataGrip 连接导入 / 导出（剪贴板 XML / .idea / Settings .zip）</strong>
-          <button class="btn" @click="showImportModal = false">关闭</button>
-        </div>
-        <div style="display: flex; flex-direction: column; gap: 10px">
-          <input
-            v-model="importPathText"
-            class="field"
-            placeholder="本地 dataSources.xml / .idea 目录 / settings.zip 路径（可选）"
-          />
-          <textarea
-            v-model="importXmlText"
-            class="field"
-            rows="7"
-            placeholder="或直接粘贴 DataGrip Copy Data Source(s) to Clipboard 的 XML..."
-          />
-          <div style="display: flex; gap: 8px">
-            <button class="btn btn-primary" :disabled="busy" @click="handleImportDataGrip">
-              解析并导入连接
-            </button>
-            <button class="btn" @click="handleExportDataGrip">生成 DataGrip XML</button>
-            <button
-              v-if="exportedXmlPreview"
-              class="btn"
-              @click="copyText(exportedXmlPreview)"
+      <!-- Right Tool Window (Structure & Indexes / Extension Slots) -->
+      <section
+        v-if="rightTool !== null"
+        class="tool-window right"
+        :style="{ width: `${rightWidth}px` }"
+      >
+        <!-- Structure & Indexes Inspector -->
+        <template v-if="rightTool === 'structure'">
+          <div class="tw-header">
+            <span>{{ t('toolStructure') }}</span>
+            <div v-if="inspectedTable" class="tw-actions">
+              <button
+                class="icon-btn compact"
+                title="查看建表 DDL"
+                @click="
+                  () => {
+                    const p = connections.find((c) => c.id === inspectedTable?.profileId);
+                    if (p && inspectedTable) {
+                      handleViewDdl(p, inspectedTable.dbName, inspectedTable.tableName);
+                    }
+                  }
+                "
+              >
+                DDL
+              </button>
+            </div>
+          </div>
+
+          <div class="tw-body">
+            <div v-if="!inspectedTable" class="empty-state">
+              {{ t('emptyStructureHint') }}
+            </div>
+            <template v-else>
+              <div
+                style="
+                  padding: 6px 8px;
+                  margin-bottom: 8px;
+                  background: var(--bg-chrome);
+                  border: 1px solid var(--border);
+                  border-radius: 6px;
+                  font-size: 12px;
+                "
+              >
+                <div style="font-weight: 700; font-family: var(--font-mono)">
+                  {{ inspectedTable.dbName }}.{{ inspectedTable.tableName }}
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px">
+                  {{ t('columnsLabel') }}: {{ inspectedColumns.length }} ·
+                  {{ t('indexesLabel') }}: {{ inspectedIndexes.length }}
+                </div>
+              </div>
+
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin: 8px 2px 4px">
+                {{ t('columnsLabel') }} ({{ inspectedColumns.length }})
+              </div>
+              <div
+                v-for="col in inspectedColumns"
+                :key="col.name"
+                style="
+                  display: flex;
+                  align-items: center;
+                  justify-content: space-between;
+                  padding: 4px 6px;
+                  border-bottom: 1px solid var(--border-subtle);
+                  font-size: 11.5px;
+                "
+              >
+                <div style="min-width: 0; overflow: hidden; text-overflow: ellipsis">
+                  <span v-if="col.isPrimaryKey" style="color: var(--test); margin-right: 4px">🔑</span>
+                  <span style="font-family: var(--font-mono)">{{ col.name }}</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0">
+                  <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px">
+                    {{ col.dataType }}
+                  </span>
+                  <span
+                    class="pill"
+                    :class="col.nullable ? 'pill-neutral' : 'pill-test'"
+                  >
+                    {{ col.nullable ? t('nullableYes') : t('nullableNo') }}
+                  </span>
+                </div>
+              </div>
+
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin: 12px 2px 4px">
+                {{ t('indexesLabel') }} ({{ inspectedIndexes.length }})
+              </div>
+              <div
+                v-if="inspectedIndexes.length === 0"
+                style="font-size: 11px; color: var(--text-muted); padding: 4px 6px"
+              >
+                无额外索引或驱动暂未返回索引信息
+              </div>
+              <div
+                v-for="idx in inspectedIndexes"
+                :key="idx.name"
+                style="
+                  padding: 5px 6px;
+                  border-bottom: 1px solid var(--border-subtle);
+                  font-size: 11.5px;
+                "
+              >
+                <div style="display: flex; align-items: center; gap: 5px">
+                  <span v-if="idx.unique" class="pill pill-dev">{{ t('uniqueLabel') }}</span>
+                  <span style="font-family: var(--font-mono); font-weight: 600">{{ idx.name }}</span>
+                </div>
+                <div style="font-size: 10.5px; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 2px">
+                  ({{ idx.columns.join(', ') }})
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Reserved Extension Slots Panel -->
+        <template v-else-if="rightTool === 'extensions'">
+          <div class="tw-header">
+            <span>{{ t('extModalTitle') }}</span>
+          </div>
+          <div class="tw-body" style="padding: 10px; font-size: 12px; line-height: 1.6">
+            <p style="margin: 0 0 8px">{{ t('extEmptyP1') }}</p>
+            <p style="margin: 0 0 10px; color: var(--text-secondary)">{{ t('extEmptyP2') }}</p>
+
+            <div
+              style="
+                padding: 8px;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+                background: var(--bg-chrome);
+                margin-bottom: 8px;
+              "
             >
-              复制导出 XML
-            </button>
-          </div>
-          <pre v-if="exportedXmlPreview" class="code-block">{{ exportedXmlPreview }}</pre>
-        </div>
-      </div>
-    </div>
-
-    <!-- Session Password Modal -->
-    <div
-      v-if="passwordPrompt.visible"
-      class="modal-backdrop"
-      @click.self="passwordPrompt.visible = false"
-    >
-      <div class="modal-card" style="width: min(420px, 90vw)">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 10px">
-          <strong>输入连接密码（仅会话内存）</strong>
-          <button class="btn" @click="passwordPrompt.visible = false">取消</button>
-        </div>
-        <div style="margin-bottom: 8px; color: var(--text-secondary)">
-          连接: {{ passwordPrompt.profileName }}
-        </div>
-        <div style="display: flex; gap: 8px">
-          <input
-            v-model="passwordPrompt.value"
-            type="password"
-            class="field"
-            style="flex: 1"
-            placeholder="数据库密码"
-            @keyup.enter="submitPasswordPrompt"
-          />
-          <button class="btn btn-primary" @click="submitPasswordPrompt">连接</button>
-        </div>
-      </div>
-    </div>
-
-    <!-- Extensions Modal -->
-    <div v-if="showExtensionsModal" class="modal-backdrop" @click.self="showExtensionsModal = false">
-      <div class="modal-card">
-        <div style="display: flex; justify-content: space-between; margin-bottom: 12px">
-          <strong>IDE 扩展插槽（Extension Registry）</strong>
-          <button class="btn" @click="showExtensionsModal = false">关闭</button>
-        </div>
-        <div v-if="extensions.length === 0" style="color: var(--text-secondary); line-height: 1.6">
-          <p>当前以纯本地 DataGrip 桌面模式运行，未挂载外部平台插件。</p>
-          <p>
-            已保留以下 Rust 扩展契约供后续按需接入（如 <code>wmsir/Pacer</code> 协同治理平台）：
-          </p>
-          <ul>
-            <li><code>pacer_core::GovernanceExtension</code> — <code>before_execute</code> 预审拦截与 <code>report_audit</code> 审计上报</li>
-            <li><code>pacer_core::AiSqlExtension</code> — Text2SQL 与 SQL 优化重写</li>
-            <li><code>pacer_core::DbBackend</code> &amp; <code>pacer-client</code>（Cargo feature <code>pacer-extension</code>）</li>
-          </ul>
-        </div>
-        <div v-else>
-          <div v-for="ext in extensions" :key="ext.id" class="conn-card">
-            <div class="conn-title-row">
-              <span>{{ ext.name }} ({{ ext.version }})</span>
-              <span class="badge badge-neutral">{{ ext.kind }}</span>
+              <div style="font-weight: 700; margin-bottom: 4px">已预留 Trait 插槽</div>
+              <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary)">
+                • pacer_core::extension::GovernanceExtension<br />
+                • pacer_core::extension::AiSqlExtension<br />
+                • Cargo feature: <strong>pacer-extension</strong>
+              </div>
             </div>
-            <div class="conn-meta">{{ ext.description }}</div>
+
+            <div v-if="extensions.length > 0">
+              <div style="font-weight: 700; margin-bottom: 6px">已注册扩展</div>
+              <div
+                v-for="ext in extensions"
+                :key="ext.id"
+                style="
+                  padding: 7px 8px;
+                  border: 1px solid var(--border);
+                  border-radius: 6px;
+                  margin-bottom: 6px;
+                "
+              >
+                <div style="display: flex; justify-content: space-between; align-items: center">
+                  <strong>{{ ext.name }}</strong>
+                  <span class="pill pill-neutral">{{ ext.kind }}</span>
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 3px">
+                  {{ ext.description }}
+                </div>
+              </div>
+            </div>
+            <div v-else style="font-size: 11px; color: var(--text-muted)">
+              当前未启用外部治理插件（独立原生 DataGrip 模式）。
+            </div>
           </div>
-        </div>
-      </div>
+        </template>
+      </section>
+
+      <!-- Right 38px Tool Window Stripe -->
+      <aside class="tool-stripe right">
+        <button
+          class="stripe-btn"
+          :class="{ active: rightTool === 'structure' }"
+          :title="t('toolStructure')"
+          @click="toggleRightTool('structure')"
+        >
+          📐
+        </button>
+        <button
+          class="stripe-btn"
+          :class="{ active: rightTool === 'extensions' }"
+          :title="t('toolExtensions')"
+          @click="toggleRightTool('extensions')"
+        >
+          🧩
+        </button>
+      </aside>
     </div>
+
+    <!-- ==================== 3. Bottom 24px JetBrains Status Bar ==================== -->
+    <footer class="ide-statusbar">
+      <div class="status-left">
+        <span
+          v-if="activeProfile"
+          class="pill"
+          :class="
+            activeProfile.env === 'PROD'
+              ? 'pill-prod'
+              : activeProfile.env === 'TEST'
+                ? 'pill-test'
+                : 'pill-dev'
+          "
+          style="margin-right: 6px"
+        >
+          {{ activeProfile.env }}
+        </span>
+        <span class="status-msg" :class="{ error: statusIsError }" :title="statusMessage">
+          {{ busy ? '⏳ 正在执行... ' : '' }}{{ statusMessage }}
+        </span>
+      </div>
+
+      <div v-if="activeTab" class="status-right">
+        <!-- Cursor Position & Selection -->
+        <button
+          class="status-widget"
+          title="光标位置与选区统计"
+          @click="editorRef?.focus()"
+        >
+          {{
+            t('statusLineCol', {
+              line: activeTab.cursor.line,
+              col: activeTab.cursor.col,
+            })
+          }}
+          <template v-if="activeTab.cursor.selectedChars > 0">
+            ·
+            {{
+              t('statusSelection', {
+                chars: activeTab.cursor.selectedChars,
+                lines: activeTab.cursor.selectedLines,
+              })
+            }}
+          </template>
+        </button>
+
+        <span class="status-divider" />
+
+        <!-- Total Line Count -->
+        <span class="status-widget" style="cursor: default" title="文档总行数">
+          {{ t('statusTotalLines', { count: activeTab.cursor.lineCount }) }}
+        </span>
+
+        <span class="status-divider" />
+
+        <!-- Byte Size -->
+        <span class="status-widget" style="cursor: default" title="文件字节大小">
+          {{ formatBytes(activeTab.byteSize) }}
+        </span>
+
+        <span class="status-divider" />
+
+        <!-- Line Ending Toggle -->
+        <button
+          class="status-widget"
+          title="点击切换行尾换行符 (CRLF / LF)"
+          @click="toggleLineEndingQuick"
+        >
+          {{ activeTab.lineEnding }}
+        </button>
+
+        <span class="status-divider" />
+
+        <!-- File Encoding (Clickable -> Encoding Modal) -->
+        <button
+          class="status-widget"
+          title="点击切换文件解码编码或转换保存编码 (UTF-8 / UTF-8 BOM / GBK / UTF-16)"
+          @click="activeModal = 'encoding'"
+        >
+          {{ activeTab.encoding }}
+        </button>
+
+        <span class="status-divider" />
+
+        <!-- Indentation -->
+        <span class="status-widget" style="cursor: default">
+          {{ t('statusSpaces') }}
+        </span>
+
+        <span class="status-divider" />
+
+        <!-- Dialect / File Kind -->
+        <span class="status-widget" style="cursor: default">
+          {{ activeDialectLabel }}
+        </span>
+
+        <span class="status-divider" />
+
+        <!-- Read-Only Toggle -->
+        <button
+          class="status-widget"
+          title="点击切换当前标签页只读/可写状态"
+          @click="activeTab.readOnly = !activeTab.readOnly"
+        >
+          {{ activeTab.readOnly ? `🔒 ${t('statusReadOnly')}` : `🔓 ${t('statusEditable')}` }}
+        </button>
+      </div>
+    </footer>
+
+    <!-- ==================== All Modals ==================== -->
+    <Modals
+      :active-modal="activeModal"
+      :editing-profile="editingProfile"
+      :encoding-context="encodingModalContext"
+      :danger-context="dangerContext"
+      :password-profile="passwordProfile"
+      :search-items="searchItems"
+      :exported-xml="exportedXml"
+      :busy="busy"
+      @close="activeModal = 'none'"
+      @save-connection="handleSaveConnection"
+      @import-path="handleImportPath"
+      @import-xml="handleImportXml"
+      @export-xml="handleExportXml"
+      @reload-encoding="handleReloadEncoding"
+      @convert-encoding="handleConvertEncoding"
+      @confirm-danger="confirmDangerExecution"
+      @submit-password="handleSubmitPassword"
+      @select-search-item="handleSelectSearchItem"
+      @notify="setStatus($event)"
+    />
   </div>
 </template>

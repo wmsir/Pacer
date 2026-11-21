@@ -477,3 +477,73 @@ pub struct QueryHistoryEntry {
     pub success: bool,
     pub error_message: Option<String>,
 }
+
+/// Table index metadata shown in the Database Explorer & Structure tool window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexMeta {
+    pub name: String,
+    pub unique: bool,
+    pub columns: Vec<String>,
+    pub index_type: Option<String>,
+}
+
+/// Fenced SQL code block extracted from a Markdown (`.md`) document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownSqlBlock {
+    pub index: usize,
+    pub language: String,
+    /// 1-based inclusive fence opening line number.
+    pub start_line: usize,
+    /// 1-based inclusive fence closing line number.
+    pub end_line: usize,
+    /// 1-based inclusive first SQL content line.
+    pub content_start_line: usize,
+    /// 1-based inclusive last SQL content line.
+    pub content_end_line: usize,
+    pub sql: String,
+    /// Nearest preceding Markdown heading, if any.
+    pub title: Option<String>,
+}
+
+/// Opened local text/SQL/Markdown file with detected encoding, line count, and line endings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedFileDto {
+    pub path: String,
+    pub name: String,
+    pub content: String,
+    pub encoding: String,
+    pub has_bom: bool,
+    pub line_ending: String,
+    pub line_count: usize,
+    pub char_count: usize,
+    pub byte_size: u64,
+    pub file_kind: String,
+    pub sql_blocks: Vec<MarkdownSqlBlock>,
+}
+
+/// Saved file statistics returned after writing a file to disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStatsDto {
+    pub path: String,
+    pub encoding: String,
+    pub has_bom: bool,
+    pub line_ending: String,
+    pub line_count: usize,
+    pub char_count: usize,
+    pub byte_size: u64,
+}
+
+/// Entry shown in the DataGrip-style local Files / Workspace Explorer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileEntry {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub extension: Option<String>,
+}

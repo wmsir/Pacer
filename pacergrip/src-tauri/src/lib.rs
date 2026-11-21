@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod files;
 
 use tauri::Manager;
 
@@ -7,6 +8,7 @@ use commands::AppState;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -27,10 +29,18 @@ pub fn run() {
             commands::list_databases_cmd,
             commands::list_tables_cmd,
             commands::list_columns_cmd,
+            commands::list_indexes_cmd,
             commands::get_table_ddl_cmd,
             commands::execute_sql_cmd,
             commands::explain_sql_cmd,
             commands::analyze_sql_cmd,
+            commands::format_sql_cmd,
+            commands::extract_statement_at_cursor_cmd,
+            commands::extract_markdown_sql_blocks_cmd,
+            commands::open_text_file_cmd,
+            commands::save_text_file_cmd,
+            commands::list_workspace_files_cmd,
+            commands::create_demo_markdown_file_cmd,
             commands::list_query_history_cmd,
             commands::list_extensions_cmd,
         ])

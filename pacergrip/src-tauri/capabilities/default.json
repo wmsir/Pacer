@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default desktop capabilities for PacerGrip",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:default"]
 }

@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DirectConfig,
-    ExplainResult, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    ExplainResult, IndexMeta, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
@@ -201,6 +201,39 @@ impl DbBackend for MySqlBackend {
             });
         }
         Ok(out)
+    }
+
+    async fn list_indexes(&self, db: &str, table: &str) -> CoreResult<Vec<IndexMeta>> {
+        let rows = sqlx::query(
+            "SELECT INDEX_NAME AS idx_name, NON_UNIQUE AS non_unique, \
+                    COLUMN_NAME AS col_name, INDEX_TYPE AS idx_type \
+             FROM information_schema.STATISTICS \
+             WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? \
+             ORDER BY INDEX_NAME, SEQ_IN_INDEX",
+        )
+        .bind(db)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        let mut grouped: BTreeMap<String, IndexMeta> = BTreeMap::new();
+        for row in rows {
+            let name: String = row.try_get("idx_name").unwrap_or_default();
+            let non_unique: i64 = row.try_get("non_unique").unwrap_or(1);
+            let col_name: String = row.try_get("col_name").unwrap_or_default();
+            let idx_type: Option<String> = row.try_get("idx_type").ok();
+            let entry = grouped.entry(name.clone()).or_insert_with(|| IndexMeta {
+                name,
+                unique: non_unique == 0,
+                columns: Vec::new(),
+                index_type: idx_type,
+            });
+            if !col_name.is_empty() {
+                entry.columns.push(col_name);
+            }
+        }
+        Ok(grouped.into_values().collect())
     }
 
     async fn get_table_ddl(&self, db: &str, table: &str) -> CoreResult<String> {

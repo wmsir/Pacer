@@ -1,4 +1,5 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
+import { open as dialogOpen, save as dialogSave } from '@tauri-apps/plugin-dialog';
 
 export type EnvLevel = 'DEV' | 'TEST' | 'PROD' | 'UNKNOWN';
 export type SqlAccessKind = 'READ_ONLY' | 'WRITE_DML' | 'WRITE_DDL' | 'ADMIN_OR_DCL' | 'UNKNOWN';
@@ -108,6 +109,13 @@ export interface ColumnMeta {
   maskingRule?: string | null;
 }
 
+export interface IndexMeta {
+  name: string;
+  unique: boolean;
+  columns: string[];
+  indexType?: string | null;
+}
+
 export interface QueryChunk {
   columns: string[];
   rows: Record<string, unknown>[];
@@ -179,6 +187,49 @@ export interface ExtensionMeta {
   enabled: boolean;
 }
 
+export interface MarkdownSqlBlock {
+  index: number;
+  language: string;
+  startLine: number;
+  endLine: number;
+  contentStartLine: number;
+  contentEndLine: number;
+  sql: string;
+  title?: string | null;
+}
+
+export interface OpenedFileDto {
+  path: string;
+  name: string;
+  content: string;
+  encoding: string;
+  hasBom: boolean;
+  lineEnding: string;
+  lineCount: number;
+  charCount: number;
+  byteSize: number;
+  fileKind: 'markdown' | 'sql' | 'json' | 'xml' | 'text' | string;
+  sqlBlocks: MarkdownSqlBlock[];
+}
+
+export interface FileStatsDto {
+  path: string;
+  encoding: string;
+  hasBom: boolean;
+  lineEnding: string;
+  lineCount: number;
+  charCount: number;
+  byteSize: number;
+}
+
+export interface WorkspaceFileEntry {
+  path: string;
+  name: string;
+  isDir: boolean;
+  size: number;
+  extension?: string | null;
+}
+
 export function isTauriRuntime(): boolean {
   return (
     typeof window !== 'undefined' &&
@@ -188,8 +239,57 @@ export function isTauriRuntime(): boolean {
 
 function assertTauri(): void {
   if (!isTauriRuntime()) {
-    throw new Error('当前运行在纯浏览器视图，请运行 `cargo tauri dev` 启动桌面端以连接原生 Rust 数据库驱动。');
+    throw new Error('当前运行在纯浏览器视图，请运行桌面端以启用原生 SQL 驱动与文件系统能力。');
   }
+}
+
+export async function pickTextFileToOpen(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: 'SQL & Markdown', extensions: ['md', 'markdown', 'sql', 'ddl', 'dml', 'txt'] },
+      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
+      { name: 'SQL 脚本', extensions: ['sql', 'ddl', 'dml', 'psql'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickDirectoryToMount(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: true,
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickSaveFilePath(defaultPath?: string): Promise<string | null> {
+  assertTauri();
+  const res = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: 'SQL / Markdown', extensions: ['sql', 'md', 'txt'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickDataGripImportFile(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: 'DataGrip Export (XML / ZIP)', extensions: ['xml', 'zip'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
 }
 
 export async function listConnections(): Promise<ConnectionProfile[]> {
@@ -260,6 +360,15 @@ export async function listColumns(
   return invoke('list_columns_cmd', { profileId, dbName, tableName });
 }
 
+export async function listIndexes(
+  profileId: string,
+  dbName: string,
+  tableName: string,
+): Promise<IndexMeta[]> {
+  assertTauri();
+  return invoke('list_indexes_cmd', { profileId, dbName, tableName });
+}
+
 export async function getTableDdl(
   profileId: string,
   dbName: string,
@@ -310,6 +419,62 @@ export async function analyzeSql(
     };
   }
   return invoke('analyze_sql_cmd', { sql, dbType });
+}
+
+export async function formatSql(sql: string): Promise<string> {
+  if (!isTauriRuntime()) return sql;
+  return invoke('format_sql_cmd', { sql });
+}
+
+export async function extractStatementAtCursor(
+  sql: string,
+  cursorOffset: number,
+): Promise<string | null> {
+  if (!isTauriRuntime()) return sql;
+  return invoke('extract_statement_at_cursor_cmd', { sql, cursorOffset });
+}
+
+export async function extractMarkdownSqlBlocks(content: string): Promise<MarkdownSqlBlock[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('extract_markdown_sql_blocks_cmd', { content });
+}
+
+export async function openTextFile(
+  path: string,
+  encodingOverride?: string | null,
+): Promise<OpenedFileDto> {
+  assertTauri();
+  return invoke('open_text_file_cmd', {
+    path,
+    encodingOverride: encodingOverride ?? null,
+  });
+}
+
+export async function saveTextFile(
+  path: string,
+  content: string,
+  encoding: string,
+  lineEnding: string,
+  withBom: boolean,
+): Promise<FileStatsDto> {
+  assertTauri();
+  return invoke('save_text_file_cmd', {
+    path,
+    content,
+    encoding,
+    lineEnding,
+    withBom,
+  });
+}
+
+export async function listWorkspaceFiles(dirPath: string): Promise<WorkspaceFileEntry[]> {
+  assertTauri();
+  return invoke('list_workspace_files_cmd', { dirPath });
+}
+
+export async function createDemoMarkdownFile(): Promise<OpenedFileDto> {
+  assertTauri();
+  return invoke('create_demo_markdown_file_cmd');
 }
 
 export async function listQueryHistory(): Promise<QueryHistoryEntry[]> {

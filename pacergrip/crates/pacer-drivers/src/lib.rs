@@ -92,6 +92,10 @@ mod tests {
         assert!(ddl.contains("CREATE TABLE"));
         assert!(ddl.contains("customers"));
 
+        let indexes = backend.list_indexes("main", "orders").await.unwrap();
+        assert!(indexes.iter().any(|i| i.name == "idx_orders_customer"));
+        assert!(indexes.iter().any(|i| i.name == "idx_orders_status"));
+
         drop(backend);
         let _ = std::fs::remove_file(&tmp);
     }

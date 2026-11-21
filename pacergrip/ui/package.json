@@ -1,7 +1,7 @@
 {
   "name": "pacergrip-ui",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +9,17 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.18.4",
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-markdown": "^6.3.2",
+    "@codemirror/lang-sql": "^6.8.0",
+    "@codemirror/language": "^6.10.8",
+    "@codemirror/search": "^6.5.8",
+    "@codemirror/state": "^6.5.0",
+    "@codemirror/theme-one-dark": "^6.1.2",
+    "@codemirror/view": "^6.36.0",
     "@tauri-apps/api": "^2.2.0",
+    "@tauri-apps/plugin-dialog": "^2.2.0",
     "vue": "^3.5.13"
   },
   "devDependencies": {

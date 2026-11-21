@@ -11,7 +11,8 @@ use tokio::sync::mpsc;
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DbEngineType,
-    DirectConfig, ExplainResult, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    DirectConfig, ExplainResult, IndexMeta, PingMetrics, QueryChunk, QueryReq, QuerySummary,
+    TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
@@ -178,6 +179,43 @@ impl DbBackend for SqliteBackend {
                 default_value: dflt_value,
                 comment: None,
                 masking_rule: None,
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_indexes(&self, _db: &str, table: &str) -> CoreResult<Vec<IndexMeta>> {
+        let sql = format!("PRAGMA index_list(\"{}\")", table.replace('"', "\"\""));
+        let rows = sqlx::query(&sql)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let idx_name: String = row.try_get("name").unwrap_or_default();
+            let unique: i64 = row.try_get("unique").unwrap_or(0);
+            let origin: Option<String> = row.try_get("origin").ok();
+
+            let info_sql = format!("PRAGMA index_info(\"{}\")", idx_name.replace('"', "\"\""));
+            let col_rows = sqlx::query(&info_sql)
+                .fetch_all(&self.pool)
+                .await
+                .unwrap_or_default();
+            let columns: Vec<String> = col_rows
+                .into_iter()
+                .filter_map(|r| r.try_get::<Option<String>, _>("name").ok().flatten())
+                .collect();
+
+            out.push(IndexMeta {
+                name: idx_name,
+                unique: unique != 0,
+                columns,
+                index_type: origin.map(|o| match o.as_str() {
+                    "pk" => "PRIMARY".to_string(),
+                    "u" => "UNIQUE".to_string(),
+                    _ => "BTREE".to_string(),
+                }),
             });
         }
         Ok(out)
@@ -462,6 +500,8 @@ pub async fn create_demo_sqlite_db(path: &Path) -> CoreResult<()> {
         quantity INTEGER NOT NULL,
         unit_price REAL NOT NULL
     );
+    CREATE INDEX IF NOT EXISTS idx_orders_customer ON orders(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
     "#;
 
     pool.execute(schema_sql)

@@ -10,3 +10,5 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 async-trait.workspace = true
+encoding_rs.workspace = true
+chardetng.workspace = true

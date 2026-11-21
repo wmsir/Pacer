@@ -10,7 +10,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
@@ -29,3 +29,5 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 sqlparser = "0.53"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "native-tls"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-native-tls", "mysql", "postgres", "sqlite", "json", "chrono"] }
+encoding_rs = "0.8"
+chardetng = "0.1"

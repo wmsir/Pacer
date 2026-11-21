@@ -26,6 +26,7 @@ pacer-datagrip-io = { path = "../crates/pacer-datagrip-io" }
 pacer-sql-ast = { path = "../crates/pacer-sql-ast" }
 pacer-client = { path = "../crates/pacer-client", optional = true }
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
