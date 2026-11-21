@@ -2,7 +2,9 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   Compartment,
+  EditorSelection,
   EditorState,
+  Prec,
   RangeSetBuilder,
   StateField,
 } from '@codemirror/state';
@@ -38,10 +40,23 @@ import {
 } from '@codemirror/language';
 import { highlightSelectionMatches, openSearchPanel, searchKeymap } from '@codemirror/search';
 import {
+  acceptCompletion,
   autocompletion,
   closeBrackets,
   closeBracketsKeymap,
+  closeCompletion,
   completionKeymap,
+  completionStatus,
+  hasNextSnippetField,
+  hasPrevSnippetField,
+  nextSnippetField,
+  pickedCompletion,
+  prevSnippetField,
+  snippet,
+  startCompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
 } from '@codemirror/autocomplete';
 import {
   MySQL,
@@ -56,6 +71,14 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import type { MarkdownSqlBlock } from '../api/ipc';
 import { extractMarkdownSqlBlocksLocal } from '../utils/sqlTools';
 import { comboToCodeMirrorKey, useKeymap } from '../utils/keymap';
+import {
+  extractReferencedTablesInStatement,
+  formatCompletionIdentifier,
+  formatTemplatePreview,
+  normalizeLiveTemplate,
+  useLiveTemplates,
+  type SqlLiveTemplate,
+} from '../utils/liveTemplates';
 
 export interface EditorCursorTelemetry {
   line: number;
@@ -92,9 +115,12 @@ const emit = defineEmits<{
   (e: 'run-md-block', block: MarkdownSqlBlock): void;
   (e: 'explain-md-block', block: MarkdownSqlBlock): void;
   (e: 'open-md-block-console', block: MarkdownSqlBlock): void;
+  (e: 'ensure-schema-loaded'): void;
+  (e: 'table-picked', tableName: string): void;
 }>();
 
 const userKeymap = useKeymap();
+const liveTemplates = useLiveTemplates();
 const hostEl = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 let syncingFromProp = false;
@@ -402,6 +428,326 @@ function buildWrapExtension() {
   return props.wordWrap ? EditorView.lineWrapping : [];
 }
 
+const TABLE_PLACEHOLDER_RE = /^(table\d*|tbl\d*|table_name)$/i;
+const COLUMN_PLACEHOLDER_RE = /^(column\d*|col\d*|col_name|columns|pk)$/i;
+
+function isCursorInSqlContext(state: EditorState, pos: number): boolean {
+  if (props.fileKind !== 'markdown') return true;
+  const lineNum = state.doc.lineAt(pos).number;
+  const blocks = extractMarkdownSqlBlocksLocal(state.doc.toString());
+  return blocks.some((b) => lineNum >= b.contentStartLine && lineNum <= b.contentEndLine);
+}
+
+function applyIdentifierCompletion(
+  v: EditorView,
+  completion: Completion,
+  from: number,
+  to: number,
+  rawName: string,
+  isTable: boolean,
+) {
+  const trSpec =
+    v.state.selection.ranges.length > 1
+      ? v.state.changeByRange((range) => {
+          const prevChar = range.from > 0 ? v.state.sliceDoc(range.from - 1, range.from) : '';
+          const embedded = /[A-Za-z0-9_$]/.test(prevChar);
+          const text = formatCompletionIdentifier(rawName, props.engineKey, embedded);
+          return {
+            changes: { from: range.from, to: range.to, insert: text },
+            range: EditorSelection.cursor(range.from + text.length),
+          };
+        })
+      : (() => {
+          const prevChar = from > 0 ? v.state.sliceDoc(from - 1, from) : '';
+          const embedded = /[A-Za-z0-9_$]/.test(prevChar);
+          const text = formatCompletionIdentifier(rawName, props.engineKey, embedded);
+          return {
+            changes: { from, to, insert: text },
+            selection: EditorSelection.cursor(from + text.length),
+          };
+        })();
+
+  v.dispatch({
+    ...trSpec,
+    annotations: pickedCompletion.of(completion),
+  });
+
+  if (isTable) {
+    emit('table-picked', rawName);
+  }
+}
+
+function maybeTriggerPlaceholderCompletion(v: EditorView) {
+  const sel = v.state.selection.main;
+  if (sel.empty || !isCursorInSqlContext(v.state, sel.from)) return;
+  const selectedText = v.state.sliceDoc(sel.from, sel.to).trim();
+  if (TABLE_PLACEHOLDER_RE.test(selectedText)) {
+    if (Object.keys(props.schemaMap ?? {}).length === 0) {
+      emit('ensure-schema-loaded');
+    }
+    startCompletion(v);
+  } else if (COLUMN_PLACEHOLDER_RE.test(selectedText)) {
+    startCompletion(v);
+  }
+}
+
+function expandLiveTemplate(v: EditorView, tpl: SqlLiveTemplate, from: number, to: number) {
+  closeCompletion(v);
+  const normalized = normalizeLiveTemplate(tpl.template);
+  snippet(normalized)(v, null, from, to);
+  v.focus();
+  window.setTimeout(() => {
+    if (view === v) {
+      maybeTriggerPlaceholderCompletion(v);
+    }
+  }, 0);
+}
+
+function buildTableCompletions(schema: Record<string, string[]>, boostBase = 90): Completion[] {
+  return Object.keys(schema).map((tblName, idx) => {
+    const colCount = schema[tblName]?.length ?? 0;
+    return {
+      label: tblName,
+      detail: colCount > 0 ? `数据表 · ${colCount} 列` : '当前库数据表',
+      type: 'class',
+      boost: Math.max(10, boostBase - Math.min(idx, 20) * 0.1),
+      apply: (v, completion, from, to) =>
+        applyIdentifierCompletion(v, completion, from, to, tblName, true),
+    };
+  });
+}
+
+function buildColumnCompletionsForTables(
+  schema: Record<string, string[]>,
+  preferredTables: string[],
+  boostBase = 85,
+): Completion[] {
+  const seen = new Set<string>();
+  const options: Completion[] = [];
+  const schemaEntries = Object.entries(schema);
+  const findColsFor = (tblQuery: string) => {
+    const exact = schema[tblQuery];
+    if (exact) return { table: tblQuery, cols: exact };
+    const low = tblQuery.toLowerCase();
+    const match = schemaEntries.find(([k]) => k.toLowerCase() === low);
+    return match ? { table: match[0], cols: match[1] } : null;
+  };
+
+  for (const tbl of preferredTables) {
+    const resolved = findColsFor(tbl);
+    if (!resolved) continue;
+    for (const col of resolved.cols) {
+      const key = `${resolved.table}.${col}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      options.push({
+        label: col,
+        detail: `${resolved.table} 字段`,
+        type: 'property',
+        boost: boostBase,
+        apply: (v, completion, from, to) =>
+          applyIdentifierCompletion(v, completion, from, to, col, false),
+      });
+    }
+  }
+
+  if (options.length === 0) {
+    for (const [tblName, cols] of schemaEntries) {
+      for (const col of cols) {
+        if (seen.has(`${tblName}.${col}`)) continue;
+        seen.add(`${tblName}.${col}`);
+        options.push({
+          label: col,
+          detail: `${tblName} 字段`,
+          type: 'property',
+          boost: boostBase - 15,
+          apply: (v, completion, from, to) =>
+            applyIdentifierCompletion(v, completion, from, to, col, false),
+        });
+      }
+    }
+  }
+  return options;
+}
+
+function pacerSqlCompletionSource(context: CompletionContext): CompletionResult | null {
+  if (!isCursorInSqlContext(context.state, context.pos)) return null;
+  const schema = props.schemaMap ?? {};
+  const tableNames = Object.keys(schema);
+  const sel = context.state.selection.main;
+  const docText = context.state.doc.toString();
+
+  // 1. Active placeholder selected from Live Template (`table` / `column`)
+  if (!sel.empty) {
+    const placeholder = context.state.sliceDoc(sel.from, sel.to).trim();
+    if (TABLE_PLACEHOLDER_RE.test(placeholder) && tableNames.length > 0) {
+      return {
+        from: sel.from,
+        to: sel.to,
+        options: buildTableCompletions(schema, 95),
+        filter: false,
+      };
+    }
+    if (COLUMN_PLACEHOLDER_RE.test(placeholder)) {
+      const { tables } = extractReferencedTablesInStatement(docText, sel.from);
+      const colOpts = buildColumnCompletionsForTables(schema, tables, 95);
+      if (colOpts.length > 0) {
+        return {
+          from: sel.from,
+          to: sel.to,
+          options: colOpts,
+          filter: false,
+        };
+      }
+    }
+    return null;
+  }
+
+  // 2. Qualified `alias.` or `table.` column completion
+  const qualifierMatch = context.matchBefore(/(?:[`"]?([A-Za-z0-9_$]+)[`"]?)\.\s*([A-Za-z0-9_$]*)$/);
+  if (qualifierMatch) {
+    const inner = /(?:[`"]?([A-Za-z0-9_$]+)[`"]?)\.\s*([A-Za-z0-9_$]*)$/.exec(
+      qualifierMatch.text,
+    );
+    if (inner) {
+      const targetAliasOrTable = inner[1];
+      const typedCol = inner[2] ?? '';
+      const { aliases } = extractReferencedTablesInStatement(docText, context.pos);
+      const resolvedTable = aliases[targetAliasOrTable.toLowerCase()] ?? targetAliasOrTable;
+      const colOpts = buildColumnCompletionsForTables(schema, [resolvedTable], 90);
+      if (colOpts.length > 0) {
+        return {
+          from: context.pos - typedCol.length,
+          options: colOpts,
+          validFor: /^[A-Za-z0-9_$]*$/,
+        };
+      }
+    }
+  }
+
+  // 3. Table completion directly after FROM / JOIN / INTO / UPDATE / ALTER TABLE / TRUNCATE
+  const tableCtx = context.matchBefore(
+    /\b(?:from|join|into|update|table|truncate)\s+([`"']?[A-Za-z0-9_$]*)$/i,
+  );
+  if (tableCtx && tableNames.length > 0) {
+    const m = /\b(?:from|join|into|update|table|truncate)\s+([`"']?[A-Za-z0-9_$]*)$/i.exec(
+      tableCtx.text,
+    );
+    const typedRaw = m?.[1] ?? '';
+    const typedClean = typedRaw.replace(/^[`"']/, '');
+    if (typedClean.length > 0 || context.explicit) {
+      return {
+        from: context.pos - typedRaw.length,
+        options: buildTableCompletions(schema, 85),
+        validFor: /^[`"']?[A-Za-z0-9_$]*$/,
+      };
+    }
+  }
+
+  // 4. SQL Live Templates + Columns of tables referenced in current statement
+  const word = context.matchBefore(/[A-Za-z_][A-Za-z0-9_]*/);
+  if (!word && !context.explicit) return null;
+
+  const fromPos = word ? word.from : context.pos;
+  const prevChar = fromPos > 0 ? context.state.sliceDoc(fromPos - 1, fromPos) : '';
+  if (prevChar === '.' || prevChar === "'" || prevChar === '"' || prevChar === '`') {
+    return null;
+  }
+
+  const typed = word ? word.text.toLowerCase() : '';
+  const options: Completion[] = [];
+
+  for (const tpl of liveTemplates.templates) {
+    if (!tpl.enabled) continue;
+    const abbrLow = tpl.abbrev.toLowerCase();
+    if (!typed || abbrLow.startsWith(typed)) {
+      options.push({
+        label: tpl.abbrev,
+        detail: `${tpl.description} [Tab]`,
+        info: formatTemplatePreview(tpl.template),
+        type: 'template',
+        boost: abbrLow === typed ? 99 : 70,
+        apply: (v, _completion, from, to) => expandLiveTemplate(v, tpl, from, to),
+      });
+    }
+  }
+
+  const { tables } = extractReferencedTablesInStatement(docText, context.pos);
+  if (tables.length > 0) {
+    options.push(...buildColumnCompletionsForTables(schema, tables, 55));
+  }
+
+  if (options.length === 0) return null;
+  return {
+    from: fromPos,
+    options,
+    validFor: /^[A-Za-z0-9_]*$/,
+  };
+}
+
+function tryHandleEditorTab(v: EditorView): boolean {
+  const state = v.state;
+  const sel = state.selection.main;
+
+  // 1. Live Template abbreviation right before cursor (`sel` + Tab -> expands template + opens table picker)
+  if (sel.empty && isCursorInSqlContext(state, sel.head)) {
+    const lineInfo = state.doc.lineAt(sel.head);
+    const lineBefore = state.sliceDoc(lineInfo.from, sel.head);
+    const wordMatch = /([A-Za-z_][A-Za-z0-9_]*)$/.exec(lineBefore);
+    if (wordMatch) {
+      const word = wordMatch[1];
+      const wordFrom = sel.head - word.length;
+      const beforeWord = state.sliceDoc(Math.max(0, wordFrom - 36), wordFrom);
+      const isQualifiedOrQuoted =
+        beforeWord.endsWith('.') ||
+        beforeWord.endsWith('`') ||
+        beforeWord.endsWith('"') ||
+        beforeWord.endsWith("'");
+      const afterTableKw = /\b(?:from|join|into|update|table|truncate)\s+$/i.test(beforeWord);
+      if (!isQualifiedOrQuoted && !afterTableKw) {
+        const matchedTpl = liveTemplates.findByAbbrev(word);
+        if (matchedTpl) {
+          expandLiveTemplate(v, matchedTpl, wordFrom, sel.head);
+          return true;
+        }
+      }
+    }
+  }
+
+  // 2. Active autocomplete item -> accept
+  if (completionStatus(state) === 'active') {
+    if (acceptCompletion(v)) {
+      return true;
+    }
+  }
+
+  // 3. Active snippet placeholder -> advance & auto-pop next table/column completions
+  if (hasNextSnippetField(state)) {
+    if (nextSnippetField(v)) {
+      window.setTimeout(() => {
+        if (view === v) {
+          maybeTriggerPlaceholderCompletion(v);
+        }
+      }, 0);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function tryHandleEditorShiftTab(v: EditorView): boolean {
+  if (hasPrevSnippetField(v.state) && prevSnippetField(v)) {
+    window.setTimeout(() => {
+      if (view === v) {
+        maybeTriggerPlaceholderCompletion(v);
+      }
+    }, 0);
+    return true;
+  }
+  return false;
+}
+
 onMounted(() => {
   if (!hostEl.value) return;
 
@@ -409,6 +755,12 @@ onMounted(() => {
     doc: props.modelValue,
     extensions: [
       keymapCompartment.of(buildCustomKeymapExtension()),
+      Prec.high(
+        keymap.of([
+          { key: 'Tab', run: tryHandleEditorTab },
+          { key: 'Shift-Tab', run: tryHandleEditorShiftTab },
+        ]),
+      ),
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightSpecialChars(),
@@ -419,7 +771,11 @@ onMounted(() => {
       indentOnInput(),
       bracketMatching(),
       closeBrackets(),
-      autocompletion(),
+      autocompletion({
+        activateOnTyping: true,
+        maxRenderedOptions: 60,
+      }),
+      EditorState.languageData.of(() => [{ autocomplete: pacerSqlCompletionSource }]),
       highlightActiveLine(),
       highlightSelectionMatches(),
       keymap.of([
@@ -481,6 +837,17 @@ watch(
         lensCompartment.reconfigure(buildMarkdownLensExtension()),
       ],
     });
+    if (view.hasFocus && !view.state.selection.main.empty) {
+      const selected = view.state.sliceDoc(
+        view.state.selection.main.from,
+        view.state.selection.main.to,
+      ).trim();
+      if (TABLE_PLACEHOLDER_RE.test(selected) || COLUMN_PLACEHOLDER_RE.test(selected)) {
+        window.setTimeout(() => {
+          if (view) startCompletion(view);
+        }, 0);
+      }
+    }
   },
   { deep: true },
 );
@@ -571,7 +938,23 @@ function focus() {
   view?.focus();
 }
 
-defineExpose({ jumpToLine, insertText, focus });
+function replaceSelection(text: string) {
+  if (!view) return;
+  const sel = view.state.selection.main;
+  view.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: text },
+    selection: { anchor: sel.from, head: sel.from + text.length },
+  });
+  view.focus();
+}
+
+function expandTemplate(tpl: SqlLiveTemplate) {
+  if (!view) return;
+  const sel = view.state.selection.main;
+  expandLiveTemplate(view, tpl, sel.from, sel.to);
+}
+
+defineExpose({ jumpToLine, insertText, focus, replaceSelection, expandTemplate });
 
 onBeforeUnmount(() => {
   view?.destroy();

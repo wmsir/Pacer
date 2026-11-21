@@ -46,7 +46,16 @@ const emit = defineEmits<{
   (e: 'gen-select', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'test-profile', profile: ConnectionProfile): void;
   (e: 'edit-profile', profile: ConnectionProfile): void;
+  (e: 'duplicate-profile', profile: ConnectionProfile): void;
+  (e: 'refresh-profile', profile: ConnectionProfile): void;
   (e: 'delete-profile', profile: ConnectionProfile): void;
+  (e: 'refresh-database', profile: ConnectionProfile, dbName: string): void;
+  (e: 'new-console-for-db', profile: ConnectionProfile, dbName: string): void;
+  (e: 'count-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'copy-table-columns', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'gen-insert', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'gen-update', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'refresh-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'copy-text', text: string): void;
 }>();
 
@@ -58,7 +67,7 @@ const ctxMenu = ref<{
   visible: boolean;
   x: number;
   y: number;
-  kind: 'project' | 'profile' | 'table';
+  kind: 'project' | 'profile' | 'database' | 'table';
   project?: WorkspaceProject;
   profile?: ConnectionProfile;
   dbName?: string;
@@ -152,6 +161,18 @@ function openProfileContext(ev: MouseEvent, profile: ConnectionProfile) {
     y: ev.clientY,
     kind: 'profile',
     profile,
+  };
+}
+
+function openDatabaseContext(ev: MouseEvent, profile: ConnectionProfile, dbName: string) {
+  ev.preventDefault();
+  ctxMenu.value = {
+    visible: true,
+    x: ev.clientX,
+    y: ev.clientY,
+    kind: 'database',
+    profile,
+    dbName,
   };
 }
 
@@ -308,6 +329,9 @@ function closeContext() {
               <span class="tree-label" style="font-weight: 600">{{ p.name }}</span>
               <span class="tree-meta">{{ engineShort(p.dbType) }}</span>
               <span class="tree-hover-actions" @click.stop>
+                <button class="icon-btn compact" title="刷新数据库列表" @click="emit('refresh-profile', p)">
+                  <IdeIcon name="refresh" :size="12" />
+                </button>
                 <button class="icon-btn compact" :title="t('btnTest')" @click="emit('test-profile', p)">
                   <IdeIcon name="check" :size="12" />
                 </button>
@@ -332,6 +356,7 @@ function closeContext() {
                     selectedNodeKey = `d:${p.id}:${db.name}`;
                     emit('toggle-database', p, db.name);
                   "
+                  @contextmenu="openDatabaseContext($event, p, db.name)"
                 >
                   <span class="tree-chevron">
                     <IdeIcon :name="expandedDatabases[`${p.id}:${db.name}`] ? 'chevron-down' : 'chevron-right'" :size="12" />
@@ -339,6 +364,22 @@ function closeContext() {
                   <IdeIcon name="schema" :size="13" />
                   <span class="tree-label">{{ db.name }}</span>
                   <span class="tree-meta">{{ db.tableCount ?? '' }}</span>
+                  <span class="tree-hover-actions" @click.stop>
+                    <button
+                      class="icon-btn compact"
+                      title="刷新此库表列表"
+                      @click="emit('refresh-database', p, db.name)"
+                    >
+                      <IdeIcon name="refresh" :size="11" />
+                    </button>
+                    <button
+                      class="icon-btn compact"
+                      title="在此库新建查询控制台"
+                      @click="emit('new-console-for-db', p, db.name)"
+                    >
+                      <IdeIcon name="plus" :size="11" />
+                    </button>
+                  </span>
                 </div>
 
                 <!-- Tables -->
@@ -446,11 +487,17 @@ function closeContext() {
       </template>
 
       <template v-else-if="ctxMenu.kind === 'profile' && ctxMenu.profile">
+        <button class="dropdown-item" @click="emit('refresh-profile', ctxMenu.profile)">
+          <span>刷新数据库列表</span>
+        </button>
         <button class="dropdown-item" @click="emit('test-profile', ctxMenu.profile)">
           <span>{{ t('btnTest') }}</span>
         </button>
         <button class="dropdown-item" @click="emit('edit-profile', ctxMenu.profile)">
           <span>{{ t('btnEdit') }}</span>
+        </button>
+        <button class="dropdown-item" @click="emit('duplicate-profile', ctxMenu.profile)">
+          <span>复制数据源配置...</span>
         </button>
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.profile.name)">
           <span>{{ t('ctxCopyName') }}</span>
@@ -479,6 +526,19 @@ function closeContext() {
         </button>
       </template>
 
+      <template v-else-if="ctxMenu.kind === 'database' && ctxMenu.profile && ctxMenu.dbName">
+        <button class="dropdown-item" @click="emit('refresh-database', ctxMenu.profile, ctxMenu.dbName)">
+          <span>刷新数据表列表</span>
+        </button>
+        <button class="dropdown-item" @click="emit('new-console-for-db', ctxMenu.profile, ctxMenu.dbName)">
+          <span>新建此库 SQL 查询控制台</span>
+        </button>
+        <div class="dropdown-sep" />
+        <button class="dropdown-item" @click="emit('copy-text', ctxMenu.dbName)">
+          <span>复制数据库名</span>
+        </button>
+      </template>
+
       <template v-else-if="ctxMenu.kind === 'table' && ctxMenu.profile && ctxMenu.dbName && ctxMenu.tableName">
         <button
           class="dropdown-item"
@@ -488,9 +548,9 @@ function closeContext() {
         </button>
         <button
           class="dropdown-item"
-          @click="emit('gen-select', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          @click="emit('count-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ t('ctxGenSelect') }}</span>
+          <span>统计表总行数 (COUNT(*))</span>
         </button>
         <button
           class="dropdown-item"
@@ -505,6 +565,37 @@ function closeContext() {
           <span>{{ t('ctxViewStructure') }}</span>
         </button>
         <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="emit('gen-select', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>{{ t('ctxGenSelect') }}</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('gen-insert', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>生成 INSERT 模板到编辑器</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('gen-update', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>生成 UPDATE 模板到编辑器</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('copy-table-columns', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>复制全部列名（逗号分隔）</span>
+        </button>
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="emit('refresh-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>刷新字段与索引元数据</span>
+        </button>
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.tableName)">
           <span>{{ t('ctxCopyName') }}</span>
         </button>

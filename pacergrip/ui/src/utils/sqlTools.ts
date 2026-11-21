@@ -473,3 +473,256 @@ export const BUILTIN_SNIPPETS: SqlSnippet[] = [
     sql: `SELECT id, user, host, db, command, time, state, info\nFROM information_schema.PROCESSLIST\nWHERE command <> 'Sleep'\nORDER BY time DESC;`,
   },
 ];
+
+// ==================== Parameterized SQL, Selection -> IN, Case & Unix Timestamp Helpers ====================
+
+export interface SqlParamToken {
+  name: string;
+  rawSamples: string[];
+}
+
+export type SqlParamValueMode = 'auto' | 'string' | 'raw';
+
+export interface SqlParamValueSpec {
+  value: string;
+  mode: SqlParamValueMode;
+}
+
+interface SqlParamMatch {
+  start: number;
+  end: number;
+  name: string;
+  raw: string;
+}
+
+function scanSqlParamMatches(sql: string): SqlParamMatch[] {
+  const matches: SqlParamMatch[] = [];
+  let i = 0;
+  const n = sql.length;
+
+  while (i < n) {
+    const ch = sql[i];
+    const next = sql[i + 1] ?? '';
+
+    if (ch === '-' && next === '-') {
+      i += 2;
+      while (i < n && sql[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '#' && next !== '{') {
+      i += 1;
+      while (i < n && sql[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const q = ch;
+      i += 1;
+      while (i < n) {
+        if (q !== '`' && sql[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (sql[i] === q) {
+          if (sql[i + 1] === q) {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      continue;
+    }
+
+    if ((ch === '$' || ch === '#') && next === '{') {
+      const m = /^([A-Za-z_][A-Za-z0-9_]*)\}/.exec(sql.slice(i + 2));
+      if (m) {
+        const raw = sql.slice(i, i + 2 + m[0].length);
+        matches.push({ start: i, end: i + raw.length, name: m[1], raw });
+        i += raw.length;
+        continue;
+      }
+    }
+
+    if (ch === ':') {
+      const prev = i > 0 ? sql[i - 1] : '';
+      if (next !== '=' && next !== ':' && prev !== ':' && !/[A-Za-z0-9_]/.test(prev)) {
+        const m = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(sql.slice(i + 1));
+        if (m) {
+          const raw = `:${m[1]}`;
+          matches.push({ start: i, end: i + raw.length, name: m[1], raw });
+          i += raw.length;
+          continue;
+        }
+      }
+    }
+
+    i += 1;
+  }
+
+  return matches;
+}
+
+export function extractSqlParameters(sql: string): SqlParamToken[] {
+  const byName = new Map<string, string[]>();
+  for (const m of scanSqlParamMatches(sql)) {
+    const samples = byName.get(m.name);
+    if (samples) {
+      if (!samples.includes(m.raw)) samples.push(m.raw);
+    } else {
+      byName.set(m.name, [m.raw]);
+    }
+  }
+  return Array.from(byName.entries()).map(([name, rawSamples]) => ({ name, rawSamples }));
+}
+
+function formatSqlParamValue(spec: SqlParamValueSpec | undefined): string {
+  const raw = spec?.value ?? '';
+  const mode = spec?.mode ?? 'auto';
+  if (mode === 'raw') {
+    return raw;
+  }
+  if (mode === 'string') {
+    return `'${raw.replace(/'/g, "''")}'`;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === '' || /^null$/i.test(trimmed)) return 'NULL';
+  if (/^(?:true|false)$/i.test(trimmed)) return trimmed.toUpperCase();
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(trimmed)) return trimmed;
+  return `'${raw.replace(/'/g, "''")}'`;
+}
+
+export function substituteSqlParameters(
+  sql: string,
+  values: Record<string, SqlParamValueSpec>,
+): string {
+  const matches = scanSqlParamMatches(sql);
+  if (matches.length === 0) return sql;
+  let out = '';
+  let cursor = 0;
+  for (const m of matches) {
+    out += sql.slice(cursor, m.start);
+    out += formatSqlParamValue(values[m.name]);
+    cursor = m.end;
+  }
+  out += sql.slice(cursor);
+  return out;
+}
+
+export function convertSelectionToSqlIn(rawText: string, forceStrings = false): string {
+  const parts = rawText.split(/[\r\n,\t]+/);
+  const seen = new Set<string>();
+  const formatted: string[] = [];
+
+  for (const part of parts) {
+    let cleaned = part.trim();
+    if (!cleaned) continue;
+    if (
+      (cleaned.startsWith("'") && cleaned.endsWith("'") && cleaned.length >= 2) ||
+      (cleaned.startsWith('"') && cleaned.endsWith('"') && cleaned.length >= 2)
+    ) {
+      cleaned = cleaned.slice(1, -1).trim();
+    }
+    if (!cleaned) continue;
+    const isPlainNumber = /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(cleaned);
+    const literal = !forceStrings && isPlainNumber ? cleaned : `'${cleaned.replace(/'/g, "''")}'`;
+    if (!seen.has(literal)) {
+      seen.add(literal);
+      formatted.push(literal);
+    }
+  }
+
+  return formatted.length > 0 ? `(${formatted.join(', ')})` : '()';
+}
+
+export function transformSqlTextCase(sql: string, mode: 'upper' | 'lower'): string {
+  let out = '';
+  let i = 0;
+  const n = sql.length;
+
+  while (i < n) {
+    const ch = sql[i];
+    const next = sql[i + 1] ?? '';
+
+    if (ch === '-' && next === '-') {
+      const start = i;
+      i += 2;
+      while (i < n && sql[i] !== '\n') i += 1;
+      out += sql.slice(start, i);
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      const start = i;
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i += 1;
+      i = Math.min(n, i + 2);
+      out += sql.slice(start, i);
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const q = ch;
+      const start = i;
+      i += 1;
+      while (i < n) {
+        if (q !== '`' && sql[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (sql[i] === q) {
+          if (sql[i + 1] === q) {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      out += sql.slice(start, i);
+      continue;
+    }
+
+    out += mode === 'upper' ? ch.toUpperCase() : ch.toLowerCase();
+    i += 1;
+  }
+
+  return out;
+}
+
+export function decodeUnixTimestampHint(val: unknown): string | null {
+  if (val === null || val === undefined || typeof val === 'boolean' || typeof val === 'object') {
+    return null;
+  }
+  const str = String(val).trim();
+  if (!/^-?\d+(?:\.\d+)?$/.test(str)) return null;
+  const rawNum = Number(str);
+  if (!Number.isFinite(rawNum)) return null;
+  const intVal = Math.trunc(rawNum);
+
+  let ms: number | null = null;
+  let unit = '';
+  if (intVal >= 946_684_800 && intVal <= 4_102_444_800) {
+    ms = intVal * 1000;
+    unit = '秒';
+  } else if (intVal >= 946_684_800_000 && intVal <= 4_102_444_800_000) {
+    ms = intVal;
+    unit = '毫秒';
+  } else {
+    return null;
+  }
+
+  const dt = new Date(ms);
+  if (Number.isNaN(dt.getTime())) return null;
+  const pad = (v: number) => String(v).padStart(2, '0');
+  const formatted = `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(
+    dt.getHours(),
+  )}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+  return `${formatted} (Unix ${unit})`;
+}

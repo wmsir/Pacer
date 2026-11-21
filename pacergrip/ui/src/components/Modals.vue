@@ -18,7 +18,12 @@ import {
 } from '../api/ipc';
 import type { GridMutationPreviewPayload } from './ResultGrid.vue';
 import IdeIcon from './IdeIcon.vue';
-import { formatBytes } from '../utils/sqlTools';
+import {
+  formatBytes,
+  substituteSqlParameters,
+  type SqlParamToken,
+  type SqlParamValueSpec,
+} from '../utils/sqlTools';
 import {
   IS_MAC,
   SHORTCUT_ACTIONS,
@@ -30,6 +35,13 @@ import {
   type ShortcutActionId,
   type ShortcutCategory,
 } from '../utils/keymap';
+import {
+  LIVE_TEMPLATE_CATEGORY_LABELS,
+  formatTemplatePreview,
+  useLiveTemplates,
+  type LiveTemplateCategory,
+  type SqlLiveTemplate,
+} from '../utils/liveTemplates';
 
 export type ActiveModalKind =
   | 'none'
@@ -39,6 +51,7 @@ export type ActiveModalKind =
   | 'import'
   | 'encoding'
   | 'danger'
+  | 'params'
   | 'search'
   | 'password'
   | 'shortcuts'
@@ -64,6 +77,13 @@ export interface DangerModalContext {
     level: RiskLevel;
     message: string;
   }>;
+}
+
+export interface ParamModalContext {
+  profileName: string;
+  dbName: string;
+  statements: string[];
+  params: SqlParamToken[];
 }
 
 export interface SearchEverywhereItem {
@@ -96,10 +116,12 @@ const props = defineProps<{
   gridSqlContext: GridMutationPreviewPayload | null;
   encodingContext: EncodingModalContext | null;
   dangerContext: DangerModalContext | null;
+  paramContext?: ParamModalContext | null;
   passwordProfile: ConnectionProfile | null;
   unsavedContext?: { title: string; path: string | null } | null;
   searchItems: SearchEverywhereItem[];
   exportedJson: string;
+  shortcutsInitialTab?: 'keymap' | 'templates';
   busy: boolean;
 }>();
 
@@ -115,6 +137,8 @@ const emit = defineEmits<{
   (e: 'reload-encoding', encoding: string): void;
   (e: 'convert-encoding', encoding: string, hasBom: boolean, lineEnding: 'CRLF' | 'LF'): void;
   (e: 'confirm-danger'): void;
+  (e: 'confirm-params', boundStatements: string[]): void;
+  (e: 'run-params-raw', rawStatements: string[]): void;
   (e: 'submit-password', profileId: string, password: string): void;
   (e: 'select-search-item', item: SearchEverywhereItem): void;
   (e: 'unsaved-save-close'): void;
@@ -565,7 +589,7 @@ watch(
 
     if (prof) {
       const cfg = (prof.mode?.config ?? {}) as Partial<DirectConfig>;
-      connForm.id = prof.id;
+      connForm.id = prof.id ? prof.id : null;
       connForm.projectId = prof.projectId || props.activeProjectId || '';
       connForm.name = prof.name;
       connForm.color = prof.color ?? '';
@@ -591,7 +615,7 @@ watch(
         cfg.passwordSaveMode === 'session' || cfg.passwordSaveMode === 'never'
           ? cfg.passwordSaveMode
           : 'forever';
-      connForm.hasSavedPassword = Boolean(cfg.hasSavedPassword);
+      connForm.hasSavedPassword = prof.id ? Boolean(cfg.hasSavedPassword) : false;
       connForm.database = cfg.database ?? prof.fingerprint.database ?? '';
       connForm.jdbcUrl = cfg.jdbcUrl || buildUrlFromFields();
       connForm.env = prof.env ?? 'DEV';
@@ -796,13 +820,81 @@ const searchQuery = ref('');
 const searchActiveIdx = ref(0);
 const searchInputRef = ref<HTMLInputElement | null>(null);
 
+const PARAM_HISTORY_KEY = 'pacer.sqlParamHistory.v1';
+const paramInputs = reactive<Record<string, SqlParamValueSpec>>({});
+
+function loadParamHistory(): Record<string, SqlParamValueSpec> {
+  try {
+    const raw = localStorage.getItem(PARAM_HISTORY_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, SqlParamValueSpec>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveParamHistory(entries: Record<string, SqlParamValueSpec>) {
+  try {
+    const prev = loadParamHistory();
+    const merged = { ...prev, ...entries };
+    localStorage.setItem(PARAM_HISTORY_KEY, JSON.stringify(merged));
+  } catch {
+    // non-fatal
+  }
+}
+
+const substitutedParamPreview = computed(() => {
+  const ctx = props.paramContext;
+  if (!ctx) return '';
+  return ctx.statements
+    .map((s) => substituteSqlParameters(s, paramInputs))
+    .join(';\n\n');
+});
+
+function submitBoundParams() {
+  const ctx = props.paramContext;
+  if (!ctx) return;
+  const toSave: Record<string, SqlParamValueSpec> = {};
+  for (const p of ctx.params) {
+    toSave[p.name] = {
+      value: paramInputs[p.name]?.value ?? '',
+      mode: paramInputs[p.name]?.mode ?? 'auto',
+    };
+  }
+  saveParamHistory(toSave);
+  const bound = ctx.statements.map((s) => substituteSqlParameters(s, paramInputs));
+  emit('confirm-params', bound);
+}
+
+watch(
+  () => [props.activeModal, props.paramContext] as const,
+  ([modal, pCtx]) => {
+    if (modal === 'params' && pCtx) {
+      const history = loadParamHistory();
+      for (const k of Object.keys(paramInputs)) {
+        delete paramInputs[k];
+      }
+      for (const p of pCtx.params) {
+        paramInputs[p.name] = {
+          value: history[p.name]?.value ?? '',
+          mode: history[p.name]?.mode ?? 'auto',
+        };
+      }
+    }
+  },
+);
+
 watch(
   () => props.activeModal,
   async (modal) => {
     if (modal !== 'shortcuts') {
       cancelRecordingKey();
+      editingTemplateId.value = null;
+      templateFormVisible.value = false;
+      templateImportVisible.value = false;
     } else {
       keymapSearch.value = '';
+      templateSearch.value = '';
+      shortcutsSubTab.value = props.shortcutsInitialTab ?? 'keymap';
     }
     if (modal === 'import') {
       await scanLocalDbeaver();
@@ -944,6 +1036,142 @@ function applyConflictOverwrite() {
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleKeymapCaptureKeydown, { capture: true });
 });
+
+// ==================== SQL Live Templates Customizer ====================
+const liveTemplates = useLiveTemplates();
+const shortcutsSubTab = ref<'keymap' | 'templates'>('keymap');
+const templateSearch = ref('');
+const templateCategoryFilter = ref<'ALL' | LiveTemplateCategory>('ALL');
+const templateFormVisible = ref(false);
+const editingTemplateId = ref<string | null>(null);
+const templateImportVisible = ref(false);
+const templateImportText = ref('');
+const templateTextareaRef = ref<HTMLTextAreaElement | null>(null);
+
+const templateForm = reactive<{
+  abbrev: string;
+  description: string;
+  category: LiveTemplateCategory;
+  template: string;
+  enabled: boolean;
+}>({
+  abbrev: '',
+  description: '',
+  category: 'custom',
+  template: 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}',
+  enabled: true,
+});
+
+const enabledLiveTemplateCount = computed(
+  () => liveTemplates.templates.filter((t) => t.enabled).length,
+);
+
+const filteredLiveTemplates = computed(() => {
+  const q = templateSearch.value.trim().toLowerCase();
+  return liveTemplates.templates.filter((tpl) => {
+    if (templateCategoryFilter.value !== 'ALL' && tpl.category !== templateCategoryFilter.value) {
+      return false;
+    }
+    if (q) {
+      const hay = `${tpl.abbrev} ${tpl.description} ${tpl.template}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+});
+
+const templateAbbrevConflict = computed(() => {
+  if (!templateFormVisible.value) return null;
+  return liveTemplates.findConflict(templateForm.abbrev, editingTemplateId.value ?? undefined) ?? null;
+});
+
+function openCreateTemplateForm() {
+  editingTemplateId.value = null;
+  templateForm.abbrev = '';
+  templateForm.description = '';
+  templateForm.category = 'custom';
+  templateForm.template = 'SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}';
+  templateForm.enabled = true;
+  templateImportVisible.value = false;
+  templateFormVisible.value = true;
+}
+
+function openEditTemplateForm(tpl: SqlLiveTemplate) {
+  editingTemplateId.value = tpl.id;
+  templateForm.abbrev = tpl.abbrev;
+  templateForm.description = tpl.description;
+  templateForm.category = tpl.category;
+  templateForm.template = tpl.template;
+  templateForm.enabled = tpl.enabled;
+  templateImportVisible.value = false;
+  templateFormVisible.value = true;
+}
+
+function insertTemplateToken(token: string) {
+  const el = templateTextareaRef.value;
+  if (!el) {
+    templateForm.template += token;
+    return;
+  }
+  const start = el.selectionStart ?? templateForm.template.length;
+  const end = el.selectionEnd ?? start;
+  templateForm.template =
+    templateForm.template.slice(0, start) + token + templateForm.template.slice(end);
+  void nextTick(() => {
+    el.focus();
+    el.selectionStart = start + token.length;
+    el.selectionEnd = start + token.length;
+  });
+}
+
+function saveTemplateForm() {
+  const abbr = templateForm.abbrev.trim();
+  if (!abbr) {
+    emit('notify', '请填写缩写触发词（如 sel / myq）');
+    return;
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(abbr)) {
+    emit('notify', '缩写触发词需以字母或下划线开头，仅含字母/数字/下划线');
+    return;
+  }
+  if (!templateForm.template.trim()) {
+    emit('notify', '请填写 SQL 展开模板内容');
+    return;
+  }
+  liveTemplates.upsertTemplate({
+    id: editingTemplateId.value ?? undefined,
+    abbrev: abbr,
+    description: templateForm.description.trim() || abbr,
+    category: templateForm.category,
+    template: templateForm.template,
+    enabled: templateForm.enabled,
+  });
+  templateFormVisible.value = false;
+  editingTemplateId.value = null;
+  emit('notify', `已保存 SQL 缩写模板: ${abbr} + Tab`);
+}
+
+async function copyLiveTemplatesJson() {
+  try {
+    await navigator.clipboard.writeText(liveTemplates.exportJson());
+    emit('notify', `已复制 ${liveTemplates.templates.length} 条 SQL 缩写模板 JSON`);
+  } catch {
+    emit('notify', '复制 JSON 失败，请检查剪贴板权限');
+  }
+}
+
+function runImportLiveTemplates() {
+  const raw = templateImportText.value.trim();
+  if (!raw) return;
+  try {
+    const res = liveTemplates.importJson(raw);
+    templateImportVisible.value = false;
+    templateImportText.value = '';
+    emit('notify', `已导入 SQL 缩写模板：新增 ${res.added} 条，更新 ${res.updated} 条`);
+  } catch (err) {
+    emit('notify', `模板 JSON 解析失败: ${String(err)}`);
+  }
+}
 </script>
 
 <template>
@@ -1718,6 +1946,94 @@ onBeforeUnmount(() => {
     </div>
   </div>
 
+  <!-- 4b. Parameterized SQL Execution Modal -->
+  <div
+    v-else-if="activeModal === 'params' && paramContext"
+    class="modal-backdrop"
+    @click.self="emit('close')"
+  >
+    <div class="modal-card" style="width: min(700px, 94vw)">
+      <div class="modal-header">
+        <span style="display: inline-flex; align-items: center; gap: 7px">
+          <IdeIcon name="bolt" :size="15" color="var(--accent)" />
+          <span>SQL 参数绑定执行</span>
+        </span>
+        <button class="icon-btn compact" @click="emit('close')">×</button>
+      </div>
+
+      <p style="margin: 0 0 10px; font-size: 12px; color: var(--text-secondary)">
+        目标：<strong>{{ paramContext.profileName }}</strong>
+        <template v-if="paramContext.dbName"> / {{ paramContext.dbName }}</template>
+        · 检测到 <strong>{{ paramContext.params.length }}</strong> 个 SQL 参数（<code>:name</code> / <code>${name}</code> / <code>#{name}</code>），上次输入值已自动记忆：
+      </p>
+
+      <div
+        style="
+          max-height: 220px;
+          overflow-y: auto;
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          margin-bottom: 10px;
+        "
+      >
+        <table class="dg-grid" style="width: 100%">
+          <thead>
+            <tr>
+              <th style="width: 150px">参数名</th>
+              <th>绑定值（空值按 NULL）</th>
+              <th style="width: 135px">类型转换</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="prm in paramContext.params" :key="prm.name">
+              <td>
+                <span class="pill pill-dev" style="font-family: var(--font-mono)">
+                  {{ prm.rawSamples[0] || `:${prm.name}` }}
+                </span>
+              </td>
+              <td>
+                <input
+                  v-model="paramInputs[prm.name].value"
+                  class="field"
+                  style="font-family: var(--font-mono); padding: 4px 7px"
+                  placeholder="输入参数值（如 1001 或 VIP）"
+                  @keydown.enter.prevent="submitBoundParams"
+                />
+              </td>
+              <td>
+                <select v-model="paramInputs[prm.name].mode" class="field" style="padding: 4px 6px">
+                  <option value="auto">自动识别</option>
+                  <option value="string">强制字符串</option>
+                  <option value="raw">原样 SQL 片段</option>
+                </select>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="form-field" style="margin-bottom: 12px">
+        <label>参数替换后 SQL 实时预览：</label>
+        <pre class="code-viewer" style="max-height: 150px; margin: 0">{{ substitutedParamPreview }}</pre>
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap">
+        <button
+          class="btn btn-sm"
+          @click="emit('run-params-raw', paramContext.statements)"
+        >
+          忽略参数 · 原样执行
+        </button>
+        <div style="display: flex; gap: 8px">
+          <button class="btn" @click="emit('close')">{{ t('btnCancel') }}</button>
+          <button class="btn btn-primary" :disabled="busy" @click="submitBoundParams">
+            <IdeIcon name="run" :size="12" /> 绑定参数并执行
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 5. Search Everywhere (Ctrl+K) Modal -->
   <div
     v-else-if="activeModal === 'search'"
@@ -1797,7 +2113,7 @@ onBeforeUnmount(() => {
     </div>
   </div>
 
-  <!-- 7. Interactive Keymap Configuration Modal -->
+  <!-- 7. Interactive Keymap & SQL Live Templates Modal -->
   <div
     v-else-if="activeModal === 'shortcuts'"
     class="modal-backdrop"
@@ -1806,12 +2122,30 @@ onBeforeUnmount(() => {
       emit('close');
     "
   >
-    <div class="modal-card" style="width: min(760px, 94vw)">
+    <div class="modal-card" style="width: min(820px, 95vw)">
       <div class="modal-header">
-        <span style="display: inline-flex; align-items: center; gap: 7px">
-          <IdeIcon name="keyboard" :size="16" />
-          <span>快捷键配置 (Keymap) · 点击快捷键即可自定义录制</span>
-        </span>
+        <div style="display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap">
+          <span style="display: inline-flex; align-items: center; gap: 7px">
+            <IdeIcon name="keyboard" :size="16" />
+            <span>{{ shortcutsSubTab === 'keymap' ? '快捷键配置 (Keymap)' : 'SQL 缩写模板 (Tab 展开)' }}</span>
+          </span>
+          <div style="display: inline-flex; gap: 4px">
+            <button
+              class="btn btn-sm"
+              :class="{ 'btn-primary': shortcutsSubTab === 'keymap' }"
+              @click="shortcutsSubTab = 'keymap'"
+            >
+              键盘快捷键 (Keymap)
+            </button>
+            <button
+              class="btn btn-sm"
+              :class="{ 'btn-primary': shortcutsSubTab === 'templates' }"
+              @click="shortcutsSubTab = 'templates'"
+            >
+              SQL 缩写模板 (sel + Tab) · {{ enabledLiveTemplateCount }}
+            </button>
+          </div>
+        </div>
         <button
           class="icon-btn compact"
           @click="
@@ -1823,6 +2157,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
+      <template v-if="shortcutsSubTab === 'keymap'">
       <!-- Preset & Search Controls -->
       <div
         style="
@@ -2035,6 +2370,322 @@ onBeforeUnmount(() => {
           {{ t('btnClose') }}
         </button>
       </div>
+      </template>
+
+      <!-- Subtab 2: SQL Live Templates Manager -->
+      <template v-else>
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 8px;
+          "
+        >
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+            <input
+              v-model="templateSearch"
+              class="field"
+              style="width: 220px; padding: 4px 8px"
+              placeholder="搜索缩写词、说明或 SQL..."
+            />
+            <button class="btn btn-sm btn-primary" @click="openCreateTemplateForm">
+              + 新建缩写模板
+            </button>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+            <button class="btn btn-sm" @click="copyLiveTemplatesJson">
+              导出 JSON
+            </button>
+            <button
+              class="btn btn-sm"
+              @click="
+                templateImportVisible = !templateImportVisible;
+                templateFormVisible = false;
+              "
+            >
+              导入 JSON
+            </button>
+            <button
+              class="btn btn-sm"
+              @click="
+                liveTemplates.resetToDefaults();
+                emit('notify', '已恢复全部内置 SQL 缩写模板');
+              "
+            >
+              恢复默认
+            </button>
+          </div>
+        </div>
+
+        <div style="display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 10px">
+          <button
+            class="icon-btn compact"
+            :class="{ active: templateCategoryFilter === 'ALL' }"
+            @click="templateCategoryFilter = 'ALL'"
+          >
+            全部 ({{ liveTemplates.templates.length }})
+          </button>
+          <button
+            v-for="(meta, catKey) in LIVE_TEMPLATE_CATEGORY_LABELS"
+            :key="catKey"
+            class="icon-btn compact"
+            :class="{ active: templateCategoryFilter === catKey }"
+            @click="templateCategoryFilter = catKey"
+          >
+            {{ meta.zh }}
+          </button>
+        </div>
+
+        <!-- Inline Add / Edit Live Template Form -->
+        <div
+          v-if="templateFormVisible"
+          style="
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            border: 1px solid var(--accent);
+            border-radius: 6px;
+            background: var(--bg-chrome);
+          "
+        >
+          <div
+            style="
+              display: grid;
+              grid-template-columns: 150px 1fr 130px;
+              gap: 8px;
+              margin-bottom: 8px;
+            "
+          >
+            <div>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 3px">
+                缩写词 (Tab 触发)
+              </div>
+              <input
+                v-model="templateForm.abbrev"
+                class="field"
+                style="font-family: var(--font-mono)"
+                placeholder="如: sel / myq"
+              />
+            </div>
+            <div>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 3px">
+                模板说明
+              </div>
+              <input
+                v-model="templateForm.description"
+                class="field"
+                placeholder="如: 按状态分组统计最近订单"
+              />
+            </div>
+            <div>
+              <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 3px">
+                分类
+              </div>
+              <select v-model="templateForm.category" class="field">
+                <option v-for="(meta, cKey) in LIVE_TEMPLATE_CATEGORY_LABELS" :key="cKey" :value="cKey">
+                  {{ meta.zh }}
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div
+            v-if="templateAbbrevConflict"
+            style="
+              padding: 4px 8px;
+              margin-bottom: 6px;
+              border-radius: 4px;
+              background: var(--test-bg);
+              color: var(--test);
+              font-size: 11px;
+            "
+          >
+            注意：缩写 <code>{{ templateForm.abbrev }}</code> 已被另一条模板「{{ templateAbbrevConflict.description }}」使用，保存将优先命中列表靠前的模板。
+          </div>
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 6px;
+              flex-wrap: wrap;
+              margin-bottom: 5px;
+            "
+          >
+            <span style="font-size: 11px; color: var(--text-secondary)">
+              SQL 展开模板（支持 <code>${1:table}</code> / <code>${2:column}</code> / <code>$END$</code>，选择 table 后自动弹出当前库表）：
+            </span>
+            <div style="display: flex; gap: 4px; flex-wrap: wrap">
+              <button class="icon-btn compact" @click="insertTemplateToken('${1:table}')">+ 表占位 ${1:table}</button>
+              <button class="icon-btn compact" @click="insertTemplateToken('${2:column}')">+ 列占位 ${2:column}</button>
+              <button class="icon-btn compact" @click="insertTemplateToken('${3:value}')">+ 值占位 ${3:value}</button>
+              <button class="icon-btn compact" @click="insertTemplateToken('${0}')">+ 结束光标 ${0}</button>
+            </div>
+          </div>
+
+          <textarea
+            ref="templateTextareaRef"
+            v-model="templateForm.template"
+            class="field"
+            rows="4"
+            style="font-family: var(--font-mono); font-size: 12px; margin-bottom: 6px"
+            placeholder="SELECT * FROM ${1:table} WHERE ${2:column} = ${3:value} LIMIT 100;${0}"
+          />
+
+          <div
+            style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+              flex-wrap: wrap;
+            "
+          >
+            <span style="font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono)">
+              展开预览：{{ formatTemplatePreview(templateForm.template) }}
+            </span>
+            <div style="display: flex; gap: 6px">
+              <button
+                class="btn btn-sm"
+                @click="
+                  templateFormVisible = false;
+                  editingTemplateId = null;
+                "
+              >
+                {{ t('btnCancel') }}
+              </button>
+              <button class="btn btn-sm btn-primary" @click="saveTemplateForm">
+                保存模板
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inline Import JSON Box -->
+        <div
+          v-if="templateImportVisible"
+          style="
+            padding: 10px 12px;
+            margin-bottom: 10px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-chrome);
+          "
+        >
+          <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 5px">
+            粘贴 Pacer SQL 缩写模板 JSON 数组（同缩写自动更新，新缩写自动新增）：
+          </div>
+          <textarea
+            v-model="templateImportText"
+            class="field"
+            rows="4"
+            style="font-family: var(--font-mono); font-size: 11.5px; margin-bottom: 6px"
+            placeholder='[{"abbrev":"sel20","description":"查询前20行","category":"query","template":"SELECT * FROM ${1:table} LIMIT 20;${0}"}]'
+          />
+          <div style="display: flex; justify-content: flex-end; gap: 6px">
+            <button class="btn btn-sm" @click="templateImportVisible = false">{{ t('btnCancel') }}</button>
+            <button class="btn btn-sm btn-primary" @click="runImportLiveTemplates">确认导入</button>
+          </div>
+        </div>
+
+        <!-- Template List Table -->
+        <div
+          style="
+            max-height: 360px;
+            overflow-y: auto;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+          "
+        >
+          <table class="dg-grid" style="width: 100%">
+            <thead>
+              <tr>
+                <th style="width: 44px">启用</th>
+                <th style="width: 110px">缩写 + Tab</th>
+                <th style="width: 190px">说明</th>
+                <th>SQL 展开模板</th>
+                <th style="width: 100px">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="tpl in filteredLiveTemplates" :key="tpl.id">
+                <td style="text-align: center">
+                  <input
+                    type="checkbox"
+                    :checked="tpl.enabled"
+                    @change="liveTemplates.toggleTemplate(tpl.id)"
+                  />
+                </td>
+                <td>
+                  <span
+                    class="pill pill-dev"
+                    style="font-family: var(--font-mono); font-weight: 700"
+                  >
+                    {{ tpl.abbrev }}
+                  </span>
+                  <span style="font-size: 10px; color: var(--text-muted); margin-left: 3px">Tab</span>
+                </td>
+                <td style="font-size: 12px">{{ tpl.description }}</td>
+                <td
+                  style="
+                    font-family: var(--font-mono);
+                    font-size: 11.5px;
+                    color: var(--text-secondary);
+                    max-width: 280px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  "
+                  :title="tpl.template"
+                >
+                  {{ formatTemplatePreview(tpl.template) }}
+                </td>
+                <td>
+                  <div style="display: flex; gap: 4px">
+                    <button class="btn btn-sm" @click="openEditTemplateForm(tpl)">编辑</button>
+                    <button
+                      class="btn btn-sm"
+                      @click="
+                        liveTemplates.deleteTemplate(tpl.id);
+                        emit('notify', `已删除模板: ${tpl.abbrev}`);
+                      "
+                    >
+                      删除
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-top: 12px;
+            font-size: 11px;
+            color: var(--text-secondary);
+          "
+        >
+          <span>
+            用法：在 SQL 编辑器输入 <code>sel</code> 后按 <kbd>Tab</kbd>，立即展开并弹出当前数据库可选表；选择表后再按 <kbd>Tab</kbd> 自动跳转到字段位置并提示该表字段。
+          </span>
+          <button
+            class="btn btn-primary"
+            @click="
+              cancelRecordingKey();
+              emit('close');
+            "
+          >
+            {{ t('btnClose') }}
+          </button>
+        </div>
+      </template>
     </div>
   </div>
 

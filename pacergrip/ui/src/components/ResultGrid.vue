@@ -12,8 +12,11 @@ import type {
 import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
 import {
+  decodeUnixTimestampHint,
   downloadTextFile,
+  formatSqlLiteral,
   generateGridMutationSql,
+  quoteIdentifier,
   toCsv,
   toInsertSql,
   toMarkdownTable,
@@ -95,6 +98,7 @@ const emit = defineEmits<{
   (e: 'clear-console-logs', projectId: string): void;
   (e: 'run-console-sql', sql: string): void;
   (e: 'send-sql-to-editor', sql: string): void;
+  (e: 'rerun-result', tab: ResultTabItem): void;
   (e: 'notify', message: string): void;
 }>();
 
@@ -238,10 +242,16 @@ function isRowDeleted(origIdx: number): boolean {
 
 function originalCellTooltip(origIdx: number, col: string): string {
   const res = currentResult.value;
-  if (!res || !isCellModified(origIdx, col)) return '双击编辑单元格';
+  if (!res) return '';
   const origVal = res.rows[origIdx]?.[col];
+  const tsHint = decodeUnixTimestampHint(origVal);
+  if (!isCellModified(origIdx, col)) {
+    return tsHint ? `Unix 时间解析: ${tsHint}\n双击编辑单元格` : '双击编辑单元格';
+  }
   const newVal = activeDraft.value?.modified[origIdx]?.[col];
-  return `已修改：${formatCell(origVal)} → ${formatCell(newVal)}（双击继续编辑）`;
+  return `已修改：${formatCell(origVal)} → ${formatCell(newVal)}（双击继续编辑）${
+    tsHint ? `\n原值时间: ${tsHint}` : ''
+  }`;
 }
 
 function coerceInputValue(rawText: string, originalSample: unknown): unknown {
@@ -467,6 +477,19 @@ function syncValueViewerDraft() {
   valueViewerDraft.value = str;
 }
 
+const inspectedTimestampHint = computed(() => decodeUnixTimestampHint(inspectedRawValue.value));
+
+function formatValueViewerJson(pretty: boolean) {
+  const text = valueViewerDraft.value.trim();
+  if (!text) return;
+  try {
+    const parsed = JSON.parse(text);
+    valueViewerDraft.value = pretty ? JSON.stringify(parsed, null, 2) : JSON.stringify(parsed);
+  } catch {
+    emit('notify', '当前值不是合法的 JSON 格式，无法格式化/压缩');
+  }
+}
+
 function applyValueViewerEdit(setNull = false) {
   const res = currentResult.value;
   if (!res || !selectedColName.value || res.readOnly) return;
@@ -650,6 +673,65 @@ function doCopySelectedRowJson() {
     return;
   }
   void copyText(JSON.stringify(row, null, 2));
+}
+
+const cellCtxMenu = reactive<{
+  visible: boolean;
+  x: number;
+  y: number;
+  origIdx: number;
+  col: string;
+}>({
+  visible: false,
+  x: 0,
+  y: 0,
+  origIdx: 0,
+  col: '',
+});
+
+function openCellContextMenu(ev: MouseEvent, origIdx: number, col: string) {
+  selectCell(false, origIdx, col);
+  const maxX = Math.max(8, window.innerWidth - 230);
+  const maxY = Math.max(8, window.innerHeight - 310);
+  cellCtxMenu.x = Math.min(ev.clientX, maxX);
+  cellCtxMenu.y = Math.min(ev.clientY, maxY);
+  cellCtxMenu.origIdx = origIdx;
+  cellCtxMenu.col = col;
+  cellCtxMenu.visible = true;
+}
+
+function getContextCellRaw(): unknown {
+  return currentResult.value?.rows[cellCtxMenu.origIdx]?.[cellCtxMenu.col];
+}
+
+function copyContextCellWhere() {
+  const res = currentResult.value;
+  if (!res || !cellCtxMenu.col) return;
+  const val = getContextCellRaw();
+  const qCol = quoteIdentifier(cellCtxMenu.col, res.engineKey);
+  const clause =
+    val === null || val === undefined
+      ? `${qCol} IS NULL`
+      : `${qCol} = ${formatSqlLiteral(val)}`;
+  void copyText(clause);
+}
+
+function copyContextRowInsertSql() {
+  const res = currentResult.value;
+  if (!res) return;
+  const row = res.rows[cellCtxMenu.origIdx];
+  if (!row) return;
+  const tableName = effectiveTargetTable.value || 'target_table';
+  void copyText(toInsertSql(tableName, res.columns, [row], res.engineKey));
+}
+
+function setContextCellNull() {
+  const res = currentResult.value;
+  if (!res || res.readOnly || !cellCtxMenu.col) return;
+  const draft = ensureDraft(res.id);
+  if (!draft.modified[cellCtxMenu.origIdx]) draft.modified[cellCtxMenu.origIdx] = {};
+  draft.modified[cellCtxMenu.origIdx][cellCtxMenu.col] = null;
+  emit('notify', `已将 [${cellCtxMenu.col}] 标记为 NULL，点击「预览并执行 SQL」提交`);
 }
 
 async function copyText(text: string) {
@@ -850,7 +932,7 @@ const astWarnings = computed(
 </script>
 
 <template>
-  <div class="services-panel" style="height: 100%">
+  <div class="services-panel" style="height: 100%" @click="cellCtxMenu.visible = false">
     <div class="services-tabs">
       <div class="services-tab-list">
         <button
@@ -1008,6 +1090,13 @@ const astWarnings = computed(
 
           <div class="grid-toolbar">
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+              <button
+                class="icon-btn compact"
+                title="重新执行当前 SQL 刷新结果集"
+                @click="emit('rerun-result', currentResult)"
+              >
+                <IdeIcon name="refresh" :size="12" /> 刷新
+              </button>
               <input
                 v-model="filterText"
                 class="field"
@@ -1141,6 +1230,7 @@ const astWarnings = computed(
                       :title="originalCellTooltip(item.origIdx, col)"
                       @click="selectCell(false, item.origIdx, col)"
                       @dblclick="startEditCell(false, item.origIdx, col)"
+                      @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, col)"
                     >
                       <div
                         v-if="
@@ -1225,8 +1315,24 @@ const astWarnings = computed(
             <!-- Interactive Value Viewer & Long-Text Editor -->
             <div v-if="showValueViewer" class="value-viewer">
               <div class="tw-header">
-                <span>{{ selectedColName || t('valueViewer') }}</span>
-                <div style="display: flex; gap: 4px">
+                <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                  {{ selectedColName || t('valueViewer') }}
+                </span>
+                <div style="display: flex; gap: 3px; flex-shrink: 0">
+                  <button
+                    class="icon-btn compact"
+                    title="格式化为多行缩进 JSON"
+                    @click="formatValueViewerJson(true)"
+                  >
+                    格式化
+                  </button>
+                  <button
+                    class="icon-btn compact"
+                    title="压缩为单行 JSON"
+                    @click="formatValueViewerJson(false)"
+                  >
+                    压缩
+                  </button>
                   <button
                     class="icon-btn compact"
                     @click="copyText(valueViewerDraft || '<NULL>')"
@@ -1234,6 +1340,19 @@ const astWarnings = computed(
                     {{ t('btnCopy') }}
                   </button>
                 </div>
+              </div>
+              <div
+                v-if="inspectedTimestampHint"
+                style="
+                  padding: 4px 8px;
+                  font-size: 11px;
+                  background: var(--accent-soft);
+                  color: var(--accent);
+                  border-bottom: 1px solid var(--border-subtle);
+                  font-family: var(--font-mono);
+                "
+              >
+                时间解析：{{ inspectedTimestampHint }}
               </div>
               <textarea
                 v-model="valueViewerDraft"
@@ -1630,6 +1749,112 @@ const astWarnings = computed(
             </div>
           </template>
         </div>
+      </template>
+    </div>
+
+    <!-- Result Grid Cell Right-Click Context Menu -->
+    <div
+      v-if="cellCtxMenu.visible && currentResult"
+      class="context-menu"
+      :style="{ left: `${cellCtxMenu.x}px`, top: `${cellCtxMenu.y}px`, zIndex: 96 }"
+      @click.stop
+    >
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          copyText(formatCell(getContextCellRaw()));
+        "
+      >
+        <span>复制单元格值</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          filterText = formatCell(getContextCellRaw());
+        "
+      >
+        <span>按此值快速筛选</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          copyContextCellWhere();
+        "
+      >
+        <span>复制为 SQL WHERE 条件</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          doCopyColumnInSql();
+        "
+      >
+        <span>复制整列为 IN (...)</span>
+      </button>
+      <div class="dropdown-sep" />
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          doCopySelectedRowJson();
+        "
+      >
+        <span>复制当前行为 JSON</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          copyContextRowInsertSql();
+        "
+      >
+        <span>复制当前行为 INSERT SQL</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          showValueViewer = true;
+        "
+      >
+        <span>在值检视器打开 / 格式化 JSON</span>
+      </button>
+      <template v-if="!currentResult.readOnly">
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            startEditCell(false, cellCtxMenu.origIdx, cellCtxMenu.col);
+          "
+        >
+          <span>编辑此单元格</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            setContextCellNull();
+          "
+        >
+          <span>将此单元格设为 NULL</span>
+        </button>
+        <button
+          class="dropdown-item"
+          style="color: var(--prod)"
+          @click="
+            cellCtxMenu.visible = false;
+            selectedIsInserted = false;
+            selectedRowOrigIdx = cellCtxMenu.origIdx;
+            toggleDeleteSelectedRow();
+          "
+        >
+          <span>标记 / 取消删除整行</span>
+        </button>
       </template>
     </div>
   </div>

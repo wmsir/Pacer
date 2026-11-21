@@ -59,13 +59,16 @@ import {
 } from './api/ipc';
 import {
   BUILTIN_SNIPPETS,
+  convertSelectionToSqlIn,
   countLines,
   estimateUtf8Bytes,
   extractMarkdownSqlBlocksLocal,
   extractSingleTableTarget,
+  extractSqlParameters,
   formatBytes,
   parseMarkdownSegments,
   quoteIdentifier,
+  transformSqlTextCase,
   type SqlSnippet,
 } from './utils/sqlTools';
 import {
@@ -75,6 +78,7 @@ import {
   matchesCombo,
   useKeymap,
 } from './utils/keymap';
+import { useLiveTemplates, type SqlLiveTemplate } from './utils/liveTemplates';
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
 import DatabaseTree from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
@@ -88,6 +92,7 @@ import Modals, {
   type ActiveModalKind,
   type DangerModalContext,
   type EncodingModalContext,
+  type ParamModalContext,
   type SearchEverywhereItem,
 } from './components/Modals.vue';
 
@@ -490,12 +495,14 @@ const activeEngineKey = computed(() => {
 
 const activeSchemaMap = computed<Record<string, string[]>>(() => {
   const tab = activeTab.value;
-  if (!tab?.profileId || !tab.dbName) return {};
-  const tKey = `${tab.profileId}:${tab.dbName}`;
+  const profileId = tab?.profileId || selectedProfileId.value;
+  const dbName = tab?.dbName || selectedDbName.value;
+  if (!profileId || !dbName) return {};
+  const tKey = `${profileId}:${dbName}`;
   const tables = tablesByKey[tKey] ?? [];
   const map: Record<string, string[]> = {};
   for (const tbl of tables) {
-    const cKey = `${tab.profileId}:${tab.dbName}:${tbl.name}`;
+    const cKey = `${profileId}:${dbName}:${tbl.name}`;
     const cols = columnsByKey[cKey] ?? [];
     map[tbl.name] = cols.map((c) => c.name);
   }
@@ -543,12 +550,63 @@ const statusIsError = ref(false);
 
 // Modals State
 const activeModal = ref<ActiveModalKind>('none');
+const shortcutsInitialTab = ref<'keymap' | 'templates'>('keymap');
+const liveTemplatesStore = useLiveTemplates();
+const quickLiveTemplates = computed(() => {
+  const priority = ['sel', 'selw', 'selc', 'selo', 'selg', 'ins', 'upd', 'del'];
+  const picked: SqlLiveTemplate[] = [];
+  for (const ab of priority) {
+    const found = liveTemplatesStore.findByAbbrev(ab);
+    if (found) picked.push(found);
+  }
+  return picked;
+});
+
+function openShortcutsModal(tab: 'keymap' | 'templates' = 'keymap') {
+  shortcutsInitialTab.value = tab;
+  activeModal.value = 'shortcuts';
+}
+
+function handleEnsureActiveSchemaLoaded() {
+  const prof = activeProfile.value;
+  const db = activeTab.value?.dbName || selectedDbName.value;
+  if (!prof || !db) return;
+  const key = `${prof.id}:${db}`;
+  if (!tablesByKey[key]) {
+    void loadTablesForDb(prof, db);
+  }
+}
+
+function handleEditorTablePicked(tableName: string) {
+  const prof = activeProfile.value;
+  const db = activeTab.value?.dbName || selectedDbName.value;
+  if (!prof || !db || !tableName) return;
+  const cKey = `${prof.id}:${db}:${tableName}`;
+  if (!columnsByKey[cKey]) {
+    void loadTableMetadata(prof, db, tableName);
+  }
+}
+
+function handleQuickExpandLiveTemplate(tpl: SqlLiveTemplate) {
+  if (!activeTab.value) {
+    createNewConsoleTab('');
+  }
+  window.setTimeout(() => {
+    editorRef.value?.expandTemplate(tpl);
+  }, 0);
+}
 const editingProject = ref<WorkspaceProject | null>(null);
 const editingProfile = ref<ConnectionProfile | null>(null);
 const gridSqlContext = ref<GridMutationPreviewPayload | null>(null);
 const exportedJson = ref('');
 const dangerContext = ref<DangerModalContext | null>(null);
 const pendingDangerAction = ref<(() => Promise<void>) | null>(null);
+const paramContext = ref<ParamModalContext | null>(null);
+const pendingParamExec = ref<{
+  label: string;
+  profile: ConnectionProfile;
+  dbName: string;
+} | null>(null);
 const passwordProfile = ref<ConnectionProfile | null>(null);
 const pendingAfterPassword = ref<(() => Promise<void>) | null>(null);
 const pendingCloseTabId = ref<string | null>(null);
@@ -1303,6 +1361,26 @@ async function handleExportDbeaverJson() {
 
 // ==================== Table Actions ====================
 
+async function ensureTableColumns(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+): Promise<ColumnMeta[]> {
+  const cKey = `${profile.id}:${dbName}:${tableName}`;
+  if (!columnsByKey[cKey]) {
+    await loadTableMetadata(profile, dbName, tableName);
+  }
+  return columnsByKey[cKey] ?? [];
+}
+
+function insertGeneratedSqlSnippet(profile: ConnectionProfile, dbName: string, snippet: string) {
+  if (!activeTab.value) {
+    createNewConsoleTab(snippet, profile.id, dbName);
+  } else {
+    editorRef.value?.insertText(snippet);
+  }
+}
+
 async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tableName: string) {
   syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
@@ -1315,6 +1393,14 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
   const quotedTable = quoteIdentifier(tableName, engineKey);
   const sql = `SELECT * FROM ${quotedTable} LIMIT 100;`;
   await executeStatementsBatch([sql], `${tableName} (前100行)`, profile, dbName, tableName);
+}
+
+async function handleCountTable(profile: ConnectionProfile, dbName: string, tableName: string) {
+  syncActiveProjectForProfile(profile);
+  const engineKey = engineKeyOf(profile);
+  const quotedTable = quoteIdentifier(tableName, engineKey);
+  const sql = `SELECT COUNT(*) AS total_rows FROM ${quotedTable};`;
+  await executeStatementsBatch([sql], `${tableName} (行数统计)`, profile, dbName, tableName);
 }
 
 async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableName: string) {
@@ -1332,20 +1418,95 @@ async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableNa
   }
 }
 
-function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: string) {
-  const cKey = `${profile.id}:${dbName}:${tableName}`;
-  const cols = columnsByKey[cKey] ?? [];
+async function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
   const engineKey = engineKeyOf(profile);
   const quotedTable = quoteIdentifier(tableName, engineKey);
   const colList =
     cols.length > 0 ? cols.map((c) => `  ${quoteIdentifier(c.name, engineKey)}`).join(',\n') : '  *';
   const snippet = `SELECT\n${colList}\nFROM ${quotedTable}\nLIMIT 100;\n`;
-  if (!activeTab.value) {
-    createNewConsoleTab(snippet, profile.id, dbName);
-  } else {
-    editorRef.value?.insertText(snippet);
-  }
+  insertGeneratedSqlSnippet(profile, dbName, snippet);
   setStatus(`已生成 ${tableName} 查询语句到编辑器`);
+}
+
+async function handleGenInsert(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  const engineKey = engineKeyOf(profile);
+  const quotedTable = quoteIdentifier(tableName, engineKey);
+  const targetCols = cols.length > 0 ? cols.map((c) => c.name) : ['col1', 'col2'];
+  const qCols = targetCols.map((c) => `  ${quoteIdentifier(c, engineKey)}`);
+  const qVals =
+    cols.length > 0
+      ? cols.map((c) => `  :${c.name} /* ${c.dataType} */`)
+      : ['  :val1', '  :val2'];
+  const snippet = `INSERT INTO ${quotedTable} (\n${qCols.join(',\n')}\n) VALUES (\n${qVals.join(',\n')}\n);\n`;
+  insertGeneratedSqlSnippet(profile, dbName, snippet);
+  setStatus(`已生成 ${tableName} INSERT 模板（支持参数绑定执行）`);
+}
+
+async function handleGenUpdate(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  const engineKey = engineKeyOf(profile);
+  const quotedTable = quoteIdentifier(tableName, engineKey);
+  const pks = cols.filter((c) => c.isPrimaryKey);
+  const nonPks = cols.filter((c) => !c.isPrimaryKey);
+  const setTargets = nonPks.length > 0 ? nonPks.slice(0, 6) : cols.slice(0, 4);
+  const setLines =
+    setTargets.length > 0
+      ? setTargets.map((c) => `  ${quoteIdentifier(c.name, engineKey)} = :${c.name}`)
+      : ['  col1 = :val1'];
+  const whereClause =
+    pks.length > 0
+      ? pks.map((pk) => `${quoteIdentifier(pk.name, engineKey)} = :${pk.name}`).join(' AND ')
+      : cols[0]
+        ? `${quoteIdentifier(cols[0].name, engineKey)} = :${cols[0].name}`
+        : 'id = :id';
+  const snippet = `UPDATE ${quotedTable}\nSET\n${setLines.join(',\n')}\nWHERE ${whereClause};\n`;
+  insertGeneratedSqlSnippet(profile, dbName, snippet);
+  setStatus(`已生成 ${tableName} UPDATE 安全模板`);
+}
+
+async function handleCopyTableColumns(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  if (cols.length === 0) {
+    setStatus(`未读取到表 ${tableName} 的字段列表`, true);
+    return;
+  }
+  const text = cols.map((c) => c.name).join(', ');
+  await copyText(text);
+  setStatus(`已复制 ${tableName} 全部 ${cols.length} 个列名到剪贴板`);
+}
+
+async function handleRefreshProfile(profile: ConnectionProfile) {
+  await loadDatabasesForProfile(profile, false);
+  setStatus(`已刷新数据源「${profile.name}」的数据库列表`);
+}
+
+async function handleRefreshDatabase(profile: ConnectionProfile, dbName: string) {
+  await loadTablesForDb(profile, dbName);
+  setStatus(`已刷新 ${profile.name} / ${dbName} 表列表`);
+}
+
+async function handleRefreshTable(profile: ConnectionProfile, dbName: string, tableName: string) {
+  await loadTableMetadata(profile, dbName, tableName);
+  setStatus(`已刷新表 ${tableName} 字段与索引元数据`);
+}
+
+function handleDuplicateProfile(profile: ConnectionProfile) {
+  const cloned: ConnectionProfile = {
+    ...profile,
+    id: '',
+    name: `${profile.name} (副本)`,
+  };
+  openConnectionModal(cloned);
+}
+
+function handleNewConsoleForDb(profile: ConnectionProfile, dbName: string) {
+  syncActiveProjectForProfile(profile);
+  selectedProfileId.value = profile.id;
+  selectedDbName.value = dbName;
+  createNewConsoleTab('', profile.id, dbName);
+  setStatus(`已新建查询控制台 -> ${profile.name} / ${dbName}`);
 }
 
 // ==================== SQL Execution Engine (with High-Risk Guard) ====================
@@ -1443,8 +1604,25 @@ async function runStatementsWithGuard(
   label: string,
   profile: ConnectionProfile,
   dbName: string,
+  skipParams = false,
 ) {
   const joined = statements.join(';\n');
+
+  if (!skipParams) {
+    const params = extractSqlParameters(joined);
+    if (params.length > 0) {
+      paramContext.value = {
+        profileName: profile.name,
+        dbName,
+        statements,
+        params,
+      };
+      pendingParamExec.value = { label, profile, dbName };
+      activeModal.value = 'params';
+      return;
+    }
+  }
+
   let analysis: ScriptAnalysis | null = null;
   try {
     analysis = await analyzeSql(joined, profile.dbType);
@@ -1504,6 +1682,22 @@ async function runStatementsWithGuard(
   }
 
   await executeStatementsBatch(statements, label, profile, dbName);
+}
+
+async function handleConfirmParams(boundStatements: string[]) {
+  activeModal.value = 'none';
+  const meta = pendingParamExec.value;
+  pendingParamExec.value = null;
+  if (!meta) return;
+  await runStatementsWithGuard(boundStatements, meta.label, meta.profile, meta.dbName, true);
+}
+
+async function handleRunParamsRaw(rawStatements: string[]) {
+  activeModal.value = 'none';
+  const meta = pendingParamExec.value;
+  pendingParamExec.value = null;
+  if (!meta) return;
+  await runStatementsWithGuard(rawStatements, meta.label, meta.profile, meta.dbName, true);
 }
 
 async function confirmDangerExecution() {
@@ -1810,6 +2004,21 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
   }
 }
 
+async function handleRerunResultTab(tab: ResultTabItem) {
+  const prof = connections.value.find((c) => c.id === tab.profileId);
+  if (!prof) {
+    setStatus('该结果集关联的数据源已不存在', true);
+    return;
+  }
+  await executeStatementsBatch(
+    [tab.sql],
+    tab.title,
+    prof,
+    tab.dbName,
+    tab.sourceTable ?? undefined,
+  );
+}
+
 async function handleRunConsoleQuickSql(sql: string) {
   const prof = activeProfile.value;
   if (!prof) {
@@ -1916,7 +2125,33 @@ async function formatActiveSql() {
     updateTabContent(formatted);
     setStatus('已完成 SQL 格式化');
   } catch (err) {
-    setStatus(`格式化失败: ${String(err)}`, true);
+    setStatus(`SQL 格式化失败: ${String(err)}`, true);
+  }
+}
+
+function handleConvertSelectionToIn() {
+  const tab = activeTab.value;
+  if (!tab || tab.readOnly) return;
+  const sel = tab.cursor.selectedText;
+  if (!sel.trim()) {
+    setStatus('请先选中多行/逗号分隔的列表文本（如 1001, 1002）', true);
+    return;
+  }
+  const inClause = convertSelectionToSqlIn(sel);
+  editorRef.value?.replaceSelection(inClause);
+  setStatus(`已将选区转换为 SQL IN 条件: ${inClause.slice(0, 60)}${inClause.length > 60 ? '...' : ''}`);
+}
+
+function handleTransformSqlCase(mode: 'upper' | 'lower') {
+  const tab = activeTab.value;
+  if (!tab || tab.readOnly) return;
+  const sel = tab.cursor.selectedText;
+  if (sel.trim()) {
+    editorRef.value?.replaceSelection(transformSqlTextCase(sel, mode));
+    setStatus(`已将选中 SQL 转为${mode === 'upper' ? '大写' : '小写'}`);
+  } else {
+    updateTabContent(transformSqlTextCase(tab.content, mode));
+    setStatus(`已将全文 SQL 转为${mode === 'upper' ? '大写' : '小写'}`);
   }
 }
 
@@ -2558,6 +2793,7 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-lang', category: 'action', label: `切换界面语言 (${locale.value === 'zh-CN' ? 'English' : '简体中文'})`, detail: '中英文界面即时切换', badge: 'i18n' },
     { id: 'act-encoding', category: 'action', label: t('encodingModalTitle'), detail: '重新解码 GBK/UTF-8 BOM 或转换保存编码', badge: '编码' },
     { id: 'act-shortcuts', category: 'action', label: '快捷键配置 (Keymap)', detail: '自定义修改所有菜单与编辑器快捷键，支持 IDEA / VS Code 预设', badge: keymap.getDisplay('openKeymap') },
+    { id: 'act-live-templates', category: 'action', label: 'SQL 缩写模板配置 (sel + Tab)', detail: '自定义输入缩写按 Tab 展开 SQL，并自动弹出当前库表与字段列表', badge: 'Tab' },
   ];
 
   for (const prof of connections.value) {
@@ -2635,7 +2871,8 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     else if (item.id === 'act-theme-eyecare') applyTheme('eyecare');
     else if (item.id === 'act-lang') toggleLocale();
     else if (item.id === 'act-encoding') activeModal.value = 'encoding';
-    else if (item.id === 'act-shortcuts') activeModal.value = 'shortcuts';
+    else if (item.id === 'act-shortcuts') openShortcutsModal('keymap');
+    else if (item.id === 'act-live-templates') openShortcutsModal('templates');
   } else if (item.category === 'connection' && item.payload) {
     const prof = item.payload as ConnectionProfile;
     await handleProfileSelectChange(prof.id);
@@ -2713,7 +2950,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
   if (matchesCombo(e, keymap.getCombo('openKeymap'))) {
     e.preventDefault();
-    activeModal.value = 'shortcuts';
+    openShortcutsModal('keymap');
     return;
   }
 
@@ -3177,6 +3414,15 @@ onBeforeUnmount(() => {
                 <span>{{ t('formatSql') }}</span>
                 <span class="shortcut-hint">{{ keymap.getDisplay('formatSql') }}</span>
               </button>
+              <button class="dropdown-item" @click="openMenu = null; handleConvertSelectionToIn()">
+                <span>选中文本转为 SQL IN (...)</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleTransformSqlCase('upper')">
+                <span>SQL 语句/选区转大写</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleTransformSqlCase('lower')">
+                <span>SQL 语句/选区转小写</span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; saveCurrentAsSnippet()">
                 <span>保存当前 SQL 为代码片段</span>
               </button>
@@ -3233,12 +3479,19 @@ onBeforeUnmount(() => {
                 <span>随处搜索 / 查找操作</span>
                 <span class="shortcut-hint">{{ keymap.getDisplay('searchEverywhere') }}</span>
               </button>
-              <button class="dropdown-item" @click="openMenu = null; activeModal = 'shortcuts'">
+              <button class="dropdown-item" @click="openMenu = null; openShortcutsModal('keymap')">
                 <span style="display: inline-flex; align-items: center; gap: 6px">
                   <IdeIcon name="keyboard" :size="13" />
                   <span>快捷键配置 (Keymap)...</span>
                 </span>
                 <span class="shortcut-hint">{{ keymap.getDisplay('openKeymap') }}</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; openShortcutsModal('templates')">
+                <span style="display: inline-flex; align-items: center; gap: 6px">
+                  <IdeIcon name="snippets" :size="13" />
+                  <span>SQL 缩写模板 (sel + Tab)...</span>
+                </span>
+                <span class="shortcut-hint">Tab</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; toggleFilesDockSide()">
                 <span>文件与脚本面板停靠：移至{{ filesDockSide === 'right' ? '左侧' : '右侧' }}</span>
@@ -3299,9 +3552,13 @@ onBeforeUnmount(() => {
               {{ t('menuHelp') }}
             </button>
             <div v-if="openMenu === 'help'" class="dropdown-menu">
-              <button class="dropdown-item" @click="openMenu = null; activeModal = 'shortcuts'">
+              <button class="dropdown-item" @click="openMenu = null; openShortcutsModal('keymap')">
                 <span>快捷键配置 (Keymap)...</span>
                 <span class="shortcut-hint">{{ keymap.getDisplay('openKeymap') }}</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; openShortcutsModal('templates')">
+                <span>SQL 缩写模板 (sel + Tab)...</span>
+                <span class="shortcut-hint">Tab</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; openDemoMarkdownHandbook()">
                 <span>{{ t('openDemoMd') }}</span>
@@ -3505,8 +3762,8 @@ onBeforeUnmount(() => {
         </button>
         <button
           class="icon-btn"
-          :title="`快捷键配置 Keymap (${keymap.getDisplay('openKeymap')})`"
-          @click="activeModal = 'shortcuts'"
+          :title="`快捷键与 SQL 缩写模板 (${keymap.getDisplay('openKeymap')})`"
+          @click="openShortcutsModal('keymap')"
         >
           <IdeIcon name="keyboard" :size="14" />
         </button>
@@ -3637,8 +3894,17 @@ onBeforeUnmount(() => {
           @toggle-table="toggleTableNode"
           @select-table="selectTableNode"
           @query-top100="handleQueryTop100"
+          @count-table="handleCountTable"
           @view-ddl="handleViewDdl"
           @gen-select="handleGenSelect"
+          @gen-insert="handleGenInsert"
+          @gen-update="handleGenUpdate"
+          @copy-table-columns="handleCopyTableColumns"
+          @refresh-table="handleRefreshTable"
+          @refresh-profile="handleRefreshProfile"
+          @duplicate-profile="handleDuplicateProfile"
+          @refresh-database="handleRefreshDatabase"
+          @new-console-for-db="handleNewConsoleForDb"
           @test-profile="handleTestProfile"
           @edit-profile="openConnectionModal"
           @delete-profile="handleDeleteProfile"
@@ -3684,7 +3950,14 @@ onBeforeUnmount(() => {
               <IdeIcon name="snippets" :size="14" />
               <span class="tw-title-text">{{ t('toolSnippets') }}</span>
             </span>
-            <div class="tw-actions">
+            <div class="tw-actions" style="gap: 4px">
+              <button
+                class="icon-btn compact"
+                title="管理与自定义 SQL 缩写模板 (输入 sel 按 Tab 自动展开)"
+                @click="openShortcutsModal('templates')"
+              >
+                缩写模板
+              </button>
               <button
                 class="icon-btn compact"
                 title="保存当前选中/编辑器 SQL 为片段"
@@ -3698,6 +3971,30 @@ onBeforeUnmount(() => {
             <input v-model="snippetFilter" class="field" placeholder="筛选 SQL 模板..." />
           </div>
           <div class="tw-body">
+            <div v-if="quickLiveTemplates.length > 0" class="live-tpl-strip">
+              <div class="live-tpl-strip-title">
+                <span>SQL 缩写快插 (编辑器输入缩写按 Tab)</span>
+                <button
+                  class="icon-btn compact"
+                  title="自定义或新增 SQL 缩写模板"
+                  @click="openShortcutsModal('templates')"
+                >
+                  自定义
+                </button>
+              </div>
+              <div class="live-tpl-chips">
+                <button
+                  v-for="tpl in quickLiveTemplates"
+                  :key="tpl.id"
+                  class="live-tpl-chip"
+                  :title="`${tpl.description}\n点击立即插入，或输入 ${tpl.abbrev} 后按 Tab 展开`"
+                  @click="handleQuickExpandLiveTemplate(tpl)"
+                >
+                  <span class="live-tpl-abbr">{{ tpl.abbrev }}</span>
+                  <span class="live-tpl-tab">Tab</span>
+                </button>
+              </div>
+            </div>
             <div
               v-for="snip in allSnippets"
               :key="snip.id"
@@ -3826,15 +4123,23 @@ onBeforeUnmount(() => {
         <!-- Contextual Editor Sub-Toolbar -->
         <div v-if="activeTab" class="editor-subbar">
           <div class="subbar-group">
-            <button
-              v-if="activeTab.cursor.selectedText.trim()"
-              class="btn btn-sm btn-primary"
-              :disabled="busy || !activeProfile"
-              @click="runActiveEditor(false)"
-            >
-              <IdeIcon name="run" :size="11" />
-              {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · {{ keymap.getDisplay('runCurrent') }})
-            </button>
+            <template v-if="activeTab.cursor.selectedText.trim()">
+              <button
+                class="btn btn-sm btn-primary"
+                :disabled="busy || !activeProfile"
+                @click="runActiveEditor(false)"
+              >
+                <IdeIcon name="run" :size="11" />
+                {{ t('runSelected') }} ({{ activeTab.cursor.selectedChars }} 字符 · {{ keymap.getDisplay('runCurrent') }})
+              </button>
+              <button
+                class="icon-btn compact"
+                title="将选中的多行/逗号 ID 列表一键转为 SQL IN (...) 条件"
+                @click="handleConvertSelectionToIn"
+              >
+                转 IN (...)
+              </button>
+            </template>
 
             <template v-if="isMarkdownTab">
               <div style="display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden">
@@ -3943,6 +4248,12 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- PROD Environment Guard Banner -->
+        <div v-if="activeTab && activeProfile?.env === 'PROD'" class="prod-env-ribbon">
+          <span>⚠ 当前连接属于 <strong>PROD 生产环境</strong>（{{ activeProfile.name }}），DML/DDL 变更将强制弹出二次确认</span>
+          <span style="opacity: 0.85">{{ activeTab.dbName ? `目标库: ${activeTab.dbName}` : '' }}</span>
+        </div>
+
         <!-- Split Editor + Safe Markdown Preview -->
         <div v-if="activeTab" class="editor-split-area">
           <div
@@ -3968,6 +4279,8 @@ onBeforeUnmount(() => {
               @run-md-block="runMarkdownBlock"
               @explain-md-block="explainMarkdownBlock"
               @open-md-block-console="openMarkdownBlockInConsole"
+              @ensure-schema-loaded="handleEnsureActiveSchemaLoaded"
+              @table-picked="handleEditorTablePicked"
             />
           </div>
 
@@ -4117,6 +4430,7 @@ onBeforeUnmount(() => {
             @clear-console-logs="clearConsoleLogs"
             @run-console-sql="handleRunConsoleQuickSql"
             @send-sql-to-editor="createNewConsoleTab($event)"
+            @rerun-result="handleRerunResultTab"
             @notify="setStatus($event)"
           />
         </section>
@@ -4615,13 +4929,16 @@ onBeforeUnmount(() => {
       :grid-sql-context="gridSqlContext"
       :encoding-context="encodingModalContext"
       :danger-context="dangerContext"
+      :param-context="paramContext"
       :password-profile="passwordProfile"
       :unsaved-context="unsavedContext"
       :search-items="searchItems"
       :exported-json="exportedJson"
+      :shortcuts-initial-tab="shortcutsInitialTab"
       :busy="busy"
       @close="
         pendingCloseTabId = null;
+        pendingParamExec = null;
         unsavedContext = null;
         activeModal = 'none';
       "
@@ -4635,6 +4952,8 @@ onBeforeUnmount(() => {
       @reload-encoding="handleReloadEncoding"
       @convert-encoding="handleConvertEncoding"
       @confirm-danger="confirmDangerExecution"
+      @confirm-params="handleConfirmParams"
+      @run-params-raw="handleRunParamsRaw"
       @submit-password="handleSubmitPassword"
       @select-search-item="handleSelectSearchItem"
       @unsaved-save-close="confirmUnsavedSaveClose"

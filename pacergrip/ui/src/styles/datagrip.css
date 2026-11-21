@@ -2047,3 +2047,110 @@ table.dg-grid tr.row-inserted td {
   opacity: 1;
   color: var(--test);
 }
+
+/* ==================== Live Templates & CodeMirror Snippet Placeholders ==================== */
+.cm-host .cm-snippetField {
+  background: rgba(53, 116, 240, 0.18);
+  border: 1px solid rgba(53, 116, 240, 0.48);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.cm-host .cm-snippetFieldPosition {
+  border-left: 2px solid var(--accent);
+}
+
+.cm-tooltip-autocomplete {
+  border: 1px solid var(--border) !important;
+  background: var(--bg-chrome) !important;
+  color: var(--text-primary) !important;
+  border-radius: 6px !important;
+  box-shadow: var(--shadow-popup) !important;
+  overflow: hidden;
+}
+
+.cm-tooltip-autocomplete ul li {
+  padding: 3px 8px !important;
+  font-size: 12px;
+}
+
+.cm-tooltip-autocomplete ul li[aria-selected] {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+
+.cm-completionIcon-template::after {
+  content: '⚡';
+  color: var(--test);
+  font-size: 11px;
+}
+
+.live-tpl-strip {
+  padding: 7px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-chrome);
+}
+
+.live-tpl-strip-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.live-tpl-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.live-tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg-editor);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.live-tpl-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.live-tpl-abbr {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.live-tpl-tab {
+  font-size: 9.5px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.prod-env-ribbon {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--prod-bg);
+  color: var(--prod);
+  border-bottom: 1px solid rgba(247, 84, 100, 0.35);
+  flex-shrink: 0;
+}

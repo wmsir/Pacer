@@ -224,12 +224,11 @@ jobs:
             - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
 
             ### 核心特性 / Highlights
-            - **保留字表名/列名自动转义 & 云库系统库识别**：修复 `groups`、`order`、`user` 等 MySQL 8 / TiDB / PostgreSQL 保留字表名生成 `SELECT * FROM ... LIMIT 100` 及 `INSERT` 语句时的 `1064` 语法错误，并自动过滤 `__recycle_bin__` 等云数据库系统库避免误选中。
-            - **顶部执行上下文与文件级数据库记忆**：项目切换器紧贴数据源与数据库选择器左侧，优化窄窗下顶部工具栏横向单行稳定性；打开右侧 `.sql` / `.md` 文件时自动记住并恢复上次选中的项目、数据源与数据库，随时可改选更新。
-            - **便携工作空间（`pacer-workspace/`）& 临时控制台落盘**：统一收纳多项目配置、加密凭据、执行历史与临时 `console_*.sql` 草稿（`consoles/`）。
-            - **独立原生 Pacer 扩展体系**：支持 `plugins/*/pacer-plugin.json` 热加载 SQL 模板与安全审计规则，并预留 `GovernanceExtension` / `AiSqlExtension` Rust Trait 插槽。
-            - **全工作区项目/数据源统一 & 可配置快捷键 (Keymap)**：控制台输出（默认展示全部项目）、执行历史与顶部运行器完全对齐左侧项目树；支持交互式录制修改快捷键、冲突检测及 IDEA / VS Code 预设切换。
-            - **商业级结果集在线修改 & 三套护眼主题**：支持双击结果集生成 `UPDATE/INSERT/DELETE`、Pin 固定对比结果页、一键复制列 `IN (...)` 条件、实时列统计栏，以及「深色 Darcula」「浅色 Light」「绿豆沙护眼色（`#CCE8CF`）」。
+            - **SQL 缩写模板（Live Templates · `sel + Tab`）& 智能库表弹出**：输入 `sel`、`selw`、`selc`、`selo`、`selg`、`ins`、`upd`、`del` 等 27 个常用缩写按 `Tab` 秒展开并自动弹出当前数据库可选表与字段；支持完全自定义、启停与 JSON 导入导出。
+            - **SQL 参数绑定执行（`:param` / `${param}` / `#{param}`）**：执行含参数占位符的脚本时自动弹出参数赋值窗（自动记住历史值、自动类型识别与实时 SQL 预览），跳过 `:=` 与 `::type` 类型强转。
+            - **结果集商业级效率增强**：支持结果集右键快捷菜单（复制值 / 按此值筛选 / 生成 WHERE 条件 / 复制整行 JSON 与 `INSERT` SQL / 设为 NULL）、一键刷新结果、值检视器 JSON 格式化/压缩，以及 10/13 位 Unix 时间戳自动人类时间解析。
+            - **数据库树与编辑器实用工具升级**：支持项目树右键/悬停刷新库表、复制数据源、一键 `COUNT(*)` 统计、生成带参数/转义的 `INSERT`/`UPDATE` 模板、多行文本一键「转 IN (...)」、SQL 大小写转换与 PROD 生产环境警示条。
+            - **全平台原生支持（Windows x64 & macOS ARM64/Intel）**：原生 Apple `icon.icns`、macOS `.app` 安全工作空间、`⌘/⌥/⇧` 快捷键与自定义 Cocoa 菜单（防止 `⌘+W` 误关主窗）；三套护眼主题与多项目统一控制台日志。
 
             **运行环境 / System Requirements**：macOS 11 Big Sur 及以上 (Apple Silicon / Intel) · Windows 10 / 11 (x64)。
           files: release-assets/*
