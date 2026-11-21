@@ -224,6 +224,7 @@ export interface ScriptAnalysis {
 export interface QueryHistoryEntry {
   id: string;
   timestamp: string;
+  projectId?: string | null;
   profileId: string;
   profileName: string;
   database?: string | null;
@@ -590,6 +591,11 @@ export async function listWorkspaceFiles(dirPath: string): Promise<WorkspaceFile
 export async function createDemoMarkdownFile(): Promise<OpenedFileDto> {
   assertTauri();
   return invoke('create_demo_markdown_file_cmd');
+}
+
+export async function revealInExplorer(path: string): Promise<void> {
+  assertTauri();
+  return invoke('reveal_in_explorer_cmd', { path });
 }
 
 export async function listQueryHistory(): Promise<QueryHistoryEntry[]> {

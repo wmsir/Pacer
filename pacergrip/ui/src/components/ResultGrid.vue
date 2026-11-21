@@ -1,7 +1,15 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useI18n } from '../i18n';
-import type { EnvLevel, QueryHistoryEntry, QuerySummary, ScriptAnalysis } from '../api/ipc';
+import type {
+  ConnectionProfile,
+  EnvLevel,
+  QueryHistoryEntry,
+  QuerySummary,
+  ScriptAnalysis,
+  WorkspaceProject,
+} from '../api/ipc';
+import IdeIcon from './IdeIcon.vue';
 import {
   downloadTextFile,
   generateGridMutationSql,
@@ -63,7 +71,10 @@ const props = defineProps<{
   resultTabs: ResultTabItem[];
   activeResultTabId: string;
   activeServiceTab: 'result' | 'output' | 'ddl' | 'history' | 'problems';
+  projects: WorkspaceProject[];
+  activeProjectId: string;
   activeProjectName: string;
+  connections: ConnectionProfile[];
   consoleLogs: ConsoleLogEntry[];
   ddlText: string;
   ddlTitle: string;
@@ -617,6 +628,78 @@ watch(
   },
 );
 
+// ==================== History Filtering (Project + DataSource + Status + Search) ====================
+const historyProjectFilter = ref<string>('ALL');
+const historyProfileFilter = ref<string>('ALL');
+const historyStatusFilter = ref<'ALL' | 'OK' | 'ERR'>('ALL');
+const historySearchText = ref<string>('');
+
+function resolveHistoryProjectId(entry: QueryHistoryEntry): string {
+  if (entry.projectId) return entry.projectId;
+  const conn = props.connections.find((c) => c.id === entry.profileId);
+  return conn?.projectId || props.projects[0]?.id || 'default-project';
+}
+
+function projectNameById(pid: string): string {
+  return props.projects.find((p) => p.id === pid)?.name ?? '默认项目';
+}
+
+const historyProfileOptions = computed(() => {
+  const effectiveProj =
+    historyProjectFilter.value === 'CURRENT'
+      ? props.activeProjectId
+      : historyProjectFilter.value;
+
+  const map = new Map<string, string>();
+  for (const conn of props.connections) {
+    const pid = conn.projectId || props.projects[0]?.id || 'default-project';
+    if (effectiveProj === 'ALL' || pid === effectiveProj) {
+      map.set(conn.id, conn.name);
+    }
+  }
+  for (const h of props.historyEntries) {
+    const pid = resolveHistoryProjectId(h);
+    if (effectiveProj === 'ALL' || pid === effectiveProj) {
+      if (!map.has(h.profileId)) {
+        map.set(h.profileId, h.profileName);
+      }
+    }
+  }
+  return [...map.entries()].map(([id, name]) => ({ id, name }));
+});
+
+watch(historyProjectFilter, () => {
+  if (
+    historyProfileFilter.value !== 'ALL' &&
+    !historyProfileOptions.value.some((p) => p.id === historyProfileFilter.value)
+  ) {
+    historyProfileFilter.value = 'ALL';
+  }
+});
+
+const filteredHistoryEntries = computed(() => {
+  const effectiveProj =
+    historyProjectFilter.value === 'CURRENT'
+      ? props.activeProjectId
+      : historyProjectFilter.value;
+  const q = historySearchText.value.trim().toLowerCase();
+
+  return props.historyEntries.filter((item) => {
+    const pid = resolveHistoryProjectId(item);
+    if (effectiveProj !== 'ALL' && pid !== effectiveProj) return false;
+    if (historyProfileFilter.value !== 'ALL' && item.profileId !== historyProfileFilter.value) {
+      return false;
+    }
+    if (historyStatusFilter.value === 'OK' && !item.success) return false;
+    if (historyStatusFilter.value === 'ERR' && item.success) return false;
+    if (q) {
+      const hay = `${item.profileName} ${item.database ?? ''} ${item.sql} ${item.errorMessage ?? ''}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+});
+
 const astWarnings = computed(
   () => props.astAnalysis?.statements.flatMap((s) => s.warnings) ?? [],
 );
@@ -746,10 +829,12 @@ const astWarnings = computed(
             </div>
 
             <div style="display: flex; align-items: center; gap: 5px">
-              <button class="btn btn-sm" @click="copyMutationsSql">📋 {{ t('copyChangesSql') }}</button>
+              <button class="btn btn-sm" @click="copyMutationsSql">
+                <IdeIcon name="copy" :size="12" /> {{ t('copyChangesSql') }}
+              </button>
               <button class="btn btn-sm" @click="revertCurrentDraft">↩ {{ t('revertChanges') }}</button>
               <button class="btn btn-sm btn-primary" @click="triggerPreviewMutations">
-                ⚡ {{ t('submitChanges') }}
+                <IdeIcon name="bolt" :size="12" /> {{ t('submitChanges') }}
               </button>
             </div>
           </div>
@@ -768,7 +853,7 @@ const astWarnings = computed(
                 title="在结果集底部新增一行（生成 INSERT SQL）"
                 @click="addNewRow"
               >
-                ＋ {{ t('addRow') }}
+                <IdeIcon name="plus" :size="12" /> {{ t('addRow') }}
               </button>
               <button
                 class="icon-btn compact"
@@ -776,7 +861,7 @@ const astWarnings = computed(
                 title="标记/取消标记选中行删除（生成 DELETE SQL）"
                 @click="toggleDeleteSelectedRow"
               >
-                🗑 {{ t('deleteRow') }}
+                <IdeIcon name="trash" :size="12" /> {{ t('deleteRow') }}
               </button>
               <button
                 class="icon-btn compact"
@@ -796,7 +881,7 @@ const astWarnings = computed(
                 {{ currentResult.profileName }} · {{ currentResult.summary.durationMs }} ms ·
                 {{ t('rowsCount', { count: displayedRows.length }) }}
                 <template v-if="!currentResult.readOnly"> · 双击单元格可直接修改</template>
-                <template v-else> · 🔒 只读</template>
+                <template v-else> · <IdeIcon name="lock" :size="11" /> 只读</template>
               </span>
             </div>
 
@@ -848,7 +933,7 @@ const astWarnings = computed(
                       :key="col"
                       @click="toggleSort(col)"
                     >
-                      <span v-if="currentResult.primaryKeys.includes(col)" style="margin-right: 3px" title="主键列">🔑</span>
+                      <IdeIcon v-if="currentResult.primaryKeys.includes(col)" name="key" :size="12" style="margin-right: 3px" />
                       <span>{{ col }}</span>
                       <span v-if="sortCol === col" style="margin-left: 4px; color: var(--accent)">
                         {{ sortDir === 'asc' ? '▲' : '▼' }}
@@ -1040,13 +1125,13 @@ const astWarnings = computed(
 
           <div style="display: flex; align-items: center; gap: 5px; flex-wrap: wrap">
             <button class="btn btn-sm" :disabled="filteredConsoleLogs.length === 0" @click="copyAllFilteredLogs">
-              📋 {{ t('copyAllLogs') }}
+              <IdeIcon name="copy" :size="12" /> {{ t('copyAllLogs') }}
             </button>
             <button class="btn btn-sm btn-danger" :disabled="errorLogCount === 0" @click="copyOnlyErrorLogs">
-              📋 {{ t('copyErrorLogs') }}
+              <IdeIcon name="copy" :size="12" /> {{ t('copyErrorLogs') }}
             </button>
             <button class="btn btn-sm" :disabled="consoleLogs.length === 0" @click="emit('clear-console-logs')">
-              🗑 {{ t('clearLogs') }}
+              <IdeIcon name="trash" :size="12" /> {{ t('clearLogs') }}
             </button>
           </div>
         </div>
@@ -1078,7 +1163,7 @@ const astWarnings = computed(
                   title="复制该条日志"
                   @click="copyText(formatLogEntryAsText(entry))"
                 >
-                  📋 复制
+                  <IdeIcon name="copy" :size="11" /> 复制
                 </button>
                 <button
                   v-if="entry.level === 'sql' && entry.detail"
@@ -1111,7 +1196,7 @@ const astWarnings = computed(
             :disabled="!quickConsoleSql.trim()"
             @click="submitQuickConsoleSql"
           >
-            ▶ 执行
+            <IdeIcon name="run" :size="11" /> 执行
           </button>
         </div>
       </template>
@@ -1131,30 +1216,88 @@ const astWarnings = computed(
         </div>
       </template>
 
-      <!-- ==================== 4. History Tab ==================== -->
+      <!-- ==================== 4. History Tab (Filterable by Project & Data Source) ==================== -->
       <template v-else-if="activeServiceTab === 'history'">
-        <div v-if="historyEntries.length === 0" class="empty-state">
-          {{ t('emptyHistoryHint') }}
+        <div class="console-toolbar">
+          <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+            <select
+              v-model="historyProjectFilter"
+              class="field"
+              style="width: auto; max-width: 175px; padding: 2px 6px; font-size: 11.5px"
+              title="按项目筛选执行历史"
+            >
+              <option value="ALL">全部项目</option>
+              <option value="CURRENT">当前项目 ({{ activeProjectName }})</option>
+              <option v-for="proj in projects" :key="proj.id" :value="proj.id">
+                项目: {{ proj.name }}
+              </option>
+            </select>
+
+            <select
+              v-model="historyProfileFilter"
+              class="field"
+              style="width: auto; max-width: 185px; padding: 2px 6px; font-size: 11.5px"
+              title="按数据源筛选执行历史"
+            >
+              <option value="ALL">全部数据源</option>
+              <option v-for="opt in historyProfileOptions" :key="opt.id" :value="opt.id">
+                {{ opt.name }}
+              </option>
+            </select>
+
+            <select
+              v-model="historyStatusFilter"
+              class="field"
+              style="width: auto; padding: 2px 6px; font-size: 11.5px"
+              title="按执行状态筛选"
+            >
+              <option value="ALL">全部状态</option>
+              <option value="OK">仅成功</option>
+              <option value="ERR">仅失败</option>
+            </select>
+
+            <input
+              v-model="historySearchText"
+              class="field"
+              style="width: 180px; padding: 2px 7px; font-size: 11.5px"
+              placeholder="搜索历史 SQL / 报错..."
+            />
+          </div>
+
+          <span style="font-size: 11px; color: var(--text-secondary)">
+            显示 {{ filteredHistoryEntries.length }} / {{ historyEntries.length }} 条记录
+          </span>
+        </div>
+
+        <div v-if="filteredHistoryEntries.length === 0" class="empty-state">
+          {{ historyEntries.length === 0 ? t('emptyHistoryHint') : '当前筛选条件下无匹配的执行历史记录。' }}
         </div>
         <div v-else class="grid-scroll">
           <table class="dg-grid">
             <thead>
               <tr>
-                <th style="width: 145px">时间</th>
-                <th style="width: 150px">数据源 / 库</th>
-                <th style="width: 75px">状态</th>
-                <th style="width: 85px">耗时</th>
+                <th style="width: 140px">时间</th>
+                <th style="width: 115px">项目</th>
+                <th style="width: 155px">数据源 / 库</th>
+                <th style="width: 68px">状态</th>
+                <th style="width: 78px">耗时</th>
                 <th>SQL 语句（点击载入编辑器）</th>
+                <th style="width: 44px">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="item in historyEntries"
+                v-for="item in filteredHistoryEntries"
                 :key="item.id"
                 style="cursor: pointer"
                 @click="emit('load-history-sql', item)"
               >
                 <td>{{ item.timestamp }}</td>
+                <td>
+                  <span class="pill pill-neutral">
+                    {{ projectNameById(resolveHistoryProjectId(item)) }}
+                  </span>
+                </td>
                 <td>{{ item.profileName }}{{ item.database ? ` / ${item.database}` : '' }}</td>
                 <td>
                   <span class="pill" :class="item.success ? 'pill-dev' : 'pill-prod'">
@@ -1162,7 +1305,24 @@ const astWarnings = computed(
                   </span>
                 </td>
                 <td class="num-cell">{{ item.durationMs }} ms</td>
-                <td :title="item.sql">{{ item.sql }}</td>
+                <td :title="item.errorMessage ? `${item.sql}\n\nERROR: ${item.errorMessage}` : item.sql">
+                  <span>{{ item.sql }}</span>
+                  <span
+                    v-if="!item.success && item.errorMessage"
+                    style="color: var(--prod); margin-left: 8px; font-weight: 500"
+                  >
+                    ✕ {{ item.errorMessage }}
+                  </span>
+                </td>
+                <td @click.stop>
+                  <button
+                    class="icon-btn compact"
+                    title="复制 SQL"
+                    @click="copyText(item.sql)"
+                  >
+                    <IdeIcon name="copy" :size="12" />
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>

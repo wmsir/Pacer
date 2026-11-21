@@ -500,6 +500,8 @@ pub struct ExplainResult {
 pub struct QueryHistoryEntry {
     pub id: String,
     pub timestamp: String,
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub profile_id: String,
     pub profile_name: String,
     pub database: Option<String>,

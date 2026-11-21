@@ -19,10 +19,13 @@ import {
   lineNumbers,
 } from '@codemirror/view';
 import {
+  copyLineDown,
   defaultKeymap,
+  deleteLine,
   history,
   historyKeymap,
   indentWithTab,
+  toggleLineComment,
 } from '@codemirror/commands';
 import {
   LanguageDescription,
@@ -33,7 +36,7 @@ import {
   indentOnInput,
   syntaxHighlighting,
 } from '@codemirror/language';
-import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
+import { highlightSelectionMatches, openSearchPanel, searchKeymap } from '@codemirror/search';
 import {
   autocompletion,
   closeBrackets,
@@ -347,6 +350,23 @@ onMounted(() => {
         emit('format-shortcut');
         return true;
       },
+    },
+    // IntelliJ IDEA / DataGrip editor shortcuts
+    {
+      key: 'Mod-/',
+      run: toggleLineComment,
+    },
+    {
+      key: 'Mod-d',
+      run: copyLineDown,
+    },
+    {
+      key: 'Mod-y',
+      run: deleteLine,
+    },
+    {
+      key: 'Mod-r',
+      run: openSearchPanel,
     },
   ]);
 

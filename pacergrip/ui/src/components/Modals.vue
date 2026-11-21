@@ -17,6 +17,7 @@ import {
   type WorkspaceProject,
 } from '../api/ipc';
 import type { GridMutationPreviewPayload } from './ResultGrid.vue';
+import IdeIcon from './IdeIcon.vue';
 import { formatBytes } from '../utils/sqlTools';
 
 export type ActiveModalKind =
@@ -843,24 +844,38 @@ function onSearchKeydown(e: KeyboardEvent) {
 const shortcutRows = computed(() =>
   locale.value === 'zh-CN'
     ? [
-        { key: 'Ctrl + Enter', desc: '执行选中 SQL；无选区时执行光标所在 SQL 语句或 Markdown SQL 块' },
+        { key: 'Ctrl + Enter', desc: '执行选中 SQL；无选区时执行光标所在 SQL 语句或 Markdown SQL 块 (IDEA)' },
         { key: 'Ctrl + Shift + Enter', desc: '顺序执行当前脚本的全部语句 / 当前 Markdown 的全部 SQL 块' },
-        { key: 'Ctrl + Alt + L', desc: '一键格式化当前 SQL 语句' },
+        { key: 'Ctrl + W / Ctrl + F4', desc: '关闭当前 SQL / 文件编辑标签页 (IDEA)' },
+        { key: 'Ctrl + Shift + T', desc: '恢复最近关闭的 SQL / 文件标签页' },
+        { key: '双击 Shift / Ctrl + Shift + A / Ctrl + K', desc: '随处搜索 / 查找操作 (Search Everywhere · IDEA)' },
+        { key: 'Ctrl + Alt + L', desc: '一键格式化当前 SQL 语句 (IDEA Reformat)' },
+        { key: 'Ctrl + /', desc: '注释 / 取消注释当前行或选区 (-- SQL 注释 · IDEA)' },
+        { key: 'Ctrl + D', desc: '向下复制当前行 (Duplicate Line · IDEA)' },
+        { key: 'Ctrl + Y', desc: '删除当前行 (Delete Line · IDEA)' },
+        { key: 'Ctrl + F / Ctrl + R', desc: '在编辑器内查找 / 查找并替换 (IDEA)' },
+        { key: 'Alt + ← / Alt + →', desc: '切换上一个 / 下一个 SQL 编辑标签页 (IDEA)' },
+        { key: 'Alt + 1 / Alt + 2 / Alt + 4', desc: '展开或收起 数据库面板 / 本地文件面板 / 底部控制台 (IDEA)' },
         { key: 'Ctrl + O', desc: '打开本地 .md / .sql 文件（自动检测编码与行尾符）' },
-        { key: 'Ctrl + S', desc: '按选定编码与换行符保存当前文件' },
-        { key: 'Ctrl + N', desc: '新建查询控制台标签页' },
-        { key: 'Ctrl + K', desc: '打开随处搜索（快速跳转命令 / 数据源 / 表 / Markdown SQL 块）' },
-        { key: 'Ctrl + F', desc: '在编辑器内查找与替换' },
+        { key: 'Ctrl + S / Ctrl + Shift + S', desc: '保存当前文件 / 另存为' },
+        { key: 'Ctrl + N / Ctrl + Shift + L', desc: '新建 SQL 查询控制台标签页' },
       ]
     : [
         { key: 'Ctrl + Enter', desc: 'Execute selected SQL, enclosing Markdown SQL fence, or statement at cursor' },
         { key: 'Ctrl + Shift + Enter', desc: 'Execute all statements or all SQL blocks in Markdown' },
-        { key: 'Ctrl + Alt + L', desc: 'Reformat SQL' },
-        { key: 'Ctrl + O', desc: 'Open local .md / .sql file (auto-detects encoding & EOL)' },
-        { key: 'Ctrl + S', desc: 'Save file with chosen encoding & line separator' },
+        { key: 'Ctrl + W / Ctrl + F4', desc: 'Close active SQL / file editor tab (IDEA)' },
+        { key: 'Ctrl + Shift + T', desc: 'Reopen last closed editor tab' },
+        { key: 'Double Shift / Ctrl + Shift + A / Ctrl + K', desc: 'Search Everywhere / Find Action (IDEA)' },
+        { key: 'Ctrl + Alt + L', desc: 'Reformat SQL (IDEA)' },
+        { key: 'Ctrl + /', desc: 'Toggle line comment (IDEA)' },
+        { key: 'Ctrl + D', desc: 'Duplicate line (IDEA)' },
+        { key: 'Ctrl + Y', desc: 'Delete line (IDEA)' },
+        { key: 'Ctrl + F / Ctrl + R', desc: 'Find / Find & Replace in editor (IDEA)' },
+        { key: 'Alt + Left / Alt + Right', desc: 'Switch previous / next editor tab (IDEA)' },
+        { key: 'Alt + 1 / Alt + 2 / Alt + 4', desc: 'Toggle Database / Files / Services tool windows (IDEA)' },
+        { key: 'Ctrl + O', desc: 'Open local .md / .sql file' },
+        { key: 'Ctrl + S / Ctrl + Shift + S', desc: 'Save / Save As' },
         { key: 'Ctrl + N', desc: 'New Query Console tab' },
-        { key: 'Ctrl + K', desc: 'Search Everywhere (actions, data sources, tables, MD SQL blocks)' },
-        { key: 'Ctrl + F', desc: 'Find & Replace in editor' },
       ],
 );
 </script>
@@ -1685,7 +1700,9 @@ const shortcutRows = computed(() =>
   >
     <div class="modal-card" style="width: min(440px, 90vw)">
       <div class="modal-header">
-        <span>🔑 {{ t('passwordPromptTitle') }}</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px">
+          <IdeIcon name="key" :size="15" /> {{ t('passwordPromptTitle') }}
+        </span>
         <button class="icon-btn compact" @click="emit('close')">×</button>
       </div>
 
@@ -1759,7 +1776,14 @@ const shortcutRows = computed(() =>
   >
     <div class="modal-card" style="width: min(520px, 92vw)">
       <div class="modal-header">
-        <span>📦 {{ editingProject ? t('projectModalEdit') : t('projectModalCreate') }}</span>
+        <span style="display: inline-flex; align-items: center; gap: 7px">
+          <IdeIcon
+            :name="editingProject ? 'project-open' : 'project-add'"
+            :size="16"
+            :color="projectForm.color"
+          />
+          {{ editingProject ? t('projectModalEdit') : t('projectModalCreate') }}
+        </span>
         <button class="icon-btn compact" @click="emit('close')">×</button>
       </div>
 
@@ -1856,7 +1880,9 @@ const shortcutRows = computed(() =>
   >
     <div class="modal-card" style="width: min(740px, 94vw)">
       <div class="modal-header">
-        <span>⚡ 预览并执行数据修改 SQL</span>
+        <span style="display: inline-flex; align-items: center; gap: 6px">
+          <IdeIcon name="bolt" :size="15" /> 预览并执行数据修改 SQL
+        </span>
         <button class="icon-btn compact" @click="emit('close')">×</button>
       </div>
 
@@ -1936,7 +1962,9 @@ const shortcutRows = computed(() =>
           border-top: 1px solid var(--border);
         "
       >
-        <button class="btn" @click="copyGridSqlText">📋 复制 SQL</button>
+        <button class="btn" @click="copyGridSqlText">
+          <IdeIcon name="copy" :size="13" /> 复制 SQL
+        </button>
         <div style="display: flex; gap: 8px">
           <button class="btn" @click="emit('close')">{{ t('btnCancel') }}</button>
           <button
@@ -1945,7 +1973,7 @@ const shortcutRows = computed(() =>
             :disabled="busy || !editableGridSql.trim()"
             @click="confirmExecuteGridSql"
           >
-            ▶ 确认执行并刷新结果集
+            <IdeIcon name="run" :size="12" /> 确认执行并刷新结果集
           </button>
         </div>
       </div>

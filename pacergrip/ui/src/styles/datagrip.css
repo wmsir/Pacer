@@ -1763,3 +1763,18 @@ table.dg-grid tr.row-inserted td {
 .demo-chip button:hover {
   color: var(--text-primary);
 }
+
+.ide-svg-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.project-tree-row {
+  height: 26px;
+  font-size: 12.2px;
+}
+
+.project-tree-row.project-active:not(.selected) {
+  background: rgba(53, 116, 240, 0.08);
+}

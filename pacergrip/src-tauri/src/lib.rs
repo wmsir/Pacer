@@ -72,6 +72,7 @@ pub fn run() {
             commands::save_text_file_cmd,
             commands::list_workspace_files_cmd,
             commands::create_demo_markdown_file_cmd,
+            commands::reveal_in_explorer_cmd,
             commands::list_query_history_cmd,
             commands::list_extensions_cmd,
         ])

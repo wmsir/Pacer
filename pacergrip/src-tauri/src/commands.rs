@@ -85,13 +85,14 @@ impl AppState {
                 d.has_saved_password = persisted.contains_key(&profile.id);
             }
         }
+        let history = load_history_from_disk(&storage_dir);
         Self {
             projects: RwLock::new(projects),
             connections: RwLock::new(connections),
             passwords: RwLock::new(persisted.clone()),
             persisted_passwords: RwLock::new(persisted),
             active_backends: AsyncRwLock::new(HashMap::new()),
-            history: RwLock::new(Vec::new()),
+            history: RwLock::new(history),
             extensions: ExtensionRegistry::new(),
             storage_dir,
         }
@@ -278,13 +279,30 @@ impl AppState {
     }
 
     fn push_history(&self, entry: QueryHistoryEntry) {
-        if let Ok(mut guard) = self.history.write() {
+        let snapshot = if let Ok(mut guard) = self.history.write() {
             guard.insert(0, entry);
             if guard.len() > MAX_HISTORY_ENTRIES {
                 guard.truncate(MAX_HISTORY_ENTRIES);
             }
+            Some(guard.clone())
+        } else {
+            None
+        };
+        if let Some(list) = snapshot {
+            let _ = std::fs::create_dir_all(&self.storage_dir);
+            if let Ok(json) = serde_json::to_string_pretty(&list) {
+                let _ = std::fs::write(self.storage_dir.join("history.json"), json);
+            }
         }
     }
+}
+
+fn load_history_from_disk(storage_dir: &Path) -> Vec<QueryHistoryEntry> {
+    let path = storage_dir.join("history.json");
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Vec<QueryHistoryEntry>>(&raw).unwrap_or_default()
 }
 
 fn default_workspace_project() -> WorkspaceProject {
@@ -1001,6 +1019,7 @@ pub async fn execute_sql_cmd(
             state.push_history(QueryHistoryEntry {
                 id: Uuid::new_v4().to_string(),
                 timestamp,
+                project_id: profile.project_id.clone(),
                 profile_id: profile.id.clone(),
                 profile_name: profile.name.clone(),
                 database: db_name.clone(),
@@ -1032,6 +1051,7 @@ pub async fn execute_sql_cmd(
             state.push_history(QueryHistoryEntry {
                 id: Uuid::new_v4().to_string(),
                 timestamp,
+                project_id: profile.project_id.clone(),
                 profile_id: profile.id.clone(),
                 profile_name: profile.name.clone(),
                 database: db_name.clone(),
@@ -1147,4 +1167,50 @@ pub fn list_workspace_files_cmd(dir_path: String) -> Result<Vec<WorkspaceFileEnt
 #[tauri::command]
 pub fn create_demo_markdown_file_cmd(state: State<'_, AppState>) -> Result<OpenedFileDto, String> {
     ensure_demo_markdown_file(&state.storage_dir).map_err(map_err)
+}
+
+#[tauri::command]
+pub fn reveal_in_explorer_cmd(path: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("路径不存在: {}", target.display()));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let win_path = target.to_string_lossy().replace('/', "\\");
+        let mut cmd = std::process::Command::new("explorer");
+        if target.is_file() {
+            cmd.arg(format!("/select,{win_path}"));
+        } else {
+            cmd.arg(&win_path);
+        }
+        cmd.spawn()
+            .map_err(|e| format!("无法打开资源管理器: {e}"))?;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = std::process::Command::new("open");
+        if target.is_file() {
+            cmd.arg("-R");
+        }
+        cmd.arg(&target);
+        cmd.spawn().map_err(|e| format!("无法打开 Finder: {e}"))?;
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let dir = if target.is_file() {
+            target.parent().unwrap_or(&target)
+        } else {
+            target.as_path()
+        };
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("无法打开文件管理器: {e}"))?;
+    }
+
+    Ok(())
 }
