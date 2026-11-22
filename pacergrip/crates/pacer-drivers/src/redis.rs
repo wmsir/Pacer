@@ -13,7 +13,8 @@ use tokio_native_tls::{TlsConnector, TlsStream};
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DbEngineType,
-    DirectConfig, ExplainResult, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    DirectConfig, ExplainResult, ObjectSearchHit, PingMetrics, QueryChunk, QueryReq, QuerySummary,
+    TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, split_redis_commands, tokenize_redis_command, SqlAccessKind};
 
@@ -833,6 +834,87 @@ impl DbBackend for RedisBackend {
             }
 
             Ok(cols)
+        })
+    }
+
+    async fn search_objects(&self, db: &str, query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = if trimmed.contains('*') || trimmed.contains('?') {
+            trimmed.to_string()
+        } else {
+            format!("*{trimmed}*")
+        };
+        let db_idx = parse_redis_db_index(Some(db)).unwrap_or(self.endpoint.default_db);
+        let db_label = format!("db{db_idx}");
+
+        redis_retry!(self, conn, {
+            conn.select_db(db_idx).await?;
+            let mut keys: Vec<String> = Vec::new();
+            let mut cursor = "0".to_string();
+            for _ in 0..SCAN_MAX_ROUNDS {
+                let reply = conn
+                    .send_command_checked(&[
+                        "SCAN".to_string(),
+                        cursor.clone(),
+                        "MATCH".to_string(),
+                        pattern.clone(),
+                        "COUNT".to_string(),
+                        "200".to_string(),
+                    ])
+                    .await?;
+                let RespValue::Array(parts) = reply else {
+                    break;
+                };
+                let Some(next_cursor) = parts.first().and_then(RespValue::as_text) else {
+                    break;
+                };
+                if let Some(RespValue::Array(batch_keys)) = parts.get(1) {
+                    for k in batch_keys {
+                        if let Some(text) = k.as_text() {
+                            if !keys.contains(&text) {
+                                keys.push(text);
+                            }
+                        }
+                        if keys.len() >= 150 {
+                            break;
+                        }
+                    }
+                }
+                cursor = next_cursor;
+                if cursor == "0" || keys.len() >= 150 {
+                    break;
+                }
+            }
+            keys.sort();
+
+            let mut hits = Vec::with_capacity(keys.len());
+            for chunk in keys.chunks(80) {
+                let mut cmds = Vec::with_capacity(chunk.len() * 2);
+                for key in chunk {
+                    cmds.push(vec!["TYPE".to_string(), key.clone()]);
+                    cmds.push(vec!["TTL".to_string(), key.clone()]);
+                }
+                let replies = conn.send_pipeline_raw(&cmds).await?;
+                for (idx, key) in chunk.iter().enumerate() {
+                    let key_type = replies
+                        .get(idx * 2)
+                        .and_then(RespValue::as_text)
+                        .unwrap_or_else(|| "string".to_string());
+                    let ttl_val = replies.get(idx * 2 + 1).and_then(RespValue::as_i64);
+                    hits.push(ObjectSearchHit {
+                        kind: "key".to_string(),
+                        database: db_label.clone(),
+                        table_name: key.clone(),
+                        column_name: None,
+                        data_type: Some(key_type),
+                        comment: Some(format_ttl_label(ttl_val)),
+                    });
+                }
+            }
+            Ok(hits)
         })
     }
 

@@ -662,3 +662,15 @@ pub struct DbeaverDiscoveryItem {
     pub connection_count: usize,
     pub has_credentials_file: bool,
 }
+
+/// Global database object/column/Redis-key search hit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObjectSearchHit {
+    pub kind: String,
+    pub database: String,
+    pub table_name: String,
+    pub column_name: Option<String>,
+    pub data_type: Option<String>,
+    pub comment: Option<String>,
+}

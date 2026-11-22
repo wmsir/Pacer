@@ -4,7 +4,16 @@ import vue from '@vitejs/plugin-vue';
 export default defineConfig({
   plugins: [vue()],
   clearScreen: false,
+  esbuild: {
+    drop: ['debugger'],
+    legalComments: 'none',
+  },
   build: {
+    target: 'es2020',
+    minify: 'esbuild',
+    cssMinify: true,
+    sourcemap: false,
+    reportCompressedSize: false,
     rollupOptions: {
       output: {
         manualChunks: {

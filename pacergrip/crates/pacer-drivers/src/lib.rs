@@ -566,9 +566,23 @@ mod tests {
                             }
                             "CONFIG" => resp_bulk_array(&["databases", "16"]),
                             "SCAN" => {
+                                let all_keys = ["user:1001", "rank:scores"];
+                                let match_idx = args.iter().position(|a| a.eq_ignore_ascii_case("MATCH"));
+                                let pat = match_idx.and_then(|i| args.get(i + 1)).map(String::as_str);
+                                let filtered: Vec<&str> = match pat {
+                                    Some(p) => {
+                                        let needle = p.trim_matches('*').to_ascii_lowercase();
+                                        all_keys
+                                            .iter()
+                                            .copied()
+                                            .filter(|k| k.to_ascii_lowercase().contains(&needle))
+                                            .collect()
+                                    }
+                                    None => all_keys.to_vec(),
+                                };
                                 let mut out = b"*2\r\n".to_vec();
                                 out.extend_from_slice(&resp_bulk("0"));
-                                out.extend_from_slice(&resp_bulk_array(&["user:1001", "rank:scores"]));
+                                out.extend_from_slice(&resp_bulk_array(&filtered));
                                 out
                             }
                             "TYPE" => match args.get(1).map(String::as_str) {
@@ -652,6 +666,12 @@ mod tests {
 
         let cols = backend.list_columns("db0", "user:1001").await.unwrap();
         assert!(cols.iter().any(|c| c.name == "name" && c.default_value.as_deref() == Some("Alice")));
+
+        let hits = backend.search_objects("db0", "user").await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].kind, "key");
+        assert_eq!(hits[0].table_name, "user:1001");
+        assert_eq!(hits[0].data_type.as_deref(), Some("hash"));
 
         let (tx_h, mut rx_h) = mpsc::channel(4);
         let sum_h = backend
@@ -743,5 +763,31 @@ mod tests {
             u64_to_json(18_446_744_073_709_551_615),
             serde_json::json!("18446744073709551615")
         );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_search_objects_finds_tables_and_columns() {
+        let tmp = std::env::temp_dir().join(format!("pacergrip_search_{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+
+        create_demo_sqlite_db(&tmp).await.unwrap();
+        let backend = connect_direct(&sqlite_config(&tmp, false), None)
+            .await
+            .unwrap();
+
+        let order_hits = backend.search_objects("main", "order").await.unwrap();
+        assert!(order_hits
+            .iter()
+            .any(|h| h.kind == "table" && h.table_name == "orders"));
+
+        let email_hits = backend.search_objects("main", "EMAIL").await.unwrap();
+        assert!(email_hits.iter().any(|h| {
+            h.kind == "column"
+                && h.table_name == "customers"
+                && h.column_name.as_deref() == Some("email")
+        }));
+
+        drop(backend);
+        let _ = std::fs::remove_file(&tmp);
     }
 }

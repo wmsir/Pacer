@@ -15,6 +15,7 @@ import {
   exportDbeaverDbp,
   exportDbeaverFolder,
   exportDbeaverJson,
+  exportSqlDump,
   extractStatementAtCursor,
   formatSql,
   getTableDdl,
@@ -37,7 +38,9 @@ import {
   pickExportFolderPath,
   pickSaveDbeaverDbpPath,
   pickSaveFilePath,
+  pickSaveSqlDumpPath,
   pickSaveXlsxPath,
+  pickSqlScriptFile,
   pickTextFileToOpen,
   revealInExplorer,
   saveConnection,
@@ -88,9 +91,11 @@ import {
   minifySqlText,
   parseMarkdownSegments,
   quoteIdentifier,
+  quoteRedisArg,
   splitRedisCommands,
   transformSqlTextCase,
   type ExplainPlanMode,
+  type RedisEditableType,
   type SqlSnippet,
 } from './utils/sqlTools';
 import {
@@ -102,7 +107,10 @@ import {
 } from './utils/keymap';
 import { useLiveTemplates, type SqlLiveTemplate } from './utils/liveTemplates';
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
-import DatabaseTree, { type ConnectionHealthInfo } from './components/DatabaseTree.vue';
+import DatabaseTree, {
+  type ConnectionHealthInfo,
+  type FavoriteTableEntry,
+} from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
 import IdeIcon from './components/IdeIcon.vue';
 import ResultGrid, {
@@ -122,6 +130,12 @@ import TableToolsModals, {
   type DbToolContext,
   type TableToolContext,
 } from './components/TableToolsModals.vue';
+import AdvancedToolsModals, {
+  type AdvancedModalKind,
+  type RedisEditorInitialData,
+} from './components/AdvancedToolsModals.vue';
+import ServerMonitorModal from './components/ServerMonitorModal.vue';
+import ErDiagramModal from './components/ErDiagramModal.vue';
 
 interface EditorTab {
   id: string;
@@ -669,6 +683,35 @@ const unsavedContext = ref<{ title: string; path: string | null } | null>(null);
 const activeToolModal = ref<ActiveToolModalKind>('none');
 const toolTableContext = ref<TableToolContext | null>(null);
 const toolDbContext = ref<DbToolContext | null>(null);
+
+// v0.9.6 Advanced Tools / Monitor / ER Diagram / Favorites State
+const FAVORITES_STORAGE_KEY = 'pacer.favorites.v1';
+
+function loadInitialFavorites(): FavoriteTableEntry[] {
+  try {
+    const raw = localStorage.getItem(FAVORITES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return [];
+}
+
+const favorites = ref<FavoriteTableEntry[]>(loadInitialFavorites());
+const batchTesting = ref(false);
+const advancedModalKind = ref<AdvancedModalKind>('none');
+const advancedInitialProfileId = ref('');
+const advancedInitialDbName = ref('');
+const advancedInitialTableName = ref('');
+const redisEditorInit = ref<RedisEditorInitialData | null>(null);
+const serverMonitorVisible = ref(false);
+const serverMonitorProfile = ref<ConnectionProfile | null>(null);
+const erDiagramVisible = ref(false);
+const erDiagramProfile = ref<ConnectionProfile | null>(null);
+const erDiagramDbName = ref('');
 
 function isRedisProfile(profile: ConnectionProfile | null | undefined): boolean {
   return Boolean(profile && isRedisEngineKey(engineKeyOf(profile)));
@@ -1973,6 +2016,405 @@ function handleSendToolSqlToEditor(sql: string, profileId?: string, dbName?: str
     createNewConsoleTab(`${sql}\n`, profileId, dbName);
   }
   setStatus('已将生成的语句写入控制台编辑器');
+}
+
+// ==================== v0.9.6 High-Frequency Utilities ====================
+
+function toggleFavorite(profile: ConnectionProfile, dbName: string, tableName: string) {
+  const idx = favorites.value.findIndex(
+    (f) => f.profileId === profile.id && f.dbName === dbName && f.tableName === tableName,
+  );
+  if (idx >= 0) {
+    favorites.value.splice(idx, 1);
+    setStatus(`已从常用收藏移除: ${dbName}.${tableName}`);
+  } else {
+    favorites.value.unshift({
+      profileId: profile.id,
+      dbName,
+      tableName,
+      isRedis: isRedisProfile(profile),
+    });
+    if (favorites.value.length > 60) {
+      favorites.value.length = 60;
+    }
+    setStatus(`已收藏常用对象: ${dbName}.${tableName}`);
+  }
+  try {
+    localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(favorites.value));
+  } catch {
+    // non-fatal
+  }
+}
+
+async function handleTestAllConnections() {
+  if (batchTesting.value) return;
+  const projectConns = connectionsInProjectById(activeProjectId.value);
+  const targets = projectConns.length > 0 ? projectConns : connections.value;
+  if (targets.length === 0) {
+    setStatus('当前项目暂无可测试的数据源连接', true);
+    return;
+  }
+  batchTesting.value = true;
+  let okCount = 0;
+  let errCount = 0;
+  try {
+    for (const c of targets) {
+      setConnHealth(c.id, 'testing', '正在批量检测...');
+    }
+    const batchSize = 4;
+    for (let i = 0; i < targets.length; i += batchSize) {
+      const slice = targets.slice(i, i + batchSize);
+      await Promise.all(
+        slice.map(async (prof) => {
+          try {
+            const ping = await testConnection(prof.id);
+            if (ping.success) {
+              okCount += 1;
+              setConnHealth(prof.id, 'ok', ping.serverVersion || ping.message, ping.latencyMs);
+            } else {
+              errCount += 1;
+              setConnHealth(prof.id, 'error', ping.message, ping.latencyMs);
+            }
+          } catch (err) {
+            errCount += 1;
+            setConnHealth(prof.id, 'error', String(err));
+          }
+        }),
+      );
+    }
+    setStatus(`批量测活完成：${okCount} 个连接正常，${errCount} 个异常`, errCount > 0 && okCount === 0);
+  } finally {
+    batchTesting.value = false;
+  }
+}
+
+function resolveActiveDbTarget(
+  explicitProfile?: ConnectionProfile | null,
+  explicitDb?: string,
+): { profile: ConnectionProfile; dbName: string } | null {
+  const prof = explicitProfile ?? activeProfile.value ?? connections.value[0];
+  if (!prof) {
+    setStatus('请先创建或选择一个数据源连接', true);
+    return null;
+  }
+  const dbName =
+    explicitDb ||
+    (prof.id === activeTab.value?.profileId ? activeTab.value?.dbName : '') ||
+    (prof.id === selectedProfileId.value ? selectedDbName.value : '') ||
+    databasesByProfile[prof.id]?.[0]?.name ||
+    (isRedisProfile(prof) ? 'db0' : '');
+  return { profile: prof, dbName };
+}
+
+function handleOpenObjectSearch(profile?: ConnectionProfile, dbName?: string) {
+  const target = resolveActiveDbTarget(profile, dbName);
+  advancedInitialProfileId.value = target?.profile.id ?? connections.value[0]?.id ?? '';
+  advancedInitialDbName.value = target?.dbName ?? '';
+  advancedInitialTableName.value = '';
+  advancedModalKind.value = 'object-search';
+}
+
+function handleOpenSchemaDiff(
+  profile?: ConnectionProfile,
+  dbName?: string,
+  tableName?: string,
+) {
+  const target = resolveActiveDbTarget(profile, dbName);
+  advancedInitialProfileId.value = target?.profile.id ?? '';
+  advancedInitialDbName.value = target?.dbName ?? '';
+  advancedInitialTableName.value = tableName ?? inspectedTable.value?.tableName ?? '';
+  advancedModalKind.value = 'schema-diff';
+}
+
+function handleOpenAlterTable(profile: ConnectionProfile, dbName: string, tableName: string) {
+  if (isRedisProfile(profile)) {
+    void handleOpenRedisEditKey(profile, dbName, tableName);
+    return;
+  }
+  syncActiveProjectForProfile(profile);
+  advancedInitialProfileId.value = profile.id;
+  advancedInitialDbName.value = dbName;
+  advancedInitialTableName.value = tableName;
+  advancedModalKind.value = 'alter-table';
+}
+
+async function runSimpleCollect(
+  profileId: string,
+  dbName: string,
+  sql: string,
+): Promise<Array<Record<string, unknown>>> {
+  const rows: Array<Record<string, unknown>> = [];
+  await executeSql(profileId, dbName, sql, 500, (chunk) => {
+    rows.push(...chunk.rows);
+  });
+  return rows;
+}
+
+function handleOpenRedisNewKey(profile: ConnectionProfile, dbName: string) {
+  syncActiveProjectForProfile(profile);
+  advancedInitialProfileId.value = profile.id;
+  advancedInitialDbName.value = dbName || 'db0';
+  advancedInitialTableName.value = '';
+  redisEditorInit.value = {
+    key: 'app:new:key',
+    keyType: 'string',
+    ttlSeconds: -1,
+    stringValue: '{"createdBy":"Pacer"}',
+    hashEntries: [{ field: 'name', value: 'pacer' }],
+    listItems: ['item_1'],
+    setMembers: ['member_1'],
+    zsetMembers: [{ member: 'member_1', score: '100' }],
+    isNew: true,
+  };
+  advancedModalKind.value = 'redis-editor';
+}
+
+async function handleOpenRedisEditKey(
+  profile: ConnectionProfile,
+  dbName: string,
+  keyName: string,
+) {
+  syncActiveProjectForProfile(profile);
+  busy.value = true;
+  try {
+    const qk = quoteRedisArg(keyName);
+    const [typeRows, ttlRows] = await Promise.all([
+      runSimpleCollect(profile.id, dbName, `TYPE ${qk}`),
+      runSimpleCollect(profile.id, dbName, `TTL ${qk}`),
+    ]);
+    const rawType = String(typeRows[0]?.result ?? 'string').toLowerCase();
+    const keyType: RedisEditableType =
+      rawType === 'hash' || rawType === 'list' || rawType === 'set' || rawType === 'zset'
+        ? rawType
+        : 'string';
+    const rawTtl = Number(ttlRows[0]?.result ?? -1);
+    const ttlSeconds = Number.isFinite(rawTtl) ? rawTtl : -1;
+
+    const init: RedisEditorInitialData = {
+      key: keyName,
+      keyType,
+      ttlSeconds,
+      isNew: false,
+    };
+
+    if (keyType === 'string') {
+      const valRows = await runSimpleCollect(profile.id, dbName, `GET ${qk}`);
+      init.stringValue = String(valRows[0]?.result ?? '');
+    } else if (keyType === 'hash') {
+      const hRows = await runSimpleCollect(profile.id, dbName, `HGETALL ${qk}`);
+      init.hashEntries = hRows.map((r) => ({
+        field: String(r.field ?? ''),
+        value: String(r.value ?? ''),
+      }));
+    } else if (keyType === 'list') {
+      const lRows = await runSimpleCollect(profile.id, dbName, `LRANGE ${qk} 0 499`);
+      init.listItems = lRows.map((r) => String(r.value ?? r.element ?? Object.values(r)[0] ?? ''));
+    } else if (keyType === 'set') {
+      const sRows = await runSimpleCollect(profile.id, dbName, `SMEMBERS ${qk}`);
+      init.setMembers = sRows.map((r) => String(r.value ?? r.member ?? Object.values(r)[0] ?? ''));
+    } else if (keyType === 'zset') {
+      const zRows = await runSimpleCollect(profile.id, dbName, `ZRANGE ${qk} 0 499 WITHSCORES`);
+      init.zsetMembers = zRows.map((r) => ({
+        member: String(r.member ?? ''),
+        score: String(r.score ?? '0'),
+      }));
+    }
+
+    advancedInitialProfileId.value = profile.id;
+    advancedInitialDbName.value = dbName || 'db0';
+    advancedInitialTableName.value = keyName;
+    redisEditorInit.value = init;
+    advancedModalKind.value = 'redis-editor';
+  } catch (err) {
+    setStatus(`读取 Redis Key (${keyName}) 内容失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleDumpSql(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableNames: string[] | null,
+  includeData: boolean,
+) {
+  if (isRedisProfile(profile)) {
+    setStatus('Redis 不支持导出 SQL 转储文件，请在结果网格中导出 XLSX/JSON/CSV', true);
+    return;
+  }
+  const baseName =
+    tableNames && tableNames.length === 1
+      ? `${tableNames[0]}${includeData ? '_full' : '_schema'}.sql`
+      : `${dbName || profile.name}${includeData ? '_full' : '_schema'}.sql`;
+  const safeFileName = baseName.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_');
+  const savePath = await pickSaveSqlDumpPath(safeFileName);
+  if (!savePath) return;
+
+  busy.value = true;
+  try {
+    const res = await exportSqlDump({
+      profileId: profile.id,
+      dbName,
+      tableNames,
+      includeData,
+      maxRowsPerTable: 20000,
+      path: savePath,
+    });
+    const truncNote =
+      res.truncatedTables.length > 0
+        ? `（单表上限 20,000 行截断: ${res.truncatedTables.join(', ')}）`
+        : '';
+    setStatus(`SQL 转储完成：${res.tableCount} 张表，${res.rowCount} 行数据 -> ${res.path}${truncNote}`);
+    pushProjectLog({
+      projectId: profile.projectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      dbName,
+      level: 'success',
+      summary: `已转储 SQL 文件 (${res.tableCount} 表, ${res.rowCount} 行)${truncNote}`,
+      detail: res.path,
+    });
+  } catch (err) {
+    setStatus(`转储 SQL 文件失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleRunLocalSqlFile(profile: ConnectionProfile, dbName: string) {
+  const path = await pickSqlScriptFile();
+  if (!path) return;
+  try {
+    const opened = await openTextFile(path);
+    const content = opened.content.trim();
+    if (!content) {
+      setStatus('所选 SQL 脚本文件为空', true);
+      return;
+    }
+    const isRedis = isRedisProfile(profile);
+    let stmts: string[];
+    if (isRedis) {
+      stmts = splitRedisCommands(content);
+    } else {
+      const analysis = await analyzeSql(content, profile.dbType);
+      stmts =
+        analysis.statements.length > 0
+          ? analysis.statements.map((s) => s.sql.trim()).filter(Boolean)
+          : [content];
+    }
+    if (stmts.length === 0) {
+      setStatus('未解析出可执行语句', true);
+      return;
+    }
+    await runStatementsWithGuard(stmts, `运行脚本 ${opened.name}`, profile, dbName, true);
+  } catch (err) {
+    setStatus(`读取或执行本地 SQL 文件失败: ${String(err)}`, true);
+  }
+}
+
+function handleOpenServerMonitor(profile?: ConnectionProfile) {
+  const prof = profile ?? activeProfile.value ?? connections.value[0] ?? null;
+  if (!prof) {
+    setStatus('请先创建并选择数据源，再打开服务器监控', true);
+    return;
+  }
+  serverMonitorProfile.value = prof;
+  serverMonitorVisible.value = true;
+}
+
+async function handleKillServerSession(sql: string, label: string, profile: ConnectionProfile) {
+  await runStatementsWithGuard([sql], label, profile, '', true);
+}
+
+async function handleOpenErDiagram(profile?: ConnectionProfile, dbName?: string) {
+  const target = resolveActiveDbTarget(profile, dbName);
+  if (!target || !target.dbName) {
+    setStatus('请先选择一个关系型数据库后再查看 ER 关系图', true);
+    return;
+  }
+  if (isRedisProfile(target.profile)) {
+    setStatus('Redis 为键值数据库，不适用 ER 表关系图', true);
+    return;
+  }
+  syncActiveProjectForProfile(target.profile);
+  busy.value = true;
+  try {
+    const tKey = `${target.profile.id}:${target.dbName}`;
+    let tables = tablesByKey[tKey];
+    if (!tables || tables.length === 0) {
+      tables = await listTables(target.profile.id, target.dbName);
+      tablesByKey[tKey] = tables;
+    }
+    const toFetch = tables
+      .slice(0, 48)
+      .filter((tb) => !columnsByKey[`${target.profile.id}:${target.dbName}:${tb.name}`]);
+    for (let i = 0; i < toFetch.length; i += 6) {
+      const batch = toFetch.slice(i, i + 6);
+      await Promise.all(
+        batch.map(async (tb) => {
+          const ck = `${target.profile.id}:${target.dbName}:${tb.name}`;
+          try {
+            columnsByKey[ck] = await listColumns(target.profile.id, target.dbName, tb.name);
+          } catch {
+            columnsByKey[ck] = [];
+          }
+        }),
+      );
+    }
+    erDiagramProfile.value = target.profile;
+    erDiagramDbName.value = target.dbName;
+    erDiagramVisible.value = true;
+  } catch (err) {
+    setStatus(`加载 ER 关系图元数据失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleRunAdvancedStatements(
+  statements: string[],
+  label: string,
+  profileId: string,
+  dbName: string,
+  refreshDb = false,
+) {
+  const editedTable = advancedInitialTableName.value;
+  advancedModalKind.value = 'none';
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (!prof) {
+    setStatus('未找到目标数据源连接', true);
+    return;
+  }
+  await runStatementsWithGuard(statements, label, prof, dbName, true);
+  if (refreshDb) {
+    if (editedTable) {
+      delete columnsByKey[`${prof.id}:${dbName}:${editedTable}`];
+      delete indexesByKey[`${prof.id}:${dbName}:${editedTable}`];
+    }
+    await loadTablesForDb(prof, dbName);
+    if (editedTable && !isRedisProfile(prof)) {
+      await loadTableMetadata(prof, dbName, editedTable);
+    }
+  }
+}
+
+function handleSendAdvancedSqlToEditor(sql: string, profileId?: string, dbName?: string) {
+  advancedModalKind.value = 'none';
+  handleSendToolSqlToEditor(sql, profileId, dbName);
+}
+
+function handleJumpQueryFromTool(profileId: string, dbName: string, tableName: string) {
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (prof) {
+    void handleQueryTop100(prof, dbName, tableName);
+  }
+}
+
+function handleJumpStructureFromTool(profileId: string, dbName: string, tableName: string) {
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (prof) {
+    void selectTableNode(prof, dbName, tableName);
+  }
 }
 
 // ==================== SQL Execution Engine (with High-Risk Guard) ====================
@@ -3434,7 +3876,12 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-dock-files', category: 'action', label: `将本地文件面板移至${filesDockSide.value === 'right' ? '左侧' : '右侧'}`, detail: '自由配置本地文件与脚本停靠在左侧或右侧', badge: '布局' },
     { id: 'act-locate-file', category: 'action', label: '在文件树中定位当前打开的文件', detail: '自动展开目录树并滚动高亮当前文档', badge: keymap.getDisplay('locateFile') },
     { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite / Redis 数据源', badge: '数据库' },
+    { id: 'act-test-all-conn', category: 'action', label: '⚡ 批量测活当前项目数据源', detail: '并发探测数据源连通性并更新绿/红健康状态指示点', badge: '运维' },
     { id: 'act-create-table', category: 'action', label: '可视化新建数据表...', detail: '零手写 DDL，可视化设计字段、主键、自增与索引并实时预览生成 SQL', badge: '建模' },
+    { id: 'act-object-search', category: 'action', label: '🔍 在数据库中全局查找表/字段/Key...', detail: '跨表检索表名、列名、注释与 Redis Key 模式', badge: '搜索' },
+    { id: 'act-schema-diff', category: 'action', label: '⚖️ 表结构对比与同步 DDL...', detail: '对比任意两张表或跨环境差异并生成 ALTER 同步脚本', badge: '比对' },
+    { id: 'act-er-diagram', category: 'action', label: '🗺️ 查看当前库 ER 关系图谱...', detail: '交互式画布展示数据表关联并支持导出 SVG', badge: 'ER图' },
+    { id: 'act-server-monitor', category: 'action', label: '📊 打开实例服务器监控与会话管理...', detail: '实时监控 QPS/内存/活跃会话，支持安全终止异常查询', badge: '监控' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: keymap.getDisplay('newConsole') },
     {
@@ -3523,7 +3970,12 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     else if (item.id === 'act-new-conn') {
       editingProfile.value = null;
       activeModal.value = 'connection';
-    } else if (item.id === 'act-create-table') openCreateTableFromToolbar();
+    } else if (item.id === 'act-test-all-conn') await handleTestAllConnections();
+    else if (item.id === 'act-create-table') openCreateTableFromToolbar();
+    else if (item.id === 'act-object-search') handleOpenObjectSearch();
+    else if (item.id === 'act-schema-diff') handleOpenSchemaDiff();
+    else if (item.id === 'act-er-diagram') await handleOpenErDiagram();
+    else if (item.id === 'act-server-monitor') handleOpenServerMonitor();
     else if (item.id === 'act-import') activeModal.value = 'import';
     else if (item.id === 'act-new-console') createNewConsoleTab('');
     else if (item.id === 'act-gen-explain') await handleGenerateExplainPlan('standard', 'new-console');
@@ -4122,9 +4574,46 @@ onBeforeUnmount(() => {
               <button class="dropdown-item" @click="openMenu = null; openConnectionModal(null)">
                 <span>{{ t('newConnection') }}...</span>
               </button>
+              <button class="dropdown-item" @click="openMenu = null; handleTestAllConnections()">
+                <span>⚡ 批量测试当前项目连接</span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; openCreateTableFromToolbar()">
                 <span>✨ 可视化新建数据表...</span>
               </button>
+              <button
+                class="dropdown-item"
+                @click="
+                  openMenu = null;
+                  handleOpenErDiagram();
+                "
+              >
+                <span>🗺️ 查看数据库 ER 关系图...</span>
+              </button>
+              <button
+                class="dropdown-item"
+                @click="
+                  openMenu = null;
+                  (() => {
+                    const tTarget = resolveActiveDbTarget();
+                    if (tTarget && tTarget.dbName) handleDumpSql(tTarget.profile, tTarget.dbName, null, true);
+                  })();
+                "
+              >
+                <span>💾 转储当前库 SQL（结构 + 数据）...</span>
+              </button>
+              <button
+                class="dropdown-item"
+                @click="
+                  openMenu = null;
+                  (() => {
+                    const tTarget = resolveActiveDbTarget();
+                    if (tTarget) handleRunLocalSqlFile(tTarget.profile, tTarget.dbName);
+                  })();
+                "
+              >
+                <span>▶️ 运行本地 SQL 文件...</span>
+              </button>
+              <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'import'">
                 <span>{{ t('importDbeaver') }}</span>
               </button>
@@ -4157,6 +4646,15 @@ onBeforeUnmount(() => {
               {{ t('menuTools') }}
             </button>
             <div v-if="openMenu === 'tools'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; handleOpenObjectSearch()">
+                <span>🔍 在数据库中全局查找表/字段/Key...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleOpenSchemaDiff()">
+                <span>⚖️ 表结构对比与同步 DDL...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleOpenServerMonitor()">
+                <span>📊 服务器监控与活跃会话管理...</span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; handleGenerateExplainPlan('standard', 'new-console')">
                 <span style="display: inline-flex; align-items: center; gap: 6px">
                   <IdeIcon name="explain" :size="13" />
@@ -4570,6 +5068,8 @@ onBeforeUnmount(() => {
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
           :conn-health-by-profile="connHealthByProfile"
+          :favorites="favorites"
+          :batch-testing="batchTesting"
           @new-project="openProjectModal(null)"
           @edit-project="openProjectModal"
           @delete-project="handleDeleteProject"
@@ -4606,6 +5106,17 @@ onBeforeUnmount(() => {
           @truncate-table="handleTruncateTable"
           @drop-table="handleDropTable"
           @test-profile="handleTestProfile"
+          @test-all-connections="handleTestAllConnections"
+          @open-object-search="handleOpenObjectSearch"
+          @open-schema-diff="handleOpenSchemaDiff"
+          @open-alter-table="handleOpenAlterTable"
+          @open-er-diagram="handleOpenErDiagram"
+          @open-server-monitor="handleOpenServerMonitor"
+          @dump-sql="handleDumpSql"
+          @run-sql-file="handleRunLocalSqlFile"
+          @open-redis-new-key="handleOpenRedisNewKey"
+          @edit-redis-key="handleOpenRedisEditKey"
+          @toggle-favorite="toggleFavorite"
           @edit-profile="openConnectionModal"
           @delete-profile="handleDeleteProfile"
           @copy-text="copyText"
@@ -5845,6 +6356,51 @@ onBeforeUnmount(() => {
       @close="activeToolModal = 'none'"
       @run-statements="handleRunToolStatements"
       @send-sql-to-editor="handleSendToolSqlToEditor"
+      @notify="setStatus($event)"
+    />
+
+    <AdvancedToolsModals
+      :modal-kind="advancedModalKind"
+      :connections="connections"
+      :databases-by-profile="databasesByProfile"
+      :tables-by-key="tablesByKey"
+      :columns-by-key="columnsByKey"
+      :indexes-by-key="indexesByKey"
+      :initial-profile-id="advancedInitialProfileId"
+      :initial-db-name="advancedInitialDbName"
+      :initial-table-name="advancedInitialTableName"
+      :redis-init-data="redisEditorInit"
+      :busy="busy"
+      @close="advancedModalKind = 'none'"
+      @jump-query="handleJumpQueryFromTool"
+      @jump-structure="handleJumpStructureFromTool"
+      @send-sql-to-editor="handleSendAdvancedSqlToEditor"
+      @run-statements="handleRunAdvancedStatements"
+      @notify="setStatus($event)"
+    />
+
+    <ServerMonitorModal
+      :visible="serverMonitorVisible"
+      :profile="serverMonitorProfile"
+      :busy="busy"
+      @close="serverMonitorVisible = false"
+      @kill-session="handleKillServerSession"
+      @notify="setStatus($event)"
+    />
+
+    <ErDiagramModal
+      :visible="erDiagramVisible"
+      :profile="erDiagramProfile"
+      :db-name="erDiagramDbName"
+      :tables="erDiagramProfile && erDiagramDbName ? (tablesByKey[`${erDiagramProfile.id}:${erDiagramDbName}`] ?? []) : []"
+      :columns-by-key="columnsByKey"
+      @close="erDiagramVisible = false"
+      @query-table="
+        (prof, db, tbl) => {
+          erDiagramVisible = false;
+          handleQueryTop100(prof, db, tbl);
+        }
+      "
       @notify="setStatus($event)"
     />
 

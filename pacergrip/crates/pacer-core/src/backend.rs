@@ -3,8 +3,8 @@ use tokio::sync::mpsc;
 
 use crate::error::CoreResult;
 use crate::model::{
-    CapabilityFlags, ColumnMeta, DatabaseMeta, ExplainResult, IndexMeta, PingMetrics, QueryChunk,
-    QueryReq, QuerySummary, TableMeta,
+    CapabilityFlags, ColumnMeta, DatabaseMeta, ExplainResult, IndexMeta, ObjectSearchHit,
+    PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
 };
 
 /// Unified database backend abstraction hiding direct socket drivers vs. Pacer governance proxy.
@@ -19,6 +19,10 @@ pub trait DbBackend: Send + Sync {
     async fn list_columns(&self, db: &str, table: &str) -> CoreResult<Vec<ColumnMeta>>;
 
     async fn list_indexes(&self, _db: &str, _table: &str) -> CoreResult<Vec<IndexMeta>> {
+        Ok(Vec::new())
+    }
+
+    async fn search_objects(&self, _db: &str, _query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
         Ok(Vec::new())
     }
 

@@ -15,7 +15,9 @@ import {
 import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
 import {
+  buildChartDataFromRows,
   decodeUnixTimestampHint,
+  detectChartColumns,
   downloadTextFile,
   formatSqlLiteral,
   generateGridMutationSql,
@@ -26,6 +28,7 @@ import {
   toTsv,
   toUpdateSql,
   type GridMutationPlan,
+  type QuickChartType,
 } from '../utils/sqlTools';
 
 export interface ResultTabItem {
@@ -114,6 +117,11 @@ const filterText = ref('');
 const sortCol = ref<string | null>(null);
 const sortDir = ref<'asc' | 'desc'>('asc');
 const transposeMode = ref(false);
+const chartMode = ref(false);
+const chartType = ref<QuickChartType>('bar');
+const chartLabelCol = ref('');
+const chartValueCol = ref('');
+const chartSvgRef = ref<SVGSVGElement | null>(null);
 const showValueViewer = ref(false);
 const selectedRowOrigIdx = ref<number>(0);
 const selectedIsInserted = ref<boolean>(false);
@@ -1131,6 +1139,168 @@ const filteredHistoryEntries = computed(() => {
 const astWarnings = computed(
   () => props.astAnalysis?.statements.flatMap((s) => s.warnings) ?? [],
 );
+
+// ==================== Quick Chart View State & Geometry ====================
+const CHART_PALETTE = [
+  '#3574f0',
+  '#5fad65',
+  '#e0a82e',
+  '#db5860',
+  '#9c6ade',
+  '#2aa198',
+  '#f28b50',
+  '#56b6c2',
+];
+
+const chartDetected = computed(() => {
+  const res = currentResult.value;
+  if (!res) {
+    return {
+      labelCandidates: [] as string[],
+      numericColumns: [] as string[],
+      defaultLabelCol: '',
+      defaultValueCol: '',
+    };
+  }
+  return detectChartColumns(
+    res.columns,
+    displayedRows.value.map((r) => r.row),
+  );
+});
+
+watch(
+  () => [props.activeResultTabId, currentResult.value?.columns.join('|')],
+  () => {
+    const det = chartDetected.value;
+    chartLabelCol.value = det.defaultLabelCol;
+    chartValueCol.value = det.defaultValueCol;
+  },
+  { immediate: true },
+);
+
+const chartDataset = computed(() =>
+  buildChartDataFromRows(
+    displayedRows.value.map((r) => r.row),
+    chartLabelCol.value || chartDetected.value.defaultLabelCol,
+    chartValueCol.value || chartDetected.value.defaultValueCol,
+    24,
+  ),
+);
+
+const chartBars = computed(() => {
+  const pts = chartDataset.value.points;
+  if (pts.length === 0) return [];
+  const W = 680;
+  const H = 260;
+  const padL = 48;
+  const padR = 16;
+  const padT = 22;
+  const padB = 46;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const maxVal = Math.max(1, ...pts.map((p) => Math.abs(p.value)));
+  const step = plotW / pts.length;
+  const bw = Math.max(8, Math.min(44, step * 0.65));
+  return pts.map((p, idx) => {
+    const h = (Math.max(0, p.value) / maxVal) * plotH;
+    const x = padL + idx * step + (step - bw) / 2;
+    const y = padT + (plotH - h);
+    return {
+      ...p,
+      x,
+      y,
+      w: bw,
+      h: Math.max(2, h),
+      cx: x + bw / 2,
+      color: CHART_PALETTE[idx % CHART_PALETTE.length],
+      shortLabel: p.label.length > 10 ? `${p.label.slice(0, 9)}…` : p.label,
+    };
+  });
+});
+
+const chartLinePointsAttr = computed(() => {
+  const pts = chartDataset.value.points;
+  if (pts.length === 0) return '';
+  const W = 680;
+  const H = 260;
+  const padL = 48;
+  const padR = 24;
+  const padT = 22;
+  const padB = 46;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const maxVal = Math.max(chartDataset.value.max, 1);
+  const minVal = Math.min(chartDataset.value.min, 0);
+  const span = Math.max(1e-6, maxVal - minVal);
+  return pts
+    .map((p, idx) => {
+      const x = pts.length === 1 ? padL + plotW / 2 : padL + (idx / (pts.length - 1)) * plotW;
+      const y = padT + plotH - ((p.value - minVal) / span) * plotH;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+});
+
+const chartLineNodes = computed(() => {
+  const raw = chartLinePointsAttr.value;
+  if (!raw) return [];
+  return raw.split(' ').map((pair, idx) => {
+    const [x, y] = pair.split(',').map(Number);
+    const pt = chartDataset.value.points[idx];
+    return { ...pt, x, y, shortLabel: pt.label.length > 10 ? `${pt.label.slice(0, 9)}…` : pt.label };
+  });
+});
+
+const chartPieSlices = computed(() => {
+  const positives = chartDataset.value.points.filter((p) => p.value > 0);
+  const total = positives.reduce((acc, p) => acc + p.value, 0);
+  if (total <= 0) return [];
+  const cx = 140;
+  const cy = 140;
+  const r = 108;
+  let angle = -Math.PI / 2;
+  return positives.map((p, idx) => {
+    const frac = p.value / total;
+    const sweep = frac * Math.PI * 2;
+    const x1 = cx + r * Math.cos(angle);
+    const y1 = cy + r * Math.sin(angle);
+    const nextAngle = angle + sweep;
+    const x2 = cx + r * Math.cos(nextAngle);
+    const y2 = cy + r * Math.sin(nextAngle);
+    const largeArc = sweep > Math.PI ? 1 : 0;
+    const isFull = positives.length === 1 || frac >= 0.9999;
+    const d = isFull
+      ? ''
+      : `M ${cx} ${cy} L ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${x2.toFixed(2)} ${y2.toFixed(2)} Z`;
+    angle = nextAngle;
+    return {
+      ...p,
+      pct: (frac * 100).toFixed(1),
+      color: CHART_PALETTE[idx % CHART_PALETTE.length],
+      d,
+      isFull,
+    };
+  });
+});
+
+function toggleChartMode() {
+  chartMode.value = !chartMode.value;
+  if (chartMode.value) {
+    transposeMode.value = false;
+  }
+}
+
+function exportQuickChartSvg() {
+  const el = chartSvgRef.value;
+  if (!el) return;
+  const serialized = new XMLSerializer().serializeToString(el);
+  downloadTextFile(
+    `${currentResult.value?.title || 'chart'}-${chartType.value}.svg`,
+    serialized,
+    'image/svg+xml;charset=utf-8',
+  );
+  emit('notify', '已导出当前结果图表 (.svg)');
+}
 </script>
 
 <template>
@@ -1350,9 +1520,20 @@ const astWarnings = computed(
               <button
                 class="icon-btn compact"
                 :class="{ active: transposeMode }"
-                @click="transposeMode = !transposeMode"
+                @click="
+                  transposeMode = !transposeMode;
+                  if (transposeMode) chartMode = false;
+                "
               >
                 ⇅ {{ t('transposeView') }}
+              </button>
+              <button
+                class="icon-btn compact"
+                :class="{ active: chartMode }"
+                title="切换可视化统计图表（柱状 / 折线 / 饼图）"
+                @click="toggleChartMode"
+              >
+                📊 图表
               </button>
               <button
                 class="icon-btn compact"
@@ -1478,8 +1659,191 @@ const astWarnings = computed(
 
           <div class="grid-split">
             <div class="grid-scroll">
+              <!-- Quick Visualization Chart Mode -->
+              <div v-if="chartMode" class="chart-workspace">
+                <div class="chart-toolbar">
+                  <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
+                    <button
+                      class="btn btn-sm"
+                      :class="{ 'btn-primary': chartType === 'bar' }"
+                      @click="chartType = 'bar'"
+                    >
+                      柱状图
+                    </button>
+                    <button
+                      class="btn btn-sm"
+                      :class="{ 'btn-primary': chartType === 'line' }"
+                      @click="chartType = 'line'"
+                    >
+                      折线图
+                    </button>
+                    <button
+                      class="btn btn-sm"
+                      :class="{ 'btn-primary': chartType === 'pie' }"
+                      @click="chartType = 'pie'"
+                    >
+                      饼图
+                    </button>
+                    <span style="font-size: 11px; color: var(--text-secondary); margin-left: 6px">维度列:</span>
+                    <select v-model="chartLabelCol" class="field" style="width: 130px; padding: 2px 6px">
+                      <option v-for="c in currentResult.columns" :key="c" :value="c">{{ c }}</option>
+                    </select>
+                    <span style="font-size: 11px; color: var(--text-secondary)">数值列:</span>
+                    <select v-model="chartValueCol" class="field" style="width: 130px; padding: 2px 6px">
+                      <option
+                        v-for="c in chartDetected.numericColumns.length > 0 ? chartDetected.numericColumns : currentResult.columns"
+                        :key="c"
+                        :value="c"
+                      >
+                        {{ c }}
+                      </option>
+                    </select>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 8px">
+                    <span v-if="chartDataset.points.length > 0" style="font-size: 11px; color: var(--text-secondary)">
+                      样本 {{ chartDataset.points.length }} 项 · 合计 {{ chartDataset.sum }} · 峰值 {{ chartDataset.max }}
+                    </span>
+                    <button
+                      v-if="chartDataset.points.length > 0"
+                      class="btn btn-sm"
+                      @click="exportQuickChartSvg"
+                    >
+                      导出 SVG
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  v-if="chartDataset.points.length === 0"
+                  style="padding: 28px; text-align: center; color: var(--text-secondary); font-size: 12px"
+                >
+                  当前结果集缺少可绘制的数值列（可从右上选择数值字段或切回数据表视图）。
+                </div>
+
+                <div v-else class="chart-body">
+                  <svg
+                    v-if="chartType === 'bar'"
+                    ref="chartSvgRef"
+                    class="chart-svg"
+                    width="680"
+                    height="260"
+                    viewBox="0 0 680 260"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <line x1="48" y1="214" x2="664" y2="214" stroke="var(--border, #4a4d54)" stroke-width="1" />
+                    <g v-for="(bar, bIdx) in chartBars" :key="bIdx">
+                      <rect
+                        :x="bar.x"
+                        :y="bar.y"
+                        :width="bar.w"
+                        :height="bar.h"
+                        :fill="bar.color"
+                        rx="2"
+                      >
+                        <title>{{ bar.label }}: {{ bar.value }}</title>
+                      </rect>
+                      <text
+                        :x="bar.cx"
+                        :y="bar.y - 4"
+                        text-anchor="middle"
+                        fill="var(--text-secondary, #868a91)"
+                        font-size="10"
+                      >
+                        {{ bar.value }}
+                      </text>
+                      <text
+                        :x="bar.cx"
+                        y="232"
+                        text-anchor="middle"
+                        fill="var(--text-secondary, #868a91)"
+                        font-size="10"
+                      >
+                        {{ bar.shortLabel }}
+                      </text>
+                    </g>
+                  </svg>
+
+                  <svg
+                    v-else-if="chartType === 'line'"
+                    ref="chartSvgRef"
+                    class="chart-svg"
+                    width="680"
+                    height="260"
+                    viewBox="0 0 680 260"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <line x1="48" y1="214" x2="656" y2="214" stroke="var(--border, #4a4d54)" stroke-width="1" />
+                    <polyline
+                      :points="chartLinePointsAttr"
+                      fill="none"
+                      stroke="#3574f0"
+                      stroke-width="2.2"
+                    />
+                    <g v-for="(pt, pIdx) in chartLineNodes" :key="pIdx">
+                      <circle :cx="pt.x" :cy="pt.y" r="4" fill="#5fad65" stroke="#ffffff" stroke-width="1">
+                        <title>{{ pt.label }}: {{ pt.value }}</title>
+                      </circle>
+                      <text
+                        v-if="pIdx % Math.max(1, Math.ceil(chartLineNodes.length / 8)) === 0"
+                        :x="pt.x"
+                        y="234"
+                        text-anchor="middle"
+                        fill="var(--text-secondary, #868a91)"
+                        font-size="10"
+                      >
+                        {{ pt.shortLabel }}
+                      </text>
+                    </g>
+                  </svg>
+
+                  <template v-else>
+                    <svg
+                      ref="chartSvgRef"
+                      class="chart-svg"
+                      width="280"
+                      height="280"
+                      viewBox="0 0 280 280"
+                      xmlns="http://www.w3.org/2000/svg"
+                    >
+                      <g v-for="(sl, sIdx) in chartPieSlices" :key="sIdx">
+                        <circle
+                          v-if="sl.isFull"
+                          cx="140"
+                          cy="140"
+                          r="108"
+                          :fill="sl.color"
+                        >
+                          <title>{{ sl.label }}: {{ sl.value }} ({{ sl.pct }}%)</title>
+                        </circle>
+                        <path v-else :d="sl.d" :fill="sl.color" stroke="var(--bg-chrome, #2b2d30)" stroke-width="1.5">
+                          <title>{{ sl.label }}: {{ sl.value }} ({{ sl.pct }}%)</title>
+                        </path>
+                      </g>
+                    </svg>
+                    <div class="chart-legend">
+                      <div
+                        v-for="(sl, sIdx) in chartPieSlices"
+                        :key="sIdx"
+                        style="display: flex; align-items: center; gap: 6px"
+                      >
+                        <span
+                          style="width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0"
+                          :style="{ background: sl.color }"
+                        />
+                        <span style="flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                          {{ sl.label }}
+                        </span>
+                        <span style="font-family: var(--font-mono); color: var(--text-secondary)">
+                          {{ sl.value }} ({{ sl.pct }}%)
+                        </span>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
               <!-- Transpose View -->
-              <table v-if="transposeMode && displayedRows[selectedRowOrigIdx]" class="dg-grid">
+              <table v-else-if="transposeMode && displayedRows[selectedRowOrigIdx]" class="dg-grid">
                 <thead>
                   <tr>
                     <th style="width: 220px">{{ t('columnsLabel') }}</th>

@@ -15,14 +15,15 @@ use pacer_core::{
     AuditEvent, CapabilityFlags, ColumnMeta, ConnectionFingerprint, ConnectionMode,
     ConnectionOptionsConfig, ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType,
     DbeaverDiscoveryItem, DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry,
-    FileStatsDto, IndexMeta, MarkdownSqlBlock, OpenedFileDto, PingMetrics, PreExecuteDecision,
-    QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig, SslConfig, TableMeta,
-    WorkspaceFileEntry, WorkspaceProject,
+    FileStatsDto, IndexMeta, MarkdownSqlBlock, ObjectSearchHit, OpenedFileDto, PingMetrics,
+    PreExecuteDecision, QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig,
+    SslConfig, TableMeta, WorkspaceFileEntry, WorkspaceProject,
 };
 use pacer_dbeaver_io::{
-    build_jdbc_url, discover_local_dbeaver_files, export_to_dbeaver_dbp_bytes,
-    export_to_dbeaver_folder, export_to_dbeaver_json_with_folders, import_dbeaver_from_path,
-    parse_connection_url, parse_dbeaver_text, write_xlsx_file, ImportedDbeaverConnection,
+    build_jdbc_url, build_sql_dump_footer, build_sql_dump_header, discover_local_dbeaver_files,
+    export_to_dbeaver_dbp_bytes, export_to_dbeaver_folder, export_to_dbeaver_json_with_folders,
+    format_sql_dump_table, import_dbeaver_from_path, parse_connection_url, parse_dbeaver_text,
+    quote_qualified_table, write_xlsx_file, ImportedDbeaverConnection, SqlDumpFormatOptions,
 };
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
 use pacer_sql_ast::{
@@ -1701,4 +1702,163 @@ pub fn create_sample_plugin_cmd(
         std::fs::write(&manifest_file, json).map_err(|e| e.to_string())?;
     }
     Ok(scan_plugins_dir(&state.storage_dir.join("plugins")))
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlDumpResultDto {
+    pub path: String,
+    pub table_count: usize,
+    pub row_count: usize,
+    pub truncated_tables: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlDumpRequest {
+    pub profile_id: String,
+    pub db_name: String,
+    pub table_names: Option<Vec<String>>,
+    pub include_data: bool,
+    pub max_rows_per_table: Option<u32>,
+    pub path: String,
+}
+
+#[tauri::command]
+pub async fn search_objects_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: String,
+    query: String,
+) -> Result<Vec<ObjectSearchHit>, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend
+        .search_objects(&db_name, &query)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn export_sql_dump_cmd(
+    state: State<'_, AppState>,
+    req: SqlDumpRequest,
+) -> Result<SqlDumpResultDto, String> {
+    let (profile, backend) = state.resolve_backend(&req.profile_id, None).await?;
+    if matches!(profile.db_type, DbEngineType::Redis) {
+        return Err("Redis 数据源不支持导出 SQL 转储文件，请使用结果集导出或 Redis 命令。".to_string());
+    }
+
+    let listed_tables = backend.list_tables(&req.db_name).await.map_err(map_err)?;
+    let target_tables: Vec<TableMeta> = match &req.table_names {
+        Some(names) if !names.is_empty() => names
+            .iter()
+            .map(|name| {
+                listed_tables
+                    .iter()
+                    .find(|t| t.name == *name)
+                    .cloned()
+                    .unwrap_or(TableMeta {
+                        name: name.clone(),
+                        table_type: Some("TABLE".to_string()),
+                        engine: None,
+                        estimated_rows: None,
+                        data_size_kb: None,
+                        comment: None,
+                    })
+            })
+            .collect(),
+        _ => listed_tables,
+    };
+
+    let row_cap = req.max_rows_per_table.unwrap_or(20_000).clamp(1, 200_000);
+    let generated_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let mut output = build_sql_dump_header(
+        &req.db_name,
+        &profile.db_type,
+        req.include_data,
+        target_tables.len(),
+        &generated_at,
+    );
+
+    let mut total_rows: usize = 0;
+    let mut truncated_tables = Vec::new();
+
+    for tbl in &target_tables {
+        let ddl = match backend.get_table_ddl(&req.db_name, &tbl.name).await {
+            Ok(d) => d,
+            Err(e) => format!("-- Failed to fetch DDL for {}: {e}", tbl.name),
+        };
+        let is_view = tbl
+            .table_type
+            .as_deref()
+            .is_some_and(|tt| tt.to_ascii_uppercase().contains("VIEW"));
+
+        let mut cols: Vec<String> = Vec::new();
+        let mut rows: Vec<BTreeMap<String, serde_json::Value>> = Vec::new();
+
+        if req.include_data && !is_view {
+            let qualified = quote_qualified_table(&req.db_name, &tbl.name, &profile.db_type);
+            let select_sql = format!("SELECT * FROM {qualified}");
+            let (tx, mut rx) = mpsc::channel::<QueryChunk>(32);
+            let collector = tokio::spawn(async move {
+                let mut collected_cols: Vec<String> = Vec::new();
+                let mut collected_rows: Vec<BTreeMap<String, serde_json::Value>> = Vec::new();
+                while let Some(chunk) = rx.recv().await {
+                    if collected_cols.is_empty() && !chunk.columns.is_empty() {
+                        collected_cols = chunk.columns;
+                    }
+                    collected_rows.extend(chunk.rows);
+                }
+                (collected_cols, collected_rows)
+            });
+
+            let exec_res = backend
+                .execute_query(
+                    QueryReq {
+                        database: Some(req.db_name.clone()),
+                        sql: select_sql,
+                        limit: Some(row_cap),
+                    },
+                    tx,
+                )
+                .await;
+
+            if let Ok((c, r)) = collector.await {
+                if exec_res.is_ok() {
+                    if r.len() >= row_cap as usize {
+                        truncated_tables.push(tbl.name.clone());
+                    }
+                    total_rows += r.len();
+                    cols = c;
+                    rows = r;
+                } else if let Err(err) = exec_res {
+                    output.push_str(&format!(
+                        "-- Warning: Failed to export rows for {}: {err}\n",
+                        tbl.name
+                    ));
+                }
+            }
+        }
+
+        let section = format_sql_dump_table(
+            &req.db_name,
+            &tbl.name,
+            &ddl,
+            &cols,
+            &rows,
+            SqlDumpFormatOptions::new(&profile.db_type, req.include_data && !is_view),
+        );
+        output.push_str(&section);
+    }
+
+    output.push_str(build_sql_dump_footer(&profile.db_type));
+    std::fs::write(&req.path, output.as_bytes())
+        .map_err(|e| format!("写入 SQL 转储文件失败: {e}"))?;
+
+    Ok(SqlDumpResultDto {
+        path: req.path,
+        table_count: target_tables.len(),
+        row_count: total_rows,
+        truncated_tables,
+    })
 }

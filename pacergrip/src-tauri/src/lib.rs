@@ -270,6 +270,8 @@ pub fn run() {
             commands::reveal_in_explorer_cmd,
             commands::list_query_history_cmd,
             commands::list_extensions_cmd,
+            commands::search_objects_cmd,
+            commands::export_sql_dump_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pacer application");

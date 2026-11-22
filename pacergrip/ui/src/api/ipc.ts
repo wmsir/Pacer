@@ -456,6 +456,31 @@ export async function pickDataImportFile(): Promise<string | null> {
   return typeof res === 'string' ? res : null;
 }
 
+export async function pickSaveSqlDumpPath(defaultPath = 'dump.sql'): Promise<string | null> {
+  assertTauri();
+  const res = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: 'SQL 转储文件 (.sql)', extensions: ['sql'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickSqlScriptFile(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: 'SQL 脚本文件 (.sql)', extensions: ['sql', 'txt'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
 export async function listProjects(): Promise<WorkspaceProject[]> {
   assertTauri();
   return invoke('list_projects_cmd');
@@ -820,4 +845,41 @@ export async function listLocalPlugins(): Promise<LocalPluginManifest[]> {
 export async function createSamplePlugin(): Promise<LocalPluginManifest[]> {
   if (!isTauriRuntime()) return [];
   return invoke('create_sample_plugin_cmd');
+}
+
+export interface ObjectSearchHit {
+  kind: string;
+  database: string;
+  tableName: string;
+  columnName?: string | null;
+  dataType?: string | null;
+  comment?: string | null;
+}
+
+export interface SqlDumpResultDto {
+  path: string;
+  tableCount: number;
+  rowCount: number;
+  truncatedTables: string[];
+}
+
+export async function searchObjects(
+  profileId: string,
+  dbName: string,
+  query: string,
+): Promise<ObjectSearchHit[]> {
+  assertTauri();
+  return invoke('search_objects_cmd', { profileId, dbName, query });
+}
+
+export async function exportSqlDump(req: {
+  profileId: string;
+  dbName: string;
+  tableNames?: string[] | null;
+  includeData: boolean;
+  maxRowsPerTable?: number;
+  path: string;
+}): Promise<SqlDumpResultDto> {
+  assertTauri();
+  return invoke('export_sql_dump_cmd', { req });
 }

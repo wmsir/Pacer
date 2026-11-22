@@ -11,8 +11,8 @@ use tokio::sync::mpsc;
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DbEngineType,
-    DirectConfig, ExplainResult, IndexMeta, PingMetrics, QueryChunk, QueryReq, QuerySummary,
-    TableMeta,
+    DirectConfig, ExplainResult, IndexMeta, ObjectSearchHit, PingMetrics, QueryChunk, QueryReq,
+    QuerySummary, TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
@@ -242,6 +242,75 @@ impl DbBackend for SqliteBackend {
             });
         }
         Ok(out)
+    }
+
+    async fn search_objects(&self, db: &str, query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
+        let needle = query.trim().to_ascii_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        let db_label = if db.trim().is_empty() {
+            "main".to_string()
+        } else {
+            db.to_string()
+        };
+        let rows = sqlx::query(
+            "SELECT name, type FROM sqlite_master \
+             WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' \
+             ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        let mut hits = Vec::new();
+        for row in rows {
+            if hits.len() >= 150 {
+                break;
+            }
+            let table_name: String = row.try_get("name").unwrap_or_default();
+            let obj_type: String = row.try_get("type").unwrap_or_else(|_| "table".to_string());
+            let kind = if obj_type.eq_ignore_ascii_case("view") {
+                "view"
+            } else {
+                "table"
+            };
+            if table_name.to_ascii_lowercase().contains(&needle) {
+                hits.push(ObjectSearchHit {
+                    kind: kind.to_string(),
+                    database: db_label.clone(),
+                    table_name: table_name.clone(),
+                    column_name: None,
+                    data_type: Some(obj_type.to_ascii_uppercase()),
+                    comment: None,
+                });
+            }
+            let pragma = format!("PRAGMA table_info(\"{}\")", table_name.replace('"', "\"\""));
+            if let Ok(col_rows) = sqlx::query(&pragma).fetch_all(&self.pool).await {
+                for cr in col_rows {
+                    if hits.len() >= 150 {
+                        break;
+                    }
+                    let col_name: String = cr.try_get("name").unwrap_or_default();
+                    let col_type: String = cr
+                        .try_get::<String, _>("type")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "ANY".to_string());
+                    if col_name.to_ascii_lowercase().contains(&needle) {
+                        hits.push(ObjectSearchHit {
+                            kind: "column".to_string(),
+                            database: db_label.clone(),
+                            table_name: table_name.clone(),
+                            column_name: Some(col_name),
+                            data_type: Some(col_type),
+                            comment: None,
+                        });
+                    }
+                }
+            }
+        }
+        Ok(hits)
     }
 
     async fn get_table_ddl(&self, _db: &str, table: &str) -> CoreResult<String> {

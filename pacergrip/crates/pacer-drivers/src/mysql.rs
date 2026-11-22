@@ -9,7 +9,8 @@ use tokio::sync::mpsc;
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DirectConfig,
-    ExplainResult, IndexMeta, PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    ExplainResult, IndexMeta, ObjectSearchHit, PingMetrics, QueryChunk, QueryReq, QuerySummary,
+    TableMeta,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
@@ -296,6 +297,85 @@ impl DbBackend for MySqlBackend {
             }
         }
         Ok(grouped.into_values().collect())
+    }
+
+    async fn search_objects(&self, db: &str, query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
+        let needle = query.trim();
+        if needle.is_empty() || db.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = format!("%{needle}%");
+        let mut hits = Vec::new();
+
+        let tbl_rows = sqlx::query(
+            "SELECT TABLE_NAME AS table_name, TABLE_TYPE AS table_type, TABLE_COMMENT AS table_comment \
+             FROM information_schema.TABLES \
+             WHERE TABLE_SCHEMA = ? AND (TABLE_NAME LIKE ? OR TABLE_COMMENT LIKE ?) \
+             ORDER BY TABLE_NAME LIMIT 80",
+        )
+        .bind(db)
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        for row in tbl_rows {
+            let table_name: String = row.try_get("table_name").unwrap_or_default();
+            let table_type: String = row.try_get("table_type").unwrap_or_default();
+            let comment: Option<String> = row
+                .try_get::<Option<String>, _>("table_comment")
+                .ok()
+                .flatten()
+                .filter(|s| !s.is_empty());
+            let kind = if table_type.to_ascii_uppercase().contains("VIEW") {
+                "view"
+            } else {
+                "table"
+            };
+            hits.push(ObjectSearchHit {
+                kind: kind.to_string(),
+                database: db.to_string(),
+                table_name,
+                column_name: None,
+                data_type: Some(table_type),
+                comment,
+            });
+        }
+
+        let col_rows = sqlx::query(
+            "SELECT TABLE_NAME AS table_name, COLUMN_NAME AS col_name, COLUMN_TYPE AS col_type, \
+                    COLUMN_COMMENT AS col_comment \
+             FROM information_schema.COLUMNS \
+             WHERE TABLE_SCHEMA = ? AND (COLUMN_NAME LIKE ? OR COLUMN_COMMENT LIKE ?) \
+             ORDER BY TABLE_NAME, ORDINAL_POSITION LIMIT 120",
+        )
+        .bind(db)
+        .bind(&pattern)
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        for row in col_rows {
+            if hits.len() >= 150 {
+                break;
+            }
+            hits.push(ObjectSearchHit {
+                kind: "column".to_string(),
+                database: db.to_string(),
+                table_name: row.try_get("table_name").unwrap_or_default(),
+                column_name: row.try_get::<String, _>("col_name").ok(),
+                data_type: row.try_get::<String, _>("col_type").ok(),
+                comment: row
+                    .try_get::<Option<String>, _>("col_comment")
+                    .ok()
+                    .flatten()
+                    .filter(|s| !s.is_empty()),
+            });
+        }
+
+        Ok(hits)
     }
 
     async fn get_table_ddl(&self, db: &str, table: &str) -> CoreResult<String> {

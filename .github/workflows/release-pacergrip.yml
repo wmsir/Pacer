@@ -56,6 +56,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build Windows portable EXE & NSIS installer
+        env:
+          RUSTFLAGS: "-C link-arg=/OPT:REF -C link-arg=/OPT:ICF"
         run: .\ui\node_modules\.bin\tauri.cmd build --bundles nsis
 
       - name: Collect Windows executables
@@ -72,7 +74,7 @@ jobs:
             throw "No NSIS setup executable produced under target/release/bundle/nsis/"
           }
           Copy-Item $nsisFiles.FullName "dist-win/"
-          Get-ChildItem dist-win
+          Get-ChildItem dist-win | ForEach-Object { "{0}: {1:N2} MB ({2} bytes)" -f $_.Name, ($_.Length / 1MB), $_.Length }
 
       - name: Upload Windows Release artifact
         uses: actions/upload-artifact@v4
@@ -143,6 +145,8 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build macOS .app bundle & DMG (${{ matrix.target }})
+        env:
+          RUSTFLAGS: "-C link-arg=-Wl,-dead_strip"
         run: ./ui/node_modules/.bin/tauri build --target ${{ matrix.target }} --bundles dmg,app
 
       - name: Collect macOS DMG & verify .app bundle
@@ -222,6 +226,25 @@ jobs:
             - **原生 Apple Icon & Retina 桌面集成**：新增 `icon.icns` 多分辨率应用图标与 macOS 11+ 最低系统适配（同步发布 Apple Silicon ARM64 与 Intel x64 双架构 `.dmg`）。
             - **macOS `.app` 安全工作空间策略**：在 `/Applications`、`AppTranslocation` 沙盒或只读挂载卷启动时自动落盘至标准 `~/Library/Application Support/cn.fwpt.pacer`（绝不向 `.app` 包内部写入文件）；若将 `Pacer.app` 放在用户自定义可写目录，则优先在同级创建便携 `pacer-workspace/`。
             - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
+
+            ### v0.9.6 新增与优化 / What's New in v0.9.6
+            - **SQL 转储导出（仅结构 / 结构+数据）与本地 SQL 脚本直接执行**：
+              - 数据库/单表右键菜单及顶部「数据库」菜单支持原生导出标准 `.sql` 转储文件（自动适配 MySQL / PostgreSQL / SQLite / SQL Server 方言标识符引用、批量多行 `INSERT`、外键开关与单表行上限保护）。
+              - 支持直接选取本地 `.sql` 脚本文件并经 AST 安全引擎校验后批量运行，无需手动打开再复制。
+            - **全局对象与字段搜索（Table / Column / Comment / Redis Key）**：
+              - 左侧数据库树工具栏与「工具」菜单新增全局查找弹窗，支持按表名、列名、字段/表注释与 Redis Key 模式跨全库检索，并一键跳转查前 100 行、看结构、生成 `WHERE` 片段或复制名称。
+            - **可视化表结构对比与同步 DDL（Schema Diff）& 可视化修改表结构（Alter Table）**：
+              - 支持跨数据源、跨环境（如 DEV 与 TEST）实时对比任意两张表的字段（类型、可空、默认值、注释）与索引差异，高亮增删改并生成可预览/执行的同步 `ALTER TABLE` / `CREATE INDEX` 脚本。
+              - 支持可视化增删改现有数据表的字段与索引，实时预览各库方言 DDL 并受只读/生产安全守卫保护。
+            - **交互式数据库 ER 关系图谱（`.svg` 导出）**：
+              - 纯原生矢量渲染数据库实体与外键推测连线（`*_id` 自动关联目标主键），支持画布拖拽平移、滚轮缩放、拖拽表卡片排布、点击高亮关联路径与导出 `.svg` 矢量图。
+            - **Redis 可视化新建 / 编辑 Key & TTL**：
+              - 直观创建与修改 `string`（含 JSON 校验/格式化）、`hash`、`list`、`set`、`zset` 键值及过期时间（支持永久/`-1`、`5m`、`1h`、`1d` 快捷设置），自动生成精准 RESP 命令执行。
+            - **实例服务器监控与活跃会话管理**：
+              - 新增带 5 秒自动刷新的监控面板，支持 MySQL/TiDB (`SHOW GLOBAL STATUS` / `PROCESSLIST` + `KILL`)、PostgreSQL (`pg_stat_activity` + `pg_terminate_backend`)、Redis (`INFO` / `CLIENT LIST` / `SLOWLOG GET`) 与 SQLite (`PRAGMA`) 实时观测与安全会话终止。
+            - **日常高频打磨：结果集快速图表 / 常用收藏置顶 / 一键批量测活**：
+              - 结果网格工具栏新增 `📊 图表` 切换视图（柱状图 / 折线图 / 饼图，自动识别维度与数值列并支持导出 `.svg`）。
+              - 数据库树新增 `⭐ 常用收藏` 置顶分组与工具栏 `✓ 批量测活` 按钮，一键并发探测当前项目全部连接连通性并点亮红/绿状态灯。
 
             ### v0.9.5 新增与优化 / What's New in v0.9.5
             - **连接账号导出给 DBeaver（含加密账号密码）**：

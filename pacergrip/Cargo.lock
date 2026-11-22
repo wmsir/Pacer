@@ -428,10 +428,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -2737,7 +2735,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "pacer-client"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "async-trait",
  "pacer-core",
@@ -2750,7 +2748,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-core"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "async-trait",
  "chardetng",
@@ -2763,7 +2761,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-dbeaver-io"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "aes",
  "cbc",
@@ -2777,7 +2775,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-drivers"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2793,7 +2791,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-sql-ast"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "pacer-core",
  "serde",
@@ -2802,11 +2800,12 @@ dependencies = [
 
 [[package]]
 name = "pacergrip-app"
-version = "0.9.5"
+version = "0.9.6"
 dependencies = [
  "aes",
  "cbc",
  "chrono",
+ "log",
  "pacer-client",
  "pacer-core",
  "pacer-dbeaver-io",
@@ -3853,16 +3852,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
-name = "signal-hook-registry"
-version = "1.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
-dependencies = [
- "errno",
- "libc",
-]
-
-[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4789,9 +4778,7 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
- "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",

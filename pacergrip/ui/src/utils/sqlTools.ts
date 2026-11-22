@@ -1,4 +1,10 @@
-import type { MarkdownSqlBlock } from '../api/ipc';
+import type {
+  ColumnMeta,
+  ConnectionProfile,
+  DirectConfig,
+  IndexMeta,
+  MarkdownSqlBlock,
+} from '../api/ipc';
 
 const SQL_FENCE_LANGS = new Set([
   'sql',
@@ -2348,3 +2354,818 @@ export function extractRedisCommandAtLine(
   }
   return null;
 }
+
+// ==================== v0.9.6 Productivity & Schema Tools ====================
+
+function isMysqlLikeEngine(engineKey: string): boolean {
+  const eng = (engineKey || '').toLowerCase();
+  return (
+    eng.includes('mysql') ||
+    eng.includes('maria') ||
+    eng.includes('tidb') ||
+    eng.includes('oceanbase')
+  );
+}
+
+function isPgLikeEngine(engineKey: string): boolean {
+  const eng = (engineKey || '').toLowerCase();
+  return eng.includes('postgres') || eng.includes('kingbase') || eng.includes('gauss');
+}
+
+function isSqliteLikeEngine(engineKey: string): boolean {
+  return (engineKey || '').toLowerCase().includes('sqlite');
+}
+
+function qualifyTargetTable(
+  dbName: string | undefined,
+  tableName: string,
+  engineKey: string,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const cleanDb = (dbName ?? '').trim();
+  const skipDb = !cleanDb || cleanDb === 'default' || (isSqliteLikeEngine(engineKey) && cleanDb === 'main');
+  return skipDb ? q(tableName) : `${q(cleanDb)}.${q(tableName)}`;
+}
+
+function normalizeDefaultExpr(val?: string | null): string {
+  return (val ?? '').trim().replace(/^'+|'+$/g, '');
+}
+
+function buildColumnSpecFragment(
+  col: {
+    name: string;
+    dataType: string;
+    nullable: boolean;
+    defaultValue?: string | null;
+    comment?: string | null;
+  },
+  engineKey: string,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const parts = [q(col.name), col.dataType.trim() || 'VARCHAR(255)'];
+  parts.push(col.nullable ? 'NULL' : 'NOT NULL');
+  const def = (col.defaultValue ?? '').trim();
+  if (def !== '') {
+    const upperDef = def.toUpperCase();
+    const isKeywordOrNum =
+      upperDef === 'NULL' ||
+      upperDef === 'TRUE' ||
+      upperDef === 'FALSE' ||
+      upperDef.startsWith('CURRENT_TIMESTAMP') ||
+      upperDef.startsWith('NOW(') ||
+      /^-?\d+(\.\d+)?$/.test(def) ||
+      (def.startsWith("'") && def.endsWith("'"));
+    parts.push(`DEFAULT ${isKeywordOrNum ? def : formatSqlLiteral(def)}`);
+  }
+  if (isMysqlLikeEngine(engineKey) && col.comment?.trim()) {
+    parts.push(`COMMENT ${formatSqlLiteral(col.comment.trim())}`);
+  }
+  return parts.join(' ');
+}
+
+function buildCreateIndexStatement(
+  dbName: string | undefined,
+  tableName: string,
+  idx: { name: string; unique: boolean; columns: string[] },
+  engineKey: string,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const fullTable = qualifyTargetTable(dbName, tableName, engineKey);
+  const colList = idx.columns.map((c) => q(c)).join(', ');
+  const uniq = idx.unique ? 'UNIQUE ' : '';
+  return `CREATE ${uniq}INDEX ${q(idx.name)} ON ${fullTable} (${colList});`;
+}
+
+function buildDropIndexStatement(
+  dbName: string | undefined,
+  tableName: string,
+  indexName: string,
+  engineKey: string,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  if (isMysqlLikeEngine(engineKey)) {
+    const fullTable = qualifyTargetTable(dbName, tableName, engineKey);
+    return `DROP INDEX ${q(indexName)} ON ${fullTable};`;
+  }
+  const cleanDb = (dbName ?? '').trim();
+  const skipDb = !cleanDb || cleanDb === 'default' || (isSqliteLikeEngine(engineKey) && cleanDb === 'main');
+  return skipDb ? `DROP INDEX ${q(indexName)};` : `DROP INDEX ${q(cleanDb)}.${q(indexName)};`;
+}
+
+// ---- 1. Visual Table Schema Diff & Sync DDL ----
+
+export type SchemaDiffStatus = 'same' | 'added' | 'removed' | 'modified';
+
+export interface SchemaDiffColumnItem {
+  name: string;
+  status: SchemaDiffStatus;
+  source?: ColumnMeta;
+  target?: ColumnMeta;
+  changes: string[];
+}
+
+export interface SchemaDiffIndexItem {
+  name: string;
+  status: SchemaDiffStatus;
+  source?: IndexMeta;
+  target?: IndexMeta;
+  changes: string[];
+}
+
+export interface TableSchemaDiffResult {
+  columnDiffs: SchemaDiffColumnItem[];
+  indexDiffs: SchemaDiffIndexItem[];
+  syncStatements: string[];
+  warnings: string[];
+  stats: {
+    added: number;
+    removed: number;
+    modified: number;
+    same: number;
+    indexChanges: number;
+  };
+}
+
+export function computeTableSchemaDiff(opts: {
+  sourceDb?: string;
+  sourceTable: string;
+  sourceColumns: ColumnMeta[];
+  sourceIndexes: IndexMeta[];
+  targetDb?: string;
+  targetTable: string;
+  targetColumns: ColumnMeta[];
+  targetIndexes: IndexMeta[];
+  targetEngineKey: string;
+}): TableSchemaDiffResult {
+  const engineKey = opts.targetEngineKey || 'mysql';
+  const fullTarget = qualifyTargetTable(opts.targetDb, opts.targetTable, engineKey);
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+
+  const targetColMap = new Map<string, ColumnMeta>();
+  for (const col of opts.targetColumns) {
+    targetColMap.set(col.name.toLowerCase(), col);
+  }
+  const seenTargetCols = new Set<string>();
+
+  const columnDiffs: SchemaDiffColumnItem[] = [];
+  const syncStatements: string[] = [];
+  const warnings: string[] = [];
+
+  let added = 0;
+  let removed = 0;
+  let modified = 0;
+  let same = 0;
+
+  for (const src of opts.sourceColumns) {
+    const key = src.name.toLowerCase();
+    const tgt = targetColMap.get(key);
+    if (!tgt) {
+      added += 1;
+      columnDiffs.push({
+        name: src.name,
+        status: 'added',
+        source: src,
+        changes: [`目标表缺少字段 (${src.dataType})`],
+      });
+      syncStatements.push(
+        `ALTER TABLE ${fullTarget} ADD COLUMN ${buildColumnSpecFragment(src, engineKey)};`,
+      );
+      continue;
+    }
+
+    seenTargetCols.add(key);
+    const changes: string[] = [];
+    if (src.dataType.trim().toLowerCase() !== tgt.dataType.trim().toLowerCase()) {
+      changes.push(`类型: ${tgt.dataType} -> ${src.dataType}`);
+    }
+    if (src.nullable !== tgt.nullable) {
+      changes.push(`可空: ${tgt.nullable ? 'NULL' : 'NOT NULL'} -> ${src.nullable ? 'NULL' : 'NOT NULL'}`);
+    }
+    if (normalizeDefaultExpr(src.defaultValue) !== normalizeDefaultExpr(tgt.defaultValue)) {
+      changes.push(`默认值: ${tgt.defaultValue ?? '无'} -> ${src.defaultValue ?? '无'}`);
+    }
+    if ((src.comment ?? '').trim() !== (tgt.comment ?? '').trim()) {
+      changes.push(`注释变更`);
+    }
+
+    if (changes.length === 0) {
+      same += 1;
+      columnDiffs.push({ name: src.name, status: 'same', source: src, target: tgt, changes: [] });
+    } else {
+      modified += 1;
+      columnDiffs.push({ name: src.name, status: 'modified', source: src, target: tgt, changes });
+      if (isMysqlLikeEngine(engineKey)) {
+        syncStatements.push(
+          `ALTER TABLE ${fullTarget} MODIFY COLUMN ${buildColumnSpecFragment(src, engineKey)};`,
+        );
+      } else if (isPgLikeEngine(engineKey)) {
+        if (src.dataType.trim().toLowerCase() !== tgt.dataType.trim().toLowerCase()) {
+          syncStatements.push(
+            `ALTER TABLE ${fullTarget} ALTER COLUMN ${q(src.name)} TYPE ${src.dataType};`,
+          );
+        }
+        if (src.nullable !== tgt.nullable) {
+          syncStatements.push(
+            `ALTER TABLE ${fullTarget} ALTER COLUMN ${q(src.name)} ${src.nullable ? 'DROP NOT NULL' : 'SET NOT NULL'};`,
+          );
+        }
+        if (normalizeDefaultExpr(src.defaultValue) !== normalizeDefaultExpr(tgt.defaultValue)) {
+          const def = (src.defaultValue ?? '').trim();
+          syncStatements.push(
+            def
+              ? `ALTER TABLE ${fullTarget} ALTER COLUMN ${q(src.name)} SET DEFAULT ${def};`
+              : `ALTER TABLE ${fullTarget} ALTER COLUMN ${q(src.name)} DROP DEFAULT;`,
+          );
+        }
+      } else {
+        warnings.push(`字段 ${src.name} 存在差异，当前方言 (${engineKey}) 建议通过重建表迁移修改列定义。`);
+        syncStatements.push(
+          `-- [${engineKey}] 字段 ${src.name} 差异 (${changes.join('; ')}) 请按需手动调整`,
+        );
+      }
+    }
+  }
+
+  for (const tgt of opts.targetColumns) {
+    if (!seenTargetCols.has(tgt.name.toLowerCase())) {
+      removed += 1;
+      columnDiffs.push({
+        name: tgt.name,
+        status: 'removed',
+        target: tgt,
+        changes: ['源表不存在此字段（同步将删除该列）'],
+      });
+      warnings.push(`⚠️ 删除目标字段 ${tgt.name} 属于破坏性变更，请确认该列数据不再需要。`);
+      syncStatements.push(`ALTER TABLE ${fullTarget} DROP COLUMN ${q(tgt.name)};`);
+    }
+  }
+
+  const isPrimaryIdx = (idx: IndexMeta) =>
+    idx.name.toUpperCase() === 'PRIMARY' || idx.indexType?.toUpperCase() === 'PRIMARY';
+  const srcIndexes = opts.sourceIndexes.filter((i) => !isPrimaryIdx(i));
+  const tgtIndexes = opts.targetIndexes.filter((i) => !isPrimaryIdx(i));
+  const tgtIdxMap = new Map<string, IndexMeta>();
+  for (const idx of tgtIndexes) {
+    tgtIdxMap.set(idx.name.toLowerCase(), idx);
+  }
+  const seenTgtIdx = new Set<string>();
+  const indexDiffs: SchemaDiffIndexItem[] = [];
+  let indexChanges = 0;
+
+  for (const srcIdx of srcIndexes) {
+    const key = srcIdx.name.toLowerCase();
+    const tgtIdx = tgtIdxMap.get(key);
+    if (!tgtIdx) {
+      indexChanges += 1;
+      indexDiffs.push({
+        name: srcIdx.name,
+        status: 'added',
+        source: srcIdx,
+        changes: [`新增${srcIdx.unique ? '唯一' : '普通'}索引 (${srcIdx.columns.join(', ')})`],
+      });
+      syncStatements.push(buildCreateIndexStatement(opts.targetDb, opts.targetTable, srcIdx, engineKey));
+      continue;
+    }
+    seenTgtIdx.add(key);
+    const changes: string[] = [];
+    if (srcIdx.unique !== tgtIdx.unique) {
+      changes.push(`唯一性: ${tgtIdx.unique ? 'UNIQUE' : 'NORMAL'} -> ${srcIdx.unique ? 'UNIQUE' : 'NORMAL'}`);
+    }
+    if (srcIdx.columns.join(',').toLowerCase() !== tgtIdx.columns.join(',').toLowerCase()) {
+      changes.push(`索引列: (${tgtIdx.columns.join(', ')}) -> (${srcIdx.columns.join(', ')})`);
+    }
+    if (changes.length === 0) {
+      indexDiffs.push({ name: srcIdx.name, status: 'same', source: srcIdx, target: tgtIdx, changes: [] });
+    } else {
+      indexChanges += 1;
+      indexDiffs.push({ name: srcIdx.name, status: 'modified', source: srcIdx, target: tgtIdx, changes });
+      syncStatements.push(buildDropIndexStatement(opts.targetDb, opts.targetTable, srcIdx.name, engineKey));
+      syncStatements.push(buildCreateIndexStatement(opts.targetDb, opts.targetTable, srcIdx, engineKey));
+    }
+  }
+
+  for (const tgtIdx of tgtIndexes) {
+    if (!seenTgtIdx.has(tgtIdx.name.toLowerCase())) {
+      indexChanges += 1;
+      indexDiffs.push({
+        name: tgtIdx.name,
+        status: 'removed',
+        target: tgtIdx,
+        changes: ['源表无此索引（同步将删除）'],
+      });
+      syncStatements.push(buildDropIndexStatement(opts.targetDb, opts.targetTable, tgtIdx.name, engineKey));
+    }
+  }
+
+  return {
+    columnDiffs,
+    indexDiffs,
+    syncStatements,
+    warnings,
+    stats: { added, removed, modified, same, indexChanges },
+  };
+}
+
+// ---- 2. Visual Alter Table DDL Builder ----
+
+export interface AlterColumnDraft {
+  originalName?: string;
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  defaultValue: string;
+  comment: string;
+  isNew?: boolean;
+  deleted?: boolean;
+}
+
+export interface AlterIndexDraft {
+  originalName?: string;
+  name: string;
+  unique: boolean;
+  columns: string;
+  isNew?: boolean;
+  deleted?: boolean;
+}
+
+export function buildAlterTableDdl(opts: {
+  dbName?: string;
+  tableName: string;
+  originalColumns: ColumnMeta[];
+  draftColumns: AlterColumnDraft[];
+  originalIndexes: IndexMeta[];
+  draftIndexes: AlterIndexDraft[];
+  engineKey: string;
+}): { statements: string[]; warnings: string[] } {
+  const engineKey = opts.engineKey || 'mysql';
+  const fullTable = qualifyTargetTable(opts.dbName, opts.tableName, engineKey);
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+
+  const origColMap = new Map<string, ColumnMeta>();
+  for (const col of opts.originalColumns) {
+    origColMap.set(col.name, col);
+  }
+
+  const statements: string[] = [];
+  const warnings: string[] = [];
+
+  for (const draft of opts.draftColumns) {
+    const cleanName = draft.name.trim();
+    if (draft.isNew) {
+      if (draft.deleted || !cleanName) continue;
+      statements.push(
+        `ALTER TABLE ${fullTable} ADD COLUMN ${buildColumnSpecFragment(
+          {
+            name: cleanName,
+            dataType: draft.dataType,
+            nullable: draft.nullable,
+            defaultValue: draft.defaultValue,
+            comment: draft.comment,
+          },
+          engineKey,
+        )};`,
+      );
+      continue;
+    }
+
+    const origKey = draft.originalName ?? cleanName;
+    const orig = origColMap.get(origKey);
+    if (!orig) continue;
+
+    if (draft.deleted) {
+      warnings.push(`⚠️ 将永久删除字段 ${orig.name} 及其历史数据。`);
+      statements.push(`ALTER TABLE ${fullTable} DROP COLUMN ${q(orig.name)};`);
+      continue;
+    }
+
+    const renamed = Boolean(cleanName && cleanName !== orig.name);
+    const typeChanged = draft.dataType.trim().toLowerCase() !== orig.dataType.trim().toLowerCase();
+    const nullChanged = draft.nullable !== orig.nullable;
+    const defChanged = normalizeDefaultExpr(draft.defaultValue) !== normalizeDefaultExpr(orig.defaultValue);
+    const commentChanged = draft.comment.trim() !== (orig.comment ?? '').trim();
+
+    if (!renamed && !typeChanged && !nullChanged && !defChanged && !commentChanged) {
+      continue;
+    }
+
+    if (isMysqlLikeEngine(engineKey)) {
+      const spec = buildColumnSpecFragment(
+        {
+          name: cleanName || orig.name,
+          dataType: draft.dataType,
+          nullable: draft.nullable,
+          defaultValue: draft.defaultValue,
+          comment: draft.comment,
+        },
+        engineKey,
+      );
+      if (renamed) {
+        statements.push(`ALTER TABLE ${fullTable} CHANGE COLUMN ${q(orig.name)} ${spec};`);
+      } else {
+        statements.push(`ALTER TABLE ${fullTable} MODIFY COLUMN ${spec};`);
+      }
+    } else if (isPgLikeEngine(engineKey)) {
+      let curCol = orig.name;
+      if (renamed) {
+        statements.push(`ALTER TABLE ${fullTable} RENAME COLUMN ${q(orig.name)} TO ${q(cleanName)};`);
+        curCol = cleanName;
+      }
+      if (typeChanged) {
+        statements.push(`ALTER TABLE ${fullTable} ALTER COLUMN ${q(curCol)} TYPE ${draft.dataType.trim()};`);
+      }
+      if (nullChanged) {
+        statements.push(
+          `ALTER TABLE ${fullTable} ALTER COLUMN ${q(curCol)} ${draft.nullable ? 'DROP NOT NULL' : 'SET NOT NULL'};`,
+        );
+      }
+      if (defChanged) {
+        const def = draft.defaultValue.trim();
+        statements.push(
+          def
+            ? `ALTER TABLE ${fullTable} ALTER COLUMN ${q(curCol)} SET DEFAULT ${def};`
+            : `ALTER TABLE ${fullTable} ALTER COLUMN ${q(curCol)} DROP DEFAULT;`,
+        );
+      }
+      if (commentChanged) {
+        statements.push(
+          `COMMENT ON COLUMN ${fullTable}.${q(curCol)} IS ${formatSqlLiteral(draft.comment.trim())};`,
+        );
+      }
+    } else {
+      if (renamed && !typeChanged && !nullChanged && !defChanged) {
+        statements.push(`ALTER TABLE ${fullTable} RENAME COLUMN ${q(orig.name)} TO ${q(cleanName)};`);
+      } else {
+        warnings.push(`字段 ${orig.name} 的类型/约束更改需注意当前引擎 (${engineKey}) 语法兼容性。`);
+        statements.push(
+          `ALTER TABLE ${fullTable} ALTER COLUMN ${q(cleanName || orig.name)} TYPE ${draft.dataType.trim()};`,
+        );
+      }
+    }
+  }
+
+  for (const idxDraft of opts.draftIndexes) {
+    const cleanIdxName = idxDraft.name.trim();
+    const cols = idxDraft.columns
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (idxDraft.isNew) {
+      if (idxDraft.deleted || !cleanIdxName || cols.length === 0) continue;
+      statements.push(
+        buildCreateIndexStatement(
+          opts.dbName,
+          opts.tableName,
+          { name: cleanIdxName, unique: idxDraft.unique, columns: cols },
+          engineKey,
+        ),
+      );
+      continue;
+    }
+
+    const origIdxName = idxDraft.originalName ?? cleanIdxName;
+    if (idxDraft.deleted && origIdxName) {
+      statements.push(buildDropIndexStatement(opts.dbName, opts.tableName, origIdxName, engineKey));
+    }
+  }
+
+  return { statements, warnings };
+}
+
+// ---- 3. Interactive ER Diagram Relationship Inference & Layout ----
+
+export interface ErTableInput {
+  tableName: string;
+  comment?: string | null;
+  estimatedRows?: number | null;
+  columns: ColumnMeta[];
+}
+
+export interface ErNodeLayout {
+  tableName: string;
+  comment?: string | null;
+  estimatedRows?: number | null;
+  columns: ColumnMeta[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface ErEdge {
+  id: string;
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  inferredReason: string;
+}
+
+export interface ErDiagramGraph {
+  nodes: ErNodeLayout[];
+  edges: ErEdge[];
+}
+
+function singularizeToken(stem: string): string[] {
+  const lower = stem.toLowerCase();
+  const variants = new Set<string>([lower]);
+  if (lower.endsWith('ies') && lower.length > 3) {
+    variants.add(`${lower.slice(0, -3)}y`);
+  }
+  if (lower.endsWith('es') && lower.length > 3) {
+    variants.add(lower.slice(0, -2));
+  }
+  if (lower.endsWith('s') && lower.length > 2) {
+    variants.add(lower.slice(0, -1));
+  }
+  return Array.from(variants);
+}
+
+export function inferErRelationships(tables: ErTableInput[]): ErDiagramGraph {
+  const tableLookup = new Map<string, ErTableInput>();
+  const stemToTable = new Map<string, string>();
+
+  for (const tbl of tables) {
+    tableLookup.set(tbl.tableName.toLowerCase(), tbl);
+    const bareName = tbl.tableName.includes('_')
+      ? tbl.tableName.replace(/^(t|tb|tbl|sys|biz|app)_/i, '')
+      : tbl.tableName;
+    for (const v of [...singularizeToken(tbl.tableName), ...singularizeToken(bareName)]) {
+      if (!stemToTable.has(v)) {
+        stemToTable.set(v, tbl.tableName);
+      }
+    }
+  }
+
+  const edges: ErEdge[] = [];
+  const edgeKeys = new Set<string>();
+
+  for (const tbl of tables) {
+    for (const col of tbl.columns) {
+      const colLower = col.name.toLowerCase();
+      let stem: string | null = null;
+      if (colLower === 'parent_id') {
+        stem = tbl.tableName.toLowerCase();
+      } else if (colLower.endsWith('_id') && colLower.length > 3) {
+        stem = colLower.slice(0, -3);
+      } else if (colLower.endsWith('_uuid') && colLower.length > 5) {
+        stem = colLower.slice(0, -5);
+      }
+      if (!stem) continue;
+
+      let targetTableName: string | undefined;
+      for (const cand of singularizeToken(stem)) {
+        targetTableName = stemToTable.get(cand);
+        if (targetTableName) break;
+      }
+      if (!targetTableName) continue;
+      if (targetTableName === tbl.tableName && colLower !== 'parent_id') continue;
+
+      const targetTbl = tableLookup.get(targetTableName.toLowerCase());
+      if (!targetTbl) continue;
+      const pkCol =
+        targetTbl.columns.find((c) => c.isPrimaryKey)?.name ??
+        targetTbl.columns.find((c) => c.name.toLowerCase() === 'id')?.name ??
+        targetTbl.columns[0]?.name;
+      if (!pkCol) continue;
+
+      const edgeKey = `${tbl.tableName}.${col.name}->${targetTableName}.${pkCol}`;
+      if (edgeKeys.has(edgeKey)) continue;
+      edgeKeys.add(edgeKey);
+      edges.push({
+        id: edgeKey,
+        fromTable: tbl.tableName,
+        fromColumn: col.name,
+        toTable: targetTableName,
+        toColumn: pkCol,
+        inferredReason: `${col.name} -> ${targetTableName}.${pkCol}`,
+      });
+    }
+  }
+
+  const cardWidth = 250;
+  const colGap = 72;
+  const rowGap = 48;
+  const colsPerRow = tables.length <= 4 ? 2 : tables.length <= 9 ? 3 : 4;
+  const startX = 48;
+  const startY = 48;
+
+  const nodes: ErNodeLayout[] = [];
+  let rowMaxHeight = 0;
+  let curY = startY;
+
+  for (let i = 0; i < tables.length; i += 1) {
+    const tbl = tables[i];
+    const gridCol = i % colsPerRow;
+    if (gridCol === 0 && i > 0) {
+      curY += rowMaxHeight + rowGap;
+      rowMaxHeight = 0;
+    }
+    const visibleColCount = Math.min(Math.max(tbl.columns.length, 1), 10);
+    const height = 38 + visibleColCount * 22 + (tbl.columns.length > 10 ? 22 : 10);
+    rowMaxHeight = Math.max(rowMaxHeight, height);
+
+    nodes.push({
+      tableName: tbl.tableName,
+      comment: tbl.comment,
+      estimatedRows: tbl.estimatedRows,
+      columns: tbl.columns,
+      x: startX + gridCol * (cardWidth + colGap),
+      y: curY,
+      width: cardWidth,
+      height,
+    });
+  }
+
+  return { nodes, edges };
+}
+
+// ---- 4. Redis Visual Key-Value & TTL Command Builder ----
+
+export type RedisEditableType = 'string' | 'hash' | 'list' | 'set' | 'zset';
+
+export interface RedisKeyEditorDraft {
+  originalKey?: string;
+  key: string;
+  keyType: RedisEditableType;
+  stringValue?: string;
+  hashEntries?: Array<{ field: string; value: string }>;
+  listItems?: string[];
+  setMembers?: string[];
+  zsetMembers?: Array<{ member: string; score: string }>;
+  ttlSeconds: number | null;
+  isNew?: boolean;
+}
+
+export function buildRedisSaveCommands(draft: RedisKeyEditorDraft): string[] {
+  const key = draft.key.trim();
+  if (!key) return [];
+  const qk = quoteRedisArg(key);
+  const commands: string[] = [];
+  const orig = draft.originalKey?.trim();
+
+  if (!draft.isNew && orig && orig !== key) {
+    commands.push(`RENAME ${quoteRedisArg(orig)} ${qk}`);
+  }
+
+  if (draft.keyType === 'string') {
+    commands.push(`SET ${qk} ${quoteRedisArg(draft.stringValue ?? '')}`);
+  } else {
+    if (!draft.isNew) {
+      commands.push(`DEL ${qk}`);
+    }
+    if (draft.keyType === 'hash') {
+      const valid = (draft.hashEntries ?? []).filter((e) => e.field.trim() !== '');
+      if (valid.length > 0) {
+        const args = valid.flatMap((e) => [quoteRedisArg(e.field), quoteRedisArg(e.value)]);
+        commands.push(`HSET ${qk} ${args.join(' ')}`);
+      }
+    } else if (draft.keyType === 'list') {
+      const valid = (draft.listItems ?? []).filter((v) => v !== '');
+      if (valid.length > 0) {
+        commands.push(`RPUSH ${qk} ${valid.map((v) => quoteRedisArg(v)).join(' ')}`);
+      }
+    } else if (draft.keyType === 'set') {
+      const valid = (draft.setMembers ?? []).filter((v) => v !== '');
+      if (valid.length > 0) {
+        commands.push(`SADD ${qk} ${valid.map((v) => quoteRedisArg(v)).join(' ')}`);
+      }
+    } else if (draft.keyType === 'zset') {
+      const valid = (draft.zsetMembers ?? []).filter((e) => e.member.trim() !== '');
+      if (valid.length > 0) {
+        const args = valid.flatMap((e) => {
+          const scoreNum = Number(e.score);
+          const safeScore = Number.isFinite(scoreNum) ? String(scoreNum) : '0';
+          return [safeScore, quoteRedisArg(e.member)];
+        });
+        commands.push(`ZADD ${qk} ${args.join(' ')}`);
+      }
+    }
+  }
+
+  if (typeof draft.ttlSeconds === 'number' && Number.isFinite(draft.ttlSeconds)) {
+    const ttl = Math.floor(draft.ttlSeconds);
+    if (ttl > 0) {
+      commands.push(`EXPIRE ${qk} ${ttl}`);
+    } else if (ttl === -1 && !draft.isNew) {
+      commands.push(`PERSIST ${qk}`);
+    }
+  }
+
+  return commands;
+}
+
+// ---- 5. ResultGrid Quick Chart Dataset Helpers ----
+
+export type QuickChartType = 'bar' | 'line' | 'pie';
+
+export interface ChartDataPoint {
+  label: string;
+  value: number;
+}
+
+export interface ChartDatasetResult {
+  points: ChartDataPoint[];
+  min: number;
+  max: number;
+  sum: number;
+  totalRows: number;
+}
+
+function parseChartNumeric(raw: unknown): number | null {
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : null;
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const num = Number(trimmed);
+      return Number.isFinite(num) ? num : null;
+    }
+  }
+  return null;
+}
+
+export function detectChartColumns(
+  columns: string[],
+  rows: Array<Record<string, unknown>>,
+): {
+  labelCandidates: string[];
+  numericColumns: string[];
+  defaultLabelCol: string;
+  defaultValueCol: string;
+} {
+  const sample = rows.slice(0, 100);
+  const numericColumns: string[] = [];
+  const labelCandidates: string[] = [];
+
+  for (const col of columns) {
+    let nonNull = 0;
+    let numericCount = 0;
+    for (const row of sample) {
+      const v = row[col];
+      if (v === null || v === undefined || v === '') continue;
+      nonNull += 1;
+      if (parseChartNumeric(v) !== null) numericCount += 1;
+    }
+    if (nonNull > 0 && numericCount === nonNull) {
+      numericColumns.push(col);
+    } else {
+      labelCandidates.push(col);
+    }
+  }
+
+  const preferredValue =
+    numericColumns.find((c) => !/^id$/i.test(c) && !/_id$/i.test(c)) ?? numericColumns[0] ?? '';
+  const defaultLabelCol =
+    labelCandidates[0] ?? columns.find((c) => c !== preferredValue) ?? columns[0] ?? '';
+
+  return {
+    labelCandidates: labelCandidates.length > 0 ? labelCandidates : columns,
+    numericColumns,
+    defaultLabelCol,
+    defaultValueCol: preferredValue,
+  };
+}
+
+export function buildChartDataFromRows(
+  rows: Array<Record<string, unknown>>,
+  labelCol: string,
+  valueCol: string,
+  maxPoints = 30,
+): ChartDatasetResult {
+  const cap = Math.max(1, maxPoints);
+  const slice = rows.slice(0, cap);
+  const points: ChartDataPoint[] = [];
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  let sum = 0;
+
+  for (let i = 0; i < slice.length; i += 1) {
+    const row = slice[i];
+    const num = parseChartNumeric(row[valueCol]);
+    if (num === null) continue;
+    const rawLabel = row[labelCol];
+    const label =
+      rawLabel === null || rawLabel === undefined || rawLabel === ''
+        ? `#${i + 1}`
+        : String(rawLabel);
+    points.push({ label, value: num });
+    if (num < min) min = num;
+    if (num > max) max = num;
+    sum += num;
+  }
+
+  if (points.length === 0) {
+    return { points: [], min: 0, max: 0, sum: 0, totalRows: rows.length };
+  }
+  return { points, min, max, sum, totalRows: rows.length };
+}
+
+export function isConnectionProfileReadOnly(prof: ConnectionProfile | undefined | null): boolean {
+  if (!prof) return false;
+  const cfg = (prof.mode?.config ?? {}) as Partial<DirectConfig>;
+  return Boolean(cfg.readOnly) || !prof.capabilities.canDml;
+}
+

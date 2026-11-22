@@ -18,6 +18,13 @@ export interface ConnectionHealthInfo {
   checkedAt?: string;
 }
 
+export interface FavoriteTableEntry {
+  profileId: string;
+  dbName: string;
+  tableName: string;
+  isRedis?: boolean;
+}
+
 const props = defineProps<{
   projects: WorkspaceProject[];
   activeProjectId: string;
@@ -33,6 +40,8 @@ const props = defineProps<{
   expandedDatabases: Record<string, boolean>;
   expandedTables: Record<string, boolean>;
   connHealthByProfile?: Record<string, ConnectionHealthInfo>;
+  favorites?: FavoriteTableEntry[];
+  batchTesting?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -74,6 +83,17 @@ const emit = defineEmits<{
   (e: 'truncate-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'drop-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'refresh-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'test-all-connections'): void;
+  (e: 'open-object-search', profile?: ConnectionProfile, dbName?: string): void;
+  (e: 'open-schema-diff', profile?: ConnectionProfile, dbName?: string, tableName?: string): void;
+  (e: 'open-alter-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'open-er-diagram', profile: ConnectionProfile, dbName: string): void;
+  (e: 'open-server-monitor', profile: ConnectionProfile): void;
+  (e: 'dump-sql', profile: ConnectionProfile, dbName: string, tableNames: string[] | null, includeData: boolean): void;
+  (e: 'run-sql-file', profile: ConnectionProfile, dbName: string): void;
+  (e: 'open-redis-new-key', profile: ConnectionProfile, dbName: string): void;
+  (e: 'edit-redis-key', profile: ConnectionProfile, dbName: string, keyName: string): void;
+  (e: 'toggle-favorite', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'copy-text', text: string): void;
 }>();
 
@@ -99,6 +119,19 @@ function connStatusTitle(profile: ConnectionProfile): string {
 const { t } = useI18n();
 const search = ref('');
 const selectedNodeKey = ref('');
+const favoritesCollapsed = ref(false);
+
+function isFavorited(profileId: string, dbName: string, tableName: string): boolean {
+  return Boolean(
+    props.favorites?.some(
+      (f) => f.profileId === profileId && f.dbName === dbName && f.tableName === tableName,
+    ),
+  );
+}
+
+function profileOfFavorite(profileId: string): ConnectionProfile | undefined {
+  return props.connections.find((c) => c.id === profileId);
+}
 
 const ctxMenu = ref<{
   visible: boolean;
@@ -264,6 +297,21 @@ function closeContext() {
         <button class="icon-btn compact" :title="t('importDbeaver')" @click="emit('import-dbeaver', activeProjectId)">
           <IdeIcon name="import" :size="14" />
         </button>
+        <button
+          class="icon-btn compact"
+          title="批量测试当前项目所有数据源连接健康"
+          :disabled="batchTesting"
+          @click="emit('test-all-connections')"
+        >
+          <IdeIcon name="check" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
+          title="在数据库中全局搜索表名、字段名与 Redis Key"
+          @click="emit('open-object-search')"
+        >
+          <IdeIcon name="search" :size="13" />
+        </button>
         <button class="icon-btn compact" title="全部折叠" @click="emit('collapse-all-tree')">
           <IdeIcon name="collapse-all" :size="13" />
         </button>
@@ -282,6 +330,71 @@ function closeContext() {
     </div>
 
     <div class="tw-body">
+      <!-- Pinned Favorite Tables / Keys -->
+      <div v-if="favorites && favorites.length > 0" class="favorites-section">
+        <div
+          class="tree-row project-tree-row"
+          @click="favoritesCollapsed = !favoritesCollapsed"
+        >
+          <span class="tree-chevron">
+            <IdeIcon :name="favoritesCollapsed ? 'chevron-right' : 'chevron-down'" :size="12" />
+          </span>
+          <span style="font-size: 12px">⭐</span>
+          <span class="tree-label" style="font-weight: 700">常用收藏</span>
+          <span class="pill pill-neutral">{{ favorites.length }}</span>
+        </div>
+        <div v-if="!favoritesCollapsed">
+          <div
+            v-for="fav in favorites"
+            :key="`fav-${fav.profileId}-${fav.dbName}-${fav.tableName}`"
+            class="tree-row favorite-row"
+            :title="`${profileOfFavorite(fav.profileId)?.name || fav.profileId} / ${fav.dbName}.${fav.tableName}`"
+            @click="
+              (() => {
+                const prof = profileOfFavorite(fav.profileId);
+                if (prof) emit('select-table', prof, fav.dbName, fav.tableName);
+              })()
+            "
+            @dblclick="
+              (() => {
+                const prof = profileOfFavorite(fav.profileId);
+                if (prof) emit('query-top100', prof, fav.dbName, fav.tableName);
+              })()
+            "
+          >
+            <IdeIcon :name="fav.isRedis ? 'key' : 'table'" :size="13" />
+            <span class="tree-label">{{ fav.tableName }}</span>
+            <span class="tree-meta">{{ fav.dbName }}</span>
+            <span class="tree-hover-actions" @click.stop>
+              <button
+                class="icon-btn compact"
+                title="查询前100行 / 读取 Key"
+                @click="
+                  (() => {
+                    const prof = profileOfFavorite(fav.profileId);
+                    if (prof) emit('query-top100', prof, fav.dbName, fav.tableName);
+                  })()
+                "
+              >
+                <IdeIcon name="run" :size="11" color="var(--run-green-bright)" />
+              </button>
+              <button
+                class="icon-btn compact"
+                title="取消收藏"
+                @click="
+                  (() => {
+                    const prof = profileOfFavorite(fav.profileId);
+                    if (prof) emit('toggle-favorite', prof, fav.dbName, fav.tableName);
+                  })()
+                "
+              >
+                ×
+              </button>
+            </span>
+          </div>
+        </div>
+      </div>
+
       <div v-if="visibleProjects.length === 0" class="empty-state">
         <div>暂无匹配的项目或数据源</div>
         <div style="display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap">
@@ -563,6 +676,9 @@ function closeContext() {
         <button class="dropdown-item" @click="emit('test-profile', ctxMenu.profile)">
           <span>{{ t('btnTest') }}</span>
         </button>
+        <button class="dropdown-item" @click="emit('open-server-monitor', ctxMenu.profile)">
+          <span>📊 服务器监控与活跃会话管理...</span>
+        </button>
         <button class="dropdown-item" @click="emit('edit-profile', ctxMenu.profile)">
           <span>{{ t('btnEdit') }}</span>
         </button>
@@ -606,12 +722,33 @@ function closeContext() {
         <button class="dropdown-item" @click="emit('new-console-for-db', ctxMenu.profile, ctxMenu.dbName)">
           <span>{{ isRedisProfile(ctxMenu.profile) ? '新建此库 Redis 命令控制台' : '新建此库 SQL 查询控制台' }}</span>
         </button>
-        <template v-if="!isRedisProfile(ctxMenu.profile)">
+        <button class="dropdown-item" @click="emit('open-object-search', ctxMenu.profile, ctxMenu.dbName)">
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '🔍 按模式检索 Key...' : '🔍 在此库中查找表/字段...' }}</span>
+        </button>
+        <template v-if="isRedisProfile(ctxMenu.profile)">
+          <button class="dropdown-item" @click="emit('open-redis-new-key', ctxMenu.profile, ctxMenu.dbName)">
+            <span>➕ 可视化新建 Redis Key...</span>
+          </button>
+        </template>
+        <template v-else>
           <button class="dropdown-item" @click="emit('create-table', ctxMenu.profile, ctxMenu.dbName)">
             <span>✨ 可视化新建数据表...</span>
           </button>
+          <button class="dropdown-item" @click="emit('open-er-diagram', ctxMenu.profile, ctxMenu.dbName)">
+            <span>🗺️ 查看数据库 ER 关系图...</span>
+          </button>
+          <div class="dropdown-sep" />
+          <button class="dropdown-item" @click="emit('dump-sql', ctxMenu.profile, ctxMenu.dbName, null, false)">
+            <span>💾 转储 SQL 文件（仅结构 .sql）...</span>
+          </button>
+          <button class="dropdown-item" @click="emit('dump-sql', ctxMenu.profile, ctxMenu.dbName, null, true)">
+            <span>💾 转储 SQL 文件（结构 + 数据 .sql）...</span>
+          </button>
           <button class="dropdown-item" @click="emit('export-db-ddl', ctxMenu.profile, ctxMenu.dbName)">
-            <span>📄 导出当前库全量建表 DDL</span>
+            <span>📄 查看全库建表 DDL（新控制台）</span>
+          </button>
+          <button class="dropdown-item" @click="emit('run-sql-file', ctxMenu.profile, ctxMenu.dbName)">
+            <span>▶️ 运行本地 SQL 文件...</span>
           </button>
         </template>
         <div class="dropdown-sep" />
@@ -645,8 +782,47 @@ function closeContext() {
         >
           <span>{{ isRedisProfile(ctxMenu.profile) ? '在右侧查看 Key 属性结构' : t('ctxViewStructure') }}</span>
         </button>
-        <template v-if="!isRedisProfile(ctxMenu.profile)">
+        <button
+          class="dropdown-item"
+          @click="emit('toggle-favorite', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>
+            {{
+              isFavorited(ctxMenu.profile.id, ctxMenu.dbName, ctxMenu.tableName)
+                ? '★ 取消常用收藏'
+                : '⭐ 加入常用收藏'
+            }}
+          </span>
+        </button>
+        <template v-if="isRedisProfile(ctxMenu.profile)">
           <div class="dropdown-sep" />
+          <button
+            class="dropdown-item"
+            @click="emit('edit-redis-key', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>✏️ 可视化编辑 Key 与 TTL...</span>
+          </button>
+        </template>
+        <template v-else>
+          <div class="dropdown-sep" />
+          <button
+            class="dropdown-item"
+            @click="emit('open-alter-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>🛠️ 可视化修改表结构...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('open-schema-diff', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>⚖️ 表结构对比与同步...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('dump-sql', ctxMenu.profile, ctxMenu.dbName, [ctxMenu.tableName], true)"
+          >
+            <span>💾 转储此表 SQL（结构 + 数据 .sql）...</span>
+          </button>
           <button
             class="dropdown-item"
             @click="emit('import-table-data', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
