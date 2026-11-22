@@ -20,8 +20,9 @@ use pacer_core::{
     WorkspaceFileEntry, WorkspaceProject,
 };
 use pacer_dbeaver_io::{
-    build_jdbc_url, discover_local_dbeaver_files, export_to_dbeaver_json,
-    import_dbeaver_from_path, parse_connection_url, parse_dbeaver_text, ImportedDbeaverConnection,
+    build_jdbc_url, discover_local_dbeaver_files, export_to_dbeaver_dbp_bytes,
+    export_to_dbeaver_folder, export_to_dbeaver_json_with_folders, import_dbeaver_from_path,
+    parse_connection_url, parse_dbeaver_text, write_xlsx_file, ImportedDbeaverConnection,
 };
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
 use pacer_sql_ast::{
@@ -152,6 +153,59 @@ impl AppState {
             .find(|p| p.id == profile_id)
             .cloned()
             .ok_or_else(|| format!("connection profile not found: {profile_id}"))
+    }
+
+    fn collect_passwords(&self) -> HashMap<String, String> {
+        let mut merged = self
+            .persisted_passwords
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        if let Ok(session) = self.passwords.read() {
+            for (k, v) in session.iter() {
+                if !v.is_empty() {
+                    merged.insert(k.clone(), v.clone());
+                }
+            }
+        }
+        merged
+    }
+
+    fn folder_map_by_profile(&self) -> HashMap<String, String> {
+        let proj_names: HashMap<String, String> = self
+            .projects
+            .read()
+            .map(|list| list.iter().map(|p| (p.id.clone(), p.name.clone())).collect())
+            .unwrap_or_default();
+        let mut out = HashMap::new();
+        if let Ok(conns) = self.connections.read() {
+            for p in conns.iter() {
+                if let Some(ref pid) = p.project_id {
+                    if let Some(pname) = proj_names.get(pid) {
+                        out.insert(p.id.clone(), pname.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    fn filter_profiles(
+        &self,
+        profile_ids: Option<Vec<String>>,
+    ) -> Result<Vec<ConnectionProfile>, String> {
+        let all = self
+            .connections
+            .read()
+            .map_err(|e| e.to_string())?
+            .clone();
+        Ok(match profile_ids {
+            Some(ids) if !ids.is_empty() => all
+                .into_iter()
+                .filter(|p| ids.iter().any(|id| id == &p.id))
+                .collect(),
+            _ => all,
+        })
     }
 
     async fn merge_imported_dbeaver(
@@ -954,26 +1008,205 @@ pub async fn import_dbeaver_text_cmd(
     state.merge_imported_dbeaver(parsed, project_id).await
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportResultDto {
+    pub path: String,
+    pub count: usize,
+    pub included_passwords: bool,
+    pub files: Vec<String>,
+}
+
 #[tauri::command]
 pub fn export_dbeaver_json_cmd(
     state: State<'_, AppState>,
     profile_ids: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let all = state
-        .connections
-        .read()
-        .map_err(|e| e.to_string())?
-        .clone();
+    let selected = state.filter_profiles(profile_ids)?;
+    let folders = state.folder_map_by_profile();
+    export_to_dbeaver_json_with_folders(&selected, &folders).map_err(map_err)
+}
 
-    let selected: Vec<ConnectionProfile> = match profile_ids {
-        Some(ids) if !ids.is_empty() => all
-            .into_iter()
-            .filter(|p| ids.iter().any(|id| id == &p.id))
-            .collect(),
-        _ => all,
+#[tauri::command]
+pub fn export_dbeaver_dbp_cmd(
+    state: State<'_, AppState>,
+    path: String,
+    include_passwords: bool,
+    profile_ids: Option<Vec<String>>,
+) -> Result<ExportResultDto, String> {
+    let selected = state.filter_profiles(profile_ids)?;
+    let folders = state.folder_map_by_profile();
+    let passwords = if include_passwords {
+        state.collect_passwords()
+    } else {
+        HashMap::new()
+    };
+    let bytes = export_to_dbeaver_dbp_bytes(
+        &selected,
+        &passwords,
+        &folders,
+        include_passwords,
+        "PacerExport",
+    )
+    .map_err(map_err)?;
+
+    let out_path = PathBuf::from(&path);
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
+
+    Ok(ExportResultDto {
+        path: path.clone(),
+        count: selected.len(),
+        included_passwords: include_passwords,
+        files: vec![path],
+    })
+}
+
+#[tauri::command]
+pub fn export_dbeaver_folder_cmd(
+    state: State<'_, AppState>,
+    dir_path: String,
+    include_passwords: bool,
+    profile_ids: Option<Vec<String>>,
+) -> Result<ExportResultDto, String> {
+    let selected = state.filter_profiles(profile_ids)?;
+    let folders = state.folder_map_by_profile();
+    let passwords = if include_passwords {
+        state.collect_passwords()
+    } else {
+        HashMap::new()
+    };
+    let files = export_to_dbeaver_folder(
+        Path::new(&dir_path),
+        &selected,
+        &passwords,
+        &folders,
+        include_passwords,
+    )
+    .map_err(map_err)?;
+
+    Ok(ExportResultDto {
+        path: dir_path,
+        count: selected.len(),
+        included_passwords: include_passwords,
+        files,
+    })
+}
+
+#[tauri::command]
+pub fn export_connections_xlsx_cmd(
+    state: State<'_, AppState>,
+    path: String,
+    include_passwords: bool,
+    profile_ids: Option<Vec<String>>,
+) -> Result<ExportResultDto, String> {
+    let selected = state.filter_profiles(profile_ids)?;
+    let folders = state.folder_map_by_profile();
+    let passwords = if include_passwords {
+        state.collect_passwords()
+    } else {
+        HashMap::new()
     };
 
-    export_to_dbeaver_json(&selected).map_err(map_err)
+    let columns = vec![
+        "项目".to_string(),
+        "数据源名称".to_string(),
+        "引擎类型".to_string(),
+        "环境".to_string(),
+        "主机".to_string(),
+        "端口".to_string(),
+        "默认库".to_string(),
+        "用户名".to_string(),
+        "密码".to_string(),
+        "连接 URL".to_string(),
+        "只读模式".to_string(),
+        "备注".to_string(),
+    ];
+
+    let mut rows = Vec::with_capacity(selected.len());
+    for p in &selected {
+        let mut r = BTreeMap::new();
+        let direct = match &p.mode {
+            ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } => Some(d),
+            ConnectionMode::PacerManaged { .. } => None,
+        };
+        let proj = folders.get(&p.id).cloned().unwrap_or_default();
+        let host = direct
+            .and_then(|d| d.host.clone())
+            .or_else(|| p.fingerprint.host.clone())
+            .unwrap_or_default();
+        let port = direct
+            .and_then(|d| d.port)
+            .or(p.fingerprint.port)
+            .map(|n| serde_json::Value::from(n as i64))
+            .unwrap_or(serde_json::Value::String(String::new()));
+        let db = direct
+            .and_then(|d| d.database.clone())
+            .or_else(|| p.fingerprint.database.clone())
+            .unwrap_or_default();
+        let username = direct
+            .and_then(|d| d.username.clone())
+            .unwrap_or_default();
+        let pwd = if include_passwords {
+            passwords.get(&p.id).cloned().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let url = direct.map(|d| d.jdbc_url.clone()).unwrap_or_default();
+        let read_only = if direct.is_some_and(|d| d.read_only) {
+            "是"
+        } else {
+            "否"
+        };
+        let env_str = match p.env {
+            EnvLevel::Dev => "DEV",
+            EnvLevel::Test => "TEST",
+            EnvLevel::Prod => "PROD",
+            EnvLevel::Unknown => "UNKNOWN",
+        };
+
+        r.insert("项目".to_string(), serde_json::Value::String(proj));
+        r.insert("数据源名称".to_string(), serde_json::Value::String(p.name.clone()));
+        r.insert(
+            "引擎类型".to_string(),
+            serde_json::Value::String(p.db_type.as_pacer_db_type().to_string()),
+        );
+        r.insert("环境".to_string(), serde_json::Value::String(env_str.to_string()));
+        r.insert("主机".to_string(), serde_json::Value::String(host));
+        r.insert("端口".to_string(), port);
+        r.insert("默认库".to_string(), serde_json::Value::String(db));
+        r.insert("用户名".to_string(), serde_json::Value::String(username));
+        r.insert("密码".to_string(), serde_json::Value::String(pwd));
+        r.insert("连接 URL".to_string(), serde_json::Value::String(url));
+        r.insert("只读模式".to_string(), serde_json::Value::String(read_only.to_string()));
+        r.insert(
+            "备注".to_string(),
+            serde_json::Value::String(p.comment.clone().unwrap_or_default()),
+        );
+        rows.push(r);
+    }
+
+    let count = write_xlsx_file(Path::new(&path), "数据源账号清单", &columns, &rows)
+        .map_err(map_err)?;
+
+    Ok(ExportResultDto {
+        path: path.clone(),
+        count,
+        included_passwords: include_passwords,
+        files: vec![path],
+    })
+}
+
+#[tauri::command]
+pub fn export_rows_xlsx_cmd(
+    path: String,
+    sheet_name: String,
+    columns: Vec<String>,
+    rows: Vec<BTreeMap<String, serde_json::Value>>,
+) -> Result<usize, String> {
+    write_xlsx_file(Path::new(&path), &sheet_name, &columns, &rows).map_err(map_err)
 }
 
 #[tauri::command]

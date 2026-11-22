@@ -223,6 +223,15 @@ jobs:
             - **macOS `.app` 安全工作空间策略**：在 `/Applications`、`AppTranslocation` 沙盒或只读挂载卷启动时自动落盘至标准 `~/Library/Application Support/cn.fwpt.pacer`（绝不向 `.app` 包内部写入文件）；若将 `Pacer.app` 放在用户自定义可写目录，则优先在同级创建便携 `pacer-workspace/`。
             - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
 
+            ### v0.9.5 新增与优化 / What's New in v0.9.5
+            - **连接账号导出给 DBeaver（含加密账号密码）**：
+              - 支持将 Pacer 中保存的数据库连接配置与账号密码一键导出为标准 DBeaver `.dbp` 项目归档（`data-sources.json` + AES-128-CBC 加密 `credentials-config.json`）或 `.dbeaver` 目录文件，同时支持项目树右键导出单个连接或整组项目，在 DBeaver 中通过「文件 → 导入 → DBeaver → 项目」即可完整还原连接与凭据。
+            - **原生 Excel (`.xlsx`) 导出与长整数防科学计数法**：
+              - 结果集网格与数据源账号管理全面支持导出真 `.xlsx` 工作簿（冻结首行、自适应列宽）。
+              - Rust 驱动查询层对超出 JS 安全整数精度（`2^53 - 1`）的 `BIGINT` / `BIGINT UNSIGNED` 自动保持无损十进制字符串传输，`.xlsx` 写入器将所有文本及 11 位及以上长整数（如雪花 ID、手机号、卡号、订单号）显式写入为文本单元格（`numFmtId=49` `@`），彻底杜绝科学计数法（`1.89E+18`）与精度丢失。
+            - **实时红 / 绿连接健康状态指示点**：
+              - 在左侧数据库树、顶部连接栏与连接设置弹窗「测试连接」区新增实时状态指示点：**绿色**表示连接测试或操作正常可用，**红色**表示无法连接或认证失败（悬停查看详情），**琥珀色闪烁**表示正在探测，**空心灰圈**表示尚未检测。
+
             ### v0.9.4 新增与优化 / What's New in v0.9.4
             - **原生 Redis 数据库直连与交互查询支持**：
               - 新增纯 Rust 异步 RESP2 + TLS (`redis://` / `rediss://`) 原生连接驱动（支持密码与 Redis 6+ ACL 多用户认证、`db0..db15` 键空间键值统计与只读保护）。

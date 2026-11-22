@@ -415,7 +415,7 @@ fn decode_sqlite_cell(row: &SqliteRow, idx: usize) -> JsonValue {
     match type_name.as_str() {
         "INTEGER" | "INT" => row
             .try_get::<i64, _>(idx)
-            .map(JsonValue::from)
+            .map(crate::i64_to_json)
             .unwrap_or(JsonValue::Null),
         "REAL" | "FLOAT" | "DOUBLE" => row
             .try_get::<f64, _>(idx)
@@ -433,7 +433,7 @@ fn decode_sqlite_cell(row: &SqliteRow, idx: usize) -> JsonValue {
             .unwrap_or(JsonValue::Null),
         _ => {
             if let Ok(v) = row.try_get::<i64, _>(idx) {
-                JsonValue::from(v)
+                crate::i64_to_json(v)
             } else if let Ok(v) = row.try_get::<f64, _>(idx) {
                 serde_json::Number::from_f64(v)
                     .map(JsonValue::Number)

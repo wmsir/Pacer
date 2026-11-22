@@ -145,6 +145,10 @@ const emit = defineEmits<{
   (e: 'import-dbeaver-path', path: string, includePasswords: boolean): void;
   (e: 'import-dbeaver-text', text: string): void;
   (e: 'export-dbeaver-json'): void;
+  (e: 'export-dbeaver-dbp', includePasswords: boolean): void;
+  (e: 'export-dbeaver-folder', includePasswords: boolean): void;
+  (e: 'export-connections-xlsx', includePasswords: boolean): void;
+  (e: 'test-profile-result', profileId: string, ok: boolean, message: string, latencyMs?: number): void;
   (e: 'reload-encoding', encoding: string): void;
   (e: 'convert-encoding', encoding: string, hasBom: boolean, lineEnding: 'CRLF' | 'LF'): void;
   (e: 'confirm-danger'): void;
@@ -870,13 +874,18 @@ async function refreshLiveSchemas() {
     const draft = buildDraftPayload();
     const pwd = connForm.password.length > 0 ? connForm.password : null;
     fetchedSchemas.value = await listDatabasesDraft(draft, pwd);
-    testResult.value = {
-      ok: true,
-      text: `已加载 ${fetchedSchemas.value.length} 个数据库 / Schema`,
-    };
+    const msg = `已加载 ${fetchedSchemas.value.length} 个数据库 / Schema`;
+    testResult.value = { ok: true, text: msg };
+    if (connForm.id) {
+      emit('test-profile-result', connForm.id, true, msg);
+    }
     bannerExpanded.value = false;
   } catch (err) {
-    testResult.value = { ok: false, text: String(err) };
+    const msg = String(err);
+    testResult.value = { ok: false, text: msg };
+    if (connForm.id) {
+      emit('test-profile-result', connForm.id, false, msg);
+    }
     bannerExpanded.value = false;
   } finally {
     loadingSchemas.value = false;
@@ -899,12 +908,23 @@ async function runInlineTestConnection() {
     const ping = await testConnectionDraft(draft, pwd);
     if (ping.success) {
       const label = formatServerVersion(ping.serverVersion, ping.message);
-      testResult.value = { ok: true, text: `${label} (${ping.latencyMs} ms)` };
+      const text = `${label} (${ping.latencyMs} ms)`;
+      testResult.value = { ok: true, text };
+      if (connForm.id) {
+        emit('test-profile-result', connForm.id, true, label, ping.latencyMs);
+      }
     } else {
       testResult.value = { ok: false, text: ping.message };
+      if (connForm.id) {
+        emit('test-profile-result', connForm.id, false, ping.message);
+      }
     }
   } catch (err) {
-    testResult.value = { ok: false, text: String(err) };
+    const msg = String(err);
+    testResult.value = { ok: false, text: msg };
+    if (connForm.id) {
+      emit('test-profile-result', connForm.id, false, msg);
+    }
   } finally {
     testingDraft.value = false;
   }
@@ -1189,6 +1209,8 @@ async function browseDbeaverFolder() {
     emit('notify', String(err));
   }
 }
+
+const exportIncludePasswords = ref(true);
 
 async function copyExportedJson() {
   if (!props.exportedJson) return;
@@ -2498,11 +2520,15 @@ function runImportLiveTemplates() {
         :class="testingDraft ? 'muted' : testResult?.ok ? 'ok' : 'err'"
       >
         <div class="conn-banner-head">
-          <span class="conn-banner-summary">
-            <template v-if="testingDraft">⏳ 正在测试连接连通性...</template>
-            <template v-else-if="testResult?.ok">✓ {{ testResult.text }}</template>
+          <span class="conn-banner-summary" style="display: inline-flex; align-items: center; gap: 7px">
+            <span
+              class="conn-status-dot"
+              :class="testingDraft ? 'testing' : testResult?.ok ? 'ok' : 'error'"
+            />
+            <template v-if="testingDraft">正在测试连接连通性...</template>
+            <template v-else-if="testResult?.ok">{{ testResult.text }}</template>
             <template v-else>
-              <strong>⚠ Error:</strong> {{ testResult?.text }}
+              <span><strong>连接失败：</strong>{{ testResult?.text }}</span>
             </template>
           </span>
           <div style="display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0">
@@ -2534,6 +2560,11 @@ function runImportLiveTemplates() {
       <!-- Footer: Left Test Connection + Engine label | Right OK / Cancel / Apply -->
       <div class="conn-modal-footer">
         <div class="conn-test-zone">
+          <span
+            class="conn-status-dot"
+            :class="testingDraft ? 'testing' : testResult ? (testResult.ok ? 'ok' : 'error') : 'unknown'"
+            :title="testingDraft ? '正在测试' : testResult ? (testResult.ok ? '连接正常' : '无法连接') : '未测试'"
+          />
           <button
             class="conn-link-btn"
             style="font-weight: 600"
@@ -2698,31 +2729,65 @@ function runImportLiveTemplates() {
         </div>
       </div>
 
-      <!-- Export as DBeaver data-sources.json -->
+      <!-- Export Pacer Connections & Credentials for DBeaver / Excel -->
       <div style="border-top: 1px solid var(--border); padding-top: 12px">
         <div
           style="
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 8px;
             margin-bottom: 8px;
           "
         >
           <span style="font-size: 12px; font-weight: 600">
-            {{ t('exportDbeaver') }}（导出为标准 data-sources.json，不含明文密码）
+            导出 Pacer 数据源与账号凭据（给 DBeaver / Excel 使用）
           </span>
-          <div style="display: flex; gap: 6px">
-            <button class="btn btn-sm" :disabled="busy" @click="emit('export-dbeaver-json')">
-              {{ t('exportGenBtn') }}
-            </button>
-            <button
-              v-if="exportedJson"
-              class="btn btn-sm btn-primary"
-              @click="copyExportedJson"
-            >
-              {{ t('copyJson') }}
-            </button>
-          </div>
+          <label
+            style="display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; cursor: pointer"
+          >
+            <input v-model="exportIncludePasswords" type="checkbox" />
+            <span>包含已保存的账号密码（DBeaver 格式自动加密）</span>
+          </label>
+        </div>
+
+        <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px">
+          <button
+            class="btn btn-sm btn-primary"
+            :disabled="busy"
+            @click="emit('export-dbeaver-dbp', exportIncludePasswords)"
+          >
+            📦 导出 DBeaver 项目包 (.dbp)
+          </button>
+          <button
+            class="btn btn-sm"
+            :disabled="busy"
+            @click="emit('export-dbeaver-folder', exportIncludePasswords)"
+          >
+            📁 导出 DBeaver 目录 (.dbeaver)
+          </button>
+          <button
+            class="btn btn-sm"
+            :disabled="busy"
+            @click="emit('export-connections-xlsx', exportIncludePasswords)"
+          >
+            📊 导出账号清单 Excel (.xlsx)
+          </button>
+          <button class="btn btn-sm" :disabled="busy" @click="emit('export-dbeaver-json')">
+            {{ t('exportGenBtn') }}
+          </button>
+          <button
+            v-if="exportedJson"
+            class="btn btn-sm"
+            @click="copyExportedJson"
+          >
+            {{ t('copyJson') }}
+          </button>
+        </div>
+
+        <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px">
+          提示：在 DBeaver 中选择「文件 → 导入 → DBeaver → 项目」打开导出的 `.dbp` 归档，即可完整还原连接分组、用户名与密码。
         </div>
         <pre v-if="exportedJson" class="code-viewer" style="max-height: 170px">{{ exportedJson }}</pre>
       </div>

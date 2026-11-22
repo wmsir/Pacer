@@ -501,7 +501,7 @@ fn decode_pg_cell(row: &PgRow, idx: usize) -> JsonValue {
             .unwrap_or(JsonValue::Null),
         "INT8" => row
             .try_get::<i64, _>(idx)
-            .map(JsonValue::from)
+            .map(crate::i64_to_json)
             .unwrap_or(JsonValue::Null),
         "FLOAT4" => row
             .try_get::<f32, _>(idx)
@@ -541,7 +541,7 @@ fn decode_pg_cell(row: &PgRow, idx: usize) -> JsonValue {
         _ => row
             .try_get::<String, _>(idx)
             .map(JsonValue::String)
-            .or_else(|_| row.try_get::<i64, _>(idx).map(JsonValue::from))
+            .or_else(|_| row.try_get::<i64, _>(idx).map(crate::i64_to_json))
             .or_else(|_| {
                 row.try_get::<f64, _>(idx).map(|f| {
                     serde_json::Number::from_f64(f)

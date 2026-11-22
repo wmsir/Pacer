@@ -546,12 +546,12 @@ fn decode_mysql_cell(row: &MySqlRow, idx: usize) -> JsonValue {
             .unwrap_or(JsonValue::Null),
         "TINYINT" | "SMALLINT" | "INT" | "MEDIUMINT" | "BIGINT" => row
             .try_get::<i64, _>(idx)
-            .map(JsonValue::from)
+            .map(crate::i64_to_json)
             .unwrap_or(JsonValue::Null),
         "TINYINT UNSIGNED" | "SMALLINT UNSIGNED" | "INT UNSIGNED" | "MEDIUMINT UNSIGNED"
         | "BIGINT UNSIGNED" => row
             .try_get::<u64, _>(idx)
-            .map(JsonValue::from)
+            .map(crate::u64_to_json)
             .unwrap_or(JsonValue::Null),
         "FLOAT" | "DOUBLE" => row
             .try_get::<f64, _>(idx)
@@ -587,7 +587,7 @@ fn decode_mysql_cell(row: &MySqlRow, idx: usize) -> JsonValue {
             .map(JsonValue::String)
             .or_else(|_| {
                 row.try_get::<i64, _>(idx)
-                    .map(JsonValue::from)
+                    .map(crate::i64_to_json)
             })
             .or_else(|_| {
                 row.try_get::<f64, _>(idx).map(|f| {

@@ -97,7 +97,7 @@ impl RespValue {
     fn to_json_value(&self) -> JsonValue {
         match self {
             Self::SimpleString(s) | Self::Error(s) => JsonValue::String(s.clone()),
-            Self::Integer(n) => JsonValue::from(*n),
+            Self::Integer(n) => crate::i64_to_json(*n),
             Self::Null => JsonValue::Null,
             Self::BulkBytes(bytes) => JsonValue::String(decode_bytes_display(bytes)),
             Self::Array(items) => JsonValue::Array(items.iter().map(Self::to_json_value).collect()),

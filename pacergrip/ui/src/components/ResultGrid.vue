@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useI18n } from '../i18n';
-import type {
-  ConnectionProfile,
-  EnvLevel,
-  QueryHistoryEntry,
-  QuerySummary,
-  ScriptAnalysis,
-  WorkspaceProject,
+import {
+  exportRowsXlsx,
+  isTauriRuntime,
+  pickSaveXlsxPath,
+  type ConnectionProfile,
+  type EnvLevel,
+  type QueryHistoryEntry,
+  type QuerySummary,
+  type ScriptAnalysis,
+  type WorkspaceProject,
 } from '../api/ipc';
 import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
@@ -650,6 +653,31 @@ function doExportCsv() {
     'text/csv;charset=utf-8',
   );
   emit('notify', '已导出 UTF-8 BOM CSV 文件（Excel 打开不乱码）');
+}
+
+async function doExportXlsx() {
+  const res = currentResult.value;
+  if (!res) return;
+  if (!isTauriRuntime()) {
+    emit('notify', '真 Excel (.xlsx) 导出需在桌面端运行时执行；可先使用 CSV / TSV 导出');
+    return;
+  }
+  const cols = visibleColumns.value;
+  const rows = displayedRows.value.map((r) => r.row);
+  const safeBase = (res.sourceTable || res.title || 'query_result')
+    .replace(/[^\w.\-\u4e00-\u9fa5]/g, '_')
+    .slice(0, 48);
+  try {
+    const savePath = await pickSaveXlsxPath(`${safeBase || 'query_result'}.xlsx`);
+    if (!savePath) return;
+    const count = await exportRowsXlsx(savePath, safeBase || 'QueryResult', cols, rows);
+    emit(
+      'notify',
+      `已导出 Excel (.xlsx)：${count} 行（长整数已按文本防科学计数法）-> ${savePath}`,
+    );
+  } catch (err) {
+    emit('notify', `导出 Excel (.xlsx) 失败: ${String(err)}`);
+  }
 }
 
 function doExportJson() {
@@ -1416,7 +1444,14 @@ const astWarnings = computed(
                 >
                   导出 / 复制 ▾
                 </button>
-                <div v-if="showExportMenu" class="dropdown-menu align-right" style="min-width: 195px">
+                <div v-if="showExportMenu" class="dropdown-menu align-right" style="min-width: 225px">
+                  <button
+                    class="dropdown-item"
+                    title="原生生成 .xlsx 工作簿；11位及以上长整数（如雪花ID/手机号）自动按文本写入，彻底避免科学计数法"
+                    @click="showExportMenu = false; void doExportXlsx()"
+                  >
+                    <span>📊 导出为 Excel (.xlsx)</span>
+                  </button>
                   <button class="dropdown-item" @click="showExportMenu = false; doCopyTsv()">
                     <span>复制为 Excel (TSV)</span>
                   </button>

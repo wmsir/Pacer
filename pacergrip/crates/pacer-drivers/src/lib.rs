@@ -15,6 +15,28 @@ pub use postgres::PostgresBackend;
 pub use redis::RedisBackend;
 pub use sqlite::{create_demo_sqlite_db, SqliteBackend};
 
+pub(crate) const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
+
+/// Encodes signed 64-bit integers losslessly for JavaScript / Excel consumers:
+/// numbers exceeding `Number.MAX_SAFE_INTEGER` (2^53 - 1, e.g. 19-digit Snowflake IDs)
+/// are emitted as exact decimal strings so WebView JSON.parse never rounds trailing digits.
+pub(crate) fn i64_to_json(v: i64) -> serde_json::Value {
+    if v.abs() > JS_MAX_SAFE_INTEGER {
+        serde_json::Value::String(v.to_string())
+    } else {
+        serde_json::Value::from(v)
+    }
+}
+
+/// Encodes unsigned 64-bit integers losslessly for JavaScript / Excel consumers.
+pub(crate) fn u64_to_json(v: u64) -> serde_json::Value {
+    if v > JS_MAX_SAFE_INTEGER as u64 {
+        serde_json::Value::String(v.to_string())
+    } else {
+        serde_json::Value::from(v)
+    }
+}
+
 pub(crate) fn resolve_pool_limits(
     options: Option<&ConnectionOptionsConfig>,
 ) -> (u32, Option<Duration>, bool) {
@@ -703,5 +725,23 @@ mod tests {
         assert!(matches!(err, CoreError::PermissionDenied(_)));
 
         server_task.abort();
+    }
+
+    #[test]
+    fn test_long_integer_json_precision_preservation() {
+        assert_eq!(i64_to_json(42), serde_json::json!(42));
+        assert_eq!(i64_to_json(-9_007_199_254_740_991), serde_json::json!(-9_007_199_254_740_991i64));
+        assert_eq!(
+            i64_to_json(1_892_345_678_901_234_567),
+            serde_json::json!("1892345678901234567")
+        );
+        assert_eq!(
+            i64_to_json(-1_892_345_678_901_234_567),
+            serde_json::json!("-1892345678901234567")
+        );
+        assert_eq!(
+            u64_to_json(18_446_744_073_709_551_615),
+            serde_json::json!("18446744073709551615")
+        );
     }
 }

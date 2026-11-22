@@ -11,6 +11,13 @@ import type {
 } from '../api/ipc';
 import IdeIcon, { type IdeIconName } from './IdeIcon.vue';
 
+export interface ConnectionHealthInfo {
+  status: 'ok' | 'error' | 'testing';
+  message?: string;
+  latencyMs?: number;
+  checkedAt?: string;
+}
+
 const props = defineProps<{
   projects: WorkspaceProject[];
   activeProjectId: string;
@@ -25,6 +32,7 @@ const props = defineProps<{
   expandedProfiles: Record<string, boolean>;
   expandedDatabases: Record<string, boolean>;
   expandedTables: Record<string, boolean>;
+  connHealthByProfile?: Record<string, ConnectionHealthInfo>;
 }>();
 
 const emit = defineEmits<{
@@ -36,6 +44,8 @@ const emit = defineEmits<{
   (e: 'collapse-all-tree'): void;
   (e: 'move-profile-project', profile: ConnectionProfile, projectId: string): void;
   (e: 'import-dbeaver', projectId?: string): void;
+  (e: 'export-dbeaver-profile', profile: ConnectionProfile): void;
+  (e: 'export-dbeaver-project', project: WorkspaceProject): void;
   (e: 'init-demo', projectId?: string): void;
   (e: 'toggle-profile', profile: ConnectionProfile): void;
   (e: 'toggle-database', profile: ConnectionProfile, dbName: string): void;
@@ -66,6 +76,25 @@ const emit = defineEmits<{
   (e: 'refresh-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'copy-text', text: string): void;
 }>();
+
+function connStatusClass(profileId: string): 'ok' | 'error' | 'testing' | 'unknown' {
+  return props.connHealthByProfile?.[profileId]?.status ?? 'unknown';
+}
+
+function connStatusTitle(profile: ConnectionProfile): string {
+  const h = props.connHealthByProfile?.[profile.id];
+  if (!h) {
+    return `${profile.name} (${profile.env}) · 尚未测试连接（点击右侧 ✓ 图标或展开即可检测）`;
+  }
+  if (h.status === 'ok') {
+    const lat = h.latencyMs !== undefined ? ` · ${h.latencyMs}ms` : '';
+    return `${profile.name} · 连接正常可使用${lat}${h.message ? ` (${h.message})` : ''}`;
+  }
+  if (h.status === 'error') {
+    return `${profile.name} · 无法连接：${h.message || '请检查网络、主机端口或认证信息'}`;
+  }
+  return `${profile.name} · 正在测试连接...`;
+}
 
 const { t } = useI18n();
 const search = ref('');
@@ -344,8 +373,20 @@ function closeContext() {
                 <IdeIcon :name="expandedProfiles[p.id] ? 'chevron-down' : 'chevron-right'" :size="12" />
               </span>
               <IdeIcon :name="engineIcon(p.dbType)" :size="14" />
-              <span class="env-dot" :class="p.env" :title="p.env" />
+              <span
+                class="conn-status-dot"
+                :class="connStatusClass(p.id)"
+                :title="connStatusTitle(p)"
+              />
               <span class="tree-label" style="font-weight: 600">{{ p.name }}</span>
+              <span
+                v-if="p.env === 'PROD' || p.env === 'TEST'"
+                class="pill"
+                :class="p.env === 'PROD' ? 'pill-prod' : 'pill-test'"
+                style="font-size: 9px; padding: 0 4px; flex-shrink: 0"
+              >
+                {{ p.env }}
+              </span>
               <span class="tree-meta">{{ engineShort(p.dbType) }}</span>
               <span class="tree-hover-actions" @click.stop>
                 <button class="icon-btn compact" title="刷新数据库列表" @click="emit('refresh-profile', p)">
@@ -497,6 +538,9 @@ function closeContext() {
         <button class="dropdown-item" @click="emit('import-dbeaver', ctxMenu.project.id)">
           <span>导入 DBeaver 连接到此项目...</span>
         </button>
+        <button class="dropdown-item" @click="emit('export-dbeaver-project', ctxMenu.project)">
+          <span>📦 导出此项目数据源给 DBeaver (.dbp)...</span>
+        </button>
         <button class="dropdown-item" @click="emit('edit-project', ctxMenu.project)">
           <span>{{ t('manageProject') }}</span>
         </button>
@@ -524,6 +568,9 @@ function closeContext() {
         </button>
         <button class="dropdown-item" @click="emit('duplicate-profile', ctxMenu.profile)">
           <span>复制数据源配置...</span>
+        </button>
+        <button class="dropdown-item" @click="emit('export-dbeaver-profile', ctxMenu.profile)">
+          <span>📦 导出此账号配置给 DBeaver (.dbp)...</span>
         </button>
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.profile.name)">
           <span>{{ t('ctxCopyName') }}</span>

@@ -11,6 +11,9 @@ import {
   deleteProject,
   executeSql,
   explainSql,
+  exportConnectionsXlsx,
+  exportDbeaverDbp,
+  exportDbeaverFolder,
   exportDbeaverJson,
   extractStatementAtCursor,
   formatSql,
@@ -31,7 +34,10 @@ import {
   listWorkspaceFiles,
   openTextFile,
   pickDirectoryToMount,
+  pickExportFolderPath,
+  pickSaveDbeaverDbpPath,
   pickSaveFilePath,
+  pickSaveXlsxPath,
   pickTextFileToOpen,
   revealInExplorer,
   saveConnection,
@@ -96,7 +102,7 @@ import {
 } from './utils/keymap';
 import { useLiveTemplates, type SqlLiveTemplate } from './utils/liveTemplates';
 import CodeEditor, { type EditorCursorTelemetry } from './components/CodeEditor.vue';
-import DatabaseTree from './components/DatabaseTree.vue';
+import DatabaseTree, { type ConnectionHealthInfo } from './components/DatabaseTree.vue';
 import FileExplorer from './components/FileExplorer.vue';
 import IdeIcon from './components/IdeIcon.vue';
 import ResultGrid, {
@@ -977,9 +983,66 @@ async function handleMoveProfileProject(profile: ConnectionProfile, targetProjec
   }
 }
 
+const connHealthByProfile = reactive<Record<string, ConnectionHealthInfo>>({});
+
+function setConnHealth(
+  profileId: string,
+  status: 'ok' | 'error' | 'testing',
+  message?: string,
+  latencyMs?: number,
+) {
+  connHealthByProfile[profileId] = {
+    status,
+    message,
+    latencyMs,
+    checkedAt: new Date().toLocaleTimeString(),
+  };
+}
+
+function handleModalTestResult(
+  profileId: string,
+  ok: boolean,
+  message: string,
+  latencyMs?: number,
+) {
+  setConnHealth(profileId, ok ? 'ok' : 'error', message, latencyMs);
+}
+
+function connHealthTooltip(profile: ConnectionProfile): string {
+  const h = connHealthByProfile[profile.id];
+  if (!h) return `${profile.name} (${profile.env}) · 尚未检测连接`;
+  if (h.status === 'ok') {
+    const lat = h.latencyMs !== undefined ? ` (${h.latencyMs}ms)` : '';
+    return `${profile.name} · 连接正常可使用${lat}`;
+  }
+  if (h.status === 'error') {
+    return `${profile.name} · 无法连接：${h.message || '请检查配置'}`;
+  }
+  return `${profile.name} · 正在检测连接...`;
+}
+
+function looksLikeConnectionFailure(msg: string): boolean {
+  const low = msg.toLowerCase();
+  return (
+    low.includes('transport error') ||
+    low.includes('connection refused') ||
+    low.includes('connection failed') ||
+    low.includes('timed out') ||
+    low.includes('timeout') ||
+    low.includes('authentication') ||
+    low.includes('access denied') ||
+    low.includes('wrongpass') ||
+    low.includes('closed by remote') ||
+    low.includes('handshake failed') ||
+    low.includes('eof')
+  );
+}
+
 async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFirst = false) {
+  setConnHealth(profile.id, 'testing', '正在加载数据库列表...');
   try {
     const rawDbs = await listDatabases(profile.id);
+    setConnHealth(profile.id, 'ok', `已加载 ${rawDbs.length} 个数据库`);
     rawDatabasesByProfile[profile.id] = rawDbs;
     const cfg = (profile.mode?.config ?? {}) as Partial<DirectConfig>;
     const preferredDb = (cfg.database ?? profile.fingerprint.database ?? '').trim();
@@ -1008,6 +1071,7 @@ async function loadDatabasesForProfile(profile: ConnectionProfile, autoSelectFir
     }
   } catch (err) {
     const msg = String(err);
+    setConnHealth(profile.id, 'error', msg);
     if (msg.toLowerCase().includes('password') || msg.includes('密码') || msg.includes('denied')) {
       passwordProfile.value = profile;
       pendingAfterPassword.value = () => loadDatabasesForProfile(profile, autoSelectFirst);
@@ -1263,9 +1327,11 @@ async function handleSaveConnection(
 
 async function handleTestProfile(profile: ConnectionProfile) {
   busy.value = true;
+  setConnHealth(profile.id, 'testing', '正在测试连接...');
   try {
     const ping = await testConnection(profile.id);
     if (ping.success) {
+      setConnHealth(profile.id, 'ok', ping.serverVersion || ping.message, ping.latencyMs);
       setStatus(`连接测试成功: ${profile.name} (${ping.latencyMs}ms · ${ping.serverVersion ?? ''})`);
       pushProjectLog({
         projectId: profile.projectId,
@@ -1276,6 +1342,7 @@ async function handleTestProfile(profile: ConnectionProfile) {
         summary: `连接测试成功 (${ping.latencyMs} ms · ${ping.serverVersion ?? 'OK'})`,
       });
     } else {
+      setConnHealth(profile.id, 'error', ping.message, ping.latencyMs);
       setStatus(`连接测试失败: ${ping.message}`, true);
       pushProjectLog({
         projectId: profile.projectId,
@@ -1288,6 +1355,7 @@ async function handleTestProfile(profile: ConnectionProfile) {
     }
   } catch (err) {
     const msg = String(err);
+    setConnHealth(profile.id, 'error', msg);
     setStatus(`连接测试出错: ${msg}`, true);
     pushProjectLog({
       projectId: profile.projectId,
@@ -1342,12 +1410,15 @@ async function handleInitDemoSqlite(targetProjectId?: string) {
 
 async function handleSubmitPassword(profileId: string, password: string) {
   busy.value = true;
+  setConnHealth(profileId, 'testing', '正在验证密码...');
   try {
     const ping = await testConnection(profileId, password);
     if (!ping.success) {
+      setConnHealth(profileId, 'error', ping.message, ping.latencyMs);
       setStatus(`认证失败: ${ping.message}`, true);
       return;
     }
+    setConnHealth(profileId, 'ok', ping.serverVersion || ping.message, ping.latencyMs);
     activeModal.value = 'none';
     setStatus(`认证成功 (${ping.latencyMs}ms)`);
     if (pendingAfterPassword.value) {
@@ -1356,7 +1427,9 @@ async function handleSubmitPassword(profileId: string, password: string) {
       await fn();
     }
   } catch (err) {
-    setStatus(`密码认证失败: ${String(err)}`, true);
+    const msg = String(err);
+    setConnHealth(profileId, 'error', msg);
+    setStatus(`密码认证失败: ${msg}`, true);
   } finally {
     busy.value = false;
   }
@@ -1429,6 +1502,94 @@ async function handleExportDbeaverJson() {
   } finally {
     busy.value = false;
   }
+}
+
+async function handleExportDbeaverDbp(
+  includePasswords = true,
+  profileIds?: string[],
+  defaultName = 'pacer-dbeaver-export.dbp',
+) {
+  busy.value = true;
+  try {
+    const savePath = await pickSaveDbeaverDbpPath(defaultName);
+    if (!savePath) return;
+    const res = await exportDbeaverDbp(savePath, includePasswords, profileIds);
+    const pwdTip = res.includedPasswords ? '含 AES 加密账号密码' : '不含密码';
+    setStatus(`已导出 ${res.count} 个数据源到 DBeaver 项目包 (${pwdTip}) -> ${res.path}`);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 导出',
+      level: 'success',
+      summary: `已导出 ${res.count} 个数据源 (${pwdTip})`,
+      detail: res.path,
+    });
+  } catch (err) {
+    setStatus(`导出 DBeaver 项目包失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleExportDbeaverFolder(includePasswords = true, profileIds?: string[]) {
+  busy.value = true;
+  try {
+    const dirPath = await pickExportFolderPath();
+    if (!dirPath) return;
+    const res = await exportDbeaverFolder(dirPath, includePasswords, profileIds);
+    const pwdTip = res.includedPasswords ? '含加密凭证文件 credentials-config.json' : '仅连接结构';
+    setStatus(`已导出 ${res.count} 个数据源至目录 (${pwdTip}) -> ${res.path}`);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'DBeaver 目录导出',
+      level: 'success',
+      summary: `已导出 ${res.count} 个数据源 (${res.files.length} 个文件)`,
+      detail: res.files.join('\n'),
+    });
+  } catch (err) {
+    setStatus(`导出 DBeaver 目录失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleExportConnectionsXlsx(
+  includePasswords = true,
+  profileIds?: string[],
+  defaultName = 'pacer-connections-accounts.xlsx',
+) {
+  busy.value = true;
+  try {
+    const savePath = await pickSaveXlsxPath(defaultName);
+    if (!savePath) return;
+    const res = await exportConnectionsXlsx(savePath, includePasswords, profileIds);
+    setStatus(`已导出 ${res.count} 条数据源账号到 Excel (.xlsx) -> ${res.path}`);
+    pushProjectLog({
+      projectId: activeProjectId.value,
+      profileName: 'Excel 账号导出',
+      level: 'success',
+      summary: `已导出 ${res.count} 条数据源账号到 Excel`,
+      detail: res.path,
+    });
+  } catch (err) {
+    setStatus(`导出 Excel (.xlsx) 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleExportSingleProfileToDbeaver(profile: ConnectionProfile) {
+  const safe = profile.name.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_');
+  await handleExportDbeaverDbp(true, [profile.id], `${safe || 'connection'}.dbp`);
+}
+
+async function handleExportProjectToDbeaver(project: WorkspaceProject) {
+  const ids = connectionsInProjectById(project.id).map((c) => c.id);
+  if (ids.length === 0) {
+    setStatus(`项目「${project.name}」暂无数据源可导出`, true);
+    return;
+  }
+  const safe = project.name.replace(/[^\w.\-\u4e00-\u9fa5]/g, '_');
+  await handleExportDbeaverDbp(true, ids, `${safe || 'project'}-dbeaver.dbp`);
 }
 
 // ==================== Table Actions ====================
@@ -2183,6 +2344,7 @@ async function executeStatementsBatch(
       totalRowsAll += summary.totalRows;
 
       if (summary.success) {
+        setConnHealth(profile.id, 'ok', summary.routeDescription || undefined, summary.durationMs);
         pushProjectLog({
           projectId: targetProjectId,
           profileId: profile.id,
@@ -2198,6 +2360,9 @@ async function executeStatementsBatch(
         });
       } else {
         lastError = summary.errorMessage ?? '执行失败';
+        if (looksLikeConnectionFailure(lastError)) {
+          setConnHealth(profile.id, 'error', lastError);
+        }
         pushProjectLog({
           projectId: targetProjectId,
           profileId: profile.id,
@@ -2236,6 +2401,9 @@ async function executeStatementsBatch(
     await refreshHistory();
   } catch (err) {
     const msg = String(err);
+    if (looksLikeConnectionFailure(msg)) {
+      setConnHealth(profile.id, 'error', msg);
+    }
     pushProjectLog({
       projectId: targetProjectId,
       profileId: profile.id,
@@ -3964,7 +4132,13 @@ onBeforeUnmount(() => {
                 class="dropdown-item"
                 @click="openMenu = null; activeModal = 'import'; handleExportDbeaverJson()"
               >
-                <span>{{ t('exportDbeaver') }}</span>
+                <span>{{ t('exportDbeaver') }} (含账号密码 .dbp)</span>
+              </button>
+              <button
+                class="dropdown-item"
+                @click="openMenu = null; handleExportConnectionsXlsx(true)"
+              >
+                <span>📊 导出数据源账号为 Excel (.xlsx)...</span>
               </button>
               <div class="dropdown-sep" />
               <button class="dropdown-item" @click="openMenu = null; handleInitDemoSqlite()">
@@ -4150,10 +4324,10 @@ onBeforeUnmount(() => {
 
           <span
             v-if="activeProfile"
-            class="env-dot"
-            :class="activeProfile.env"
+            class="conn-status-dot"
+            :class="connHealthByProfile[activeProfile.id]?.status ?? 'unknown'"
             style="margin-left: 4px"
-            :title="activeProfile.env"
+            :title="connHealthTooltip(activeProfile)"
           />
           <select
             :value="activeTab?.profileId || selectedProfileId"
@@ -4395,6 +4569,7 @@ onBeforeUnmount(() => {
           :expanded-profiles="expandedProfiles"
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
+          :conn-health-by-profile="connHealthByProfile"
           @new-project="openProjectModal(null)"
           @edit-project="openProjectModal"
           @delete-project="handleDeleteProject"
@@ -4403,6 +4578,8 @@ onBeforeUnmount(() => {
           @move-profile-project="handleMoveProfileProject"
           @new-connection="openConnectionModal(null, $event)"
           @import-dbeaver="openImportModalForProject($event)"
+          @export-dbeaver-profile="handleExportSingleProfileToDbeaver"
+          @export-dbeaver-project="handleExportProjectToDbeaver"
           @init-demo="handleInitDemoSqlite($event)"
           @toggle-profile="toggleProfileNode"
           @toggle-database="toggleDatabaseNode"
@@ -5644,6 +5821,10 @@ onBeforeUnmount(() => {
       @import-dbeaver-path="handleImportDbeaverPath"
       @import-dbeaver-text="handleImportDbeaverText"
       @export-dbeaver-json="handleExportDbeaverJson"
+      @export-dbeaver-dbp="handleExportDbeaverDbp"
+      @export-dbeaver-folder="handleExportDbeaverFolder"
+      @export-connections-xlsx="handleExportConnectionsXlsx"
+      @test-profile-result="handleModalTestResult"
       @reload-encoding="handleReloadEncoding"
       @convert-encoding="handleConvertEncoding"
       @confirm-danger="confirmDangerExecution"

@@ -260,6 +260,13 @@ export interface QueryHistoryEntry {
   errorMessage?: string | null;
 }
 
+export interface ExportResultDto {
+  path: string;
+  count: number;
+  includedPasswords: boolean;
+  files: string[];
+}
+
 export interface ExtensionMeta {
   id: string;
   name: string;
@@ -375,6 +382,41 @@ export async function pickDbeaverImportFile(): Promise<string | null> {
 }
 
 export async function pickDbeaverFolder(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: true,
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickSaveDbeaverDbpPath(
+  defaultPath = 'pacer-dbeaver-export.dbp',
+): Promise<string | null> {
+  assertTauri();
+  const res = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: 'DBeaver Project Archive (.dbp)', extensions: ['dbp', 'zip'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickSaveXlsxPath(defaultPath = 'export.xlsx'): Promise<string | null> {
+  assertTauri();
+  const res = await dialogSave({
+    defaultPath,
+    filters: [
+      { name: 'Excel 工作簿 (.xlsx)', extensions: ['xlsx'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickExportFolderPath(): Promise<string | null> {
   assertTauri();
   const res = await dialogOpen({
     multiple: false,
@@ -507,6 +549,60 @@ export async function importDbeaverText(
 export async function exportDbeaverJson(profileIds?: string[]): Promise<string> {
   assertTauri();
   return invoke('export_dbeaver_json_cmd', { profileIds: profileIds ?? null });
+}
+
+export async function exportDbeaverDbp(
+  path: string,
+  includePasswords = true,
+  profileIds?: string[],
+): Promise<ExportResultDto> {
+  assertTauri();
+  return invoke('export_dbeaver_dbp_cmd', {
+    path,
+    includePasswords,
+    profileIds: profileIds ?? null,
+  });
+}
+
+export async function exportDbeaverFolder(
+  dirPath: string,
+  includePasswords = true,
+  profileIds?: string[],
+): Promise<ExportResultDto> {
+  assertTauri();
+  return invoke('export_dbeaver_folder_cmd', {
+    dirPath,
+    includePasswords,
+    profileIds: profileIds ?? null,
+  });
+}
+
+export async function exportConnectionsXlsx(
+  path: string,
+  includePasswords = true,
+  profileIds?: string[],
+): Promise<ExportResultDto> {
+  assertTauri();
+  return invoke('export_connections_xlsx_cmd', {
+    path,
+    includePasswords,
+    profileIds: profileIds ?? null,
+  });
+}
+
+export async function exportRowsXlsx(
+  path: string,
+  sheetName: string,
+  columns: string[],
+  rows: Record<string, unknown>[],
+): Promise<number> {
+  assertTauri();
+  return invoke('export_rows_xlsx_cmd', {
+    path,
+    sheetName,
+    columns,
+    rows,
+  });
 }
 
 export async function listDatabases(

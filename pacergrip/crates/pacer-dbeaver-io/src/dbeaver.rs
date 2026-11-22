@@ -1,14 +1,15 @@
-use std::collections::{BTreeMap, HashMap};
-use std::io::{Cursor, Read};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
 use aes::Aes128;
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
-use zip::ZipArchive;
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use pacer_core::{
     CapabilityFlags, ConnectionFingerprint, ConnectionMode, ConnectionProfile, CoreError,
@@ -19,6 +20,7 @@ use pacer_core::{
 use crate::jdbc::{build_jdbc_url, parse_connection_url};
 
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
+type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 
 /// Standard Apache-2.0 local credential encryption key used by DBeaver Community
 /// (`org.jkiss.dbeaver.model.impl.app.LocalSecretController` / `SimpleStringEncrypter`).
@@ -730,9 +732,18 @@ pub fn parse_dbeaver_xml(xml_text: &str) -> CoreResult<Vec<ImportedDbeaverConnec
     Ok(out)
 }
 
-/// Exports PacerGrip connection profiles into a clean DBeaver `data-sources.json` (never includes passwords).
+/// Exports Pacer connection profiles into a clean DBeaver `data-sources.json` (never includes passwords).
 pub fn export_to_dbeaver_json(profiles: &[ConnectionProfile]) -> CoreResult<String> {
+    export_to_dbeaver_json_with_folders(profiles, &HashMap::new())
+}
+
+/// Exports Pacer connection profiles into DBeaver `data-sources.json` preserving folder/project grouping.
+pub fn export_to_dbeaver_json_with_folders(
+    profiles: &[ConnectionProfile],
+    folder_by_profile: &HashMap<String, String>,
+) -> CoreResult<String> {
     let mut connections = Map::new();
+    let mut folders = Map::new();
 
     for p in profiles {
         let direct = match &p.mode {
@@ -784,6 +795,16 @@ pub fn export_to_dbeaver_json(profiles: &[ConnectionProfile]) -> CoreResult<Stri
         conn_obj.insert("provider".to_string(), Value::String(provider.to_string()));
         conn_obj.insert("driver".to_string(), Value::String(driver.to_string()));
         conn_obj.insert("name".to_string(), Value::String(p.name.clone()));
+        if let Some(folder_name) = folder_by_profile
+            .get(&p.id)
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            conn_obj.insert("folder".to_string(), Value::String(folder_name.to_string()));
+            folders
+                .entry(folder_name.to_string())
+                .or_insert_with(|| Value::Object(Map::new()));
+        }
         conn_obj.insert(
             "save-password".to_string(),
             Value::Bool(direct.password_save_mode.as_deref() != Some("never")),
@@ -802,7 +823,7 @@ pub fn export_to_dbeaver_json(profiles: &[ConnectionProfile]) -> CoreResult<Stri
     }
 
     let root = json!({
-        "folders": {},
+        "folders": Value::Object(folders),
         "connections": Value::Object(connections),
         "connection-types": {
             "dev": { "name": "Development", "color": "255,255,255", "auto-commit": true },
@@ -813,6 +834,190 @@ pub fn export_to_dbeaver_json(profiles: &[ConnectionProfile]) -> CoreResult<Stri
 
     serde_json::to_string_pretty(&root)
         .map_err(|e| CoreError::ParseError(format!("导出 DBeaver JSON 失败: {e}")))
+}
+
+/// Encrypts credentials into DBeaver Community's standard `credentials-config.json` format
+/// (`16-byte IV + AES-128-CBC/PKCS7`).
+pub fn encrypt_dbeaver_credentials(
+    creds: &HashMap<String, DbeaverCredentialPair>,
+) -> CoreResult<Vec<u8>> {
+    let mut root = Map::new();
+    let mut sorted_keys: Vec<&String> = creds.keys().collect();
+    sorted_keys.sort();
+
+    for key in sorted_keys {
+        let pair = &creds[key];
+        let mut inner = Map::new();
+        if let Some(ref u) = pair.user {
+            if !u.is_empty() {
+                inner.insert("user".to_string(), Value::String(u.clone()));
+            }
+        }
+        if let Some(ref pwd) = pair.password {
+            inner.insert("password".to_string(), Value::String(pwd.clone()));
+        }
+        if inner.is_empty() {
+            continue;
+        }
+        let mut entry = Map::new();
+        entry.insert("#connection".to_string(), Value::Object(inner));
+        root.insert(key.clone(), Value::Object(entry));
+    }
+
+    let json_bytes = serde_json::to_vec_pretty(&Value::Object(root))
+        .map_err(|e| CoreError::ParseError(format!("序列化 DBeaver 凭证 JSON 失败: {e}")))?;
+
+    let iv = *Uuid::new_v4().as_bytes();
+    let pt_len = json_bytes.len();
+    let mut buf = vec![0u8; pt_len + 16];
+    buf[..pt_len].copy_from_slice(&json_bytes);
+    let enc = Aes128CbcEnc::new_from_slices(&DBEAVER_LOCAL_AES_KEY, &iv)
+        .map_err(|e| CoreError::ParseError(format!("初始化 DBeaver AES 加密器失败: {e}")))?;
+    let ct = enc
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len)
+        .map_err(|e| CoreError::ParseError(format!("加密 DBeaver 凭证失败: {e}")))?;
+
+    let mut out = Vec::with_capacity(16 + ct.len());
+    out.extend_from_slice(&iv);
+    out.extend_from_slice(ct);
+    Ok(out)
+}
+
+fn collect_dbeaver_credential_map(
+    profiles: &[ConnectionProfile],
+    passwords: &HashMap<String, String>,
+) -> HashMap<String, DbeaverCredentialPair> {
+    let mut creds = HashMap::new();
+    for p in profiles {
+        let direct = match &p.mode {
+            ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } => d,
+            ConnectionMode::PacerManaged { .. } => continue,
+        };
+        let key = p.source_uuid.clone().unwrap_or_else(|| p.id.clone());
+        let pwd = passwords.get(&p.id).cloned().filter(|s| !s.is_empty());
+        let user = direct.username.clone().filter(|s| !s.trim().is_empty());
+        if user.is_some() || pwd.is_some() {
+            creds.insert(
+                key,
+                DbeaverCredentialPair {
+                    user,
+                    password: pwd,
+                },
+            );
+        }
+    }
+    creds
+}
+
+fn sanitize_dbp_project_dir(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        .collect();
+    let trimmed = cleaned.trim().trim_matches('.');
+    if trimmed.is_empty() {
+        "PacerExport".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Exports Pacer connections (and optionally AES-encrypted credentials) as an import-ready
+/// DBeaver `.dbp` project archive (`General/.dbeaver/data-sources.json` + `credentials-config.json`).
+pub fn export_to_dbeaver_dbp_bytes(
+    profiles: &[ConnectionProfile],
+    passwords: &HashMap<String, String>,
+    folder_by_profile: &HashMap<String, String>,
+    include_passwords: bool,
+    project_name: &str,
+) -> CoreResult<Vec<u8>> {
+    let proj_dir = sanitize_dbp_project_dir(project_name);
+    let ds_json = export_to_dbeaver_json_with_folders(profiles, folder_by_profile)?;
+    let creds = if include_passwords {
+        collect_dbeaver_credential_map(profiles, passwords)
+    } else {
+        HashMap::new()
+    };
+
+    let project_xml = format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <projectDescription>\n\
+         \t<name>{proj_dir}</name>\n\
+         \t<comment>Exported from Pacer</comment>\n\
+         \t<projects></projects>\n\
+         \t<buildSpec></buildSpec>\n\
+         \t<natures>\n\
+         \t\t<nature>org.jkiss.dbeaver.DBeaverNature</nature>\n\
+         \t</natures>\n\
+         </projectDescription>\n"
+    );
+
+    let mut cursor = Cursor::new(Vec::new());
+    {
+        let mut zw = ZipWriter::new(&mut cursor);
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        let proj_file = format!("{proj_dir}/.project");
+        zw.start_file(&proj_file, opts)
+            .map_err(|e| CoreError::ParseError(format!("写入 .project 失败: {e}")))?;
+        zw.write_all(project_xml.as_bytes())
+            .map_err(|e| CoreError::ParseError(format!("写入 .project 内容失败: {e}")))?;
+
+        let ds_file = format!("{proj_dir}/.dbeaver/data-sources.json");
+        zw.start_file(&ds_file, opts)
+            .map_err(|e| CoreError::ParseError(format!("写入 data-sources.json 失败: {e}")))?;
+        zw.write_all(ds_json.as_bytes())
+            .map_err(|e| CoreError::ParseError(format!("写入 data-sources.json 内容失败: {e}")))?;
+
+        if include_passwords && !creds.is_empty() {
+            let cred_bytes = encrypt_dbeaver_credentials(&creds)?;
+            let cred_file = format!("{proj_dir}/.dbeaver/credentials-config.json");
+            zw.start_file(&cred_file, opts).map_err(|e| {
+                CoreError::ParseError(format!("写入 credentials-config.json 失败: {e}"))
+            })?;
+            zw.write_all(&cred_bytes).map_err(|e| {
+                CoreError::ParseError(format!("写入 credentials-config.json 内容失败: {e}"))
+            })?;
+        }
+
+        zw.finish()
+            .map_err(|e| CoreError::ParseError(format!("生成 .dbp 归档失败: {e}")))?;
+    }
+
+    Ok(cursor.into_inner())
+}
+
+/// Writes `data-sources.json` and encrypted `credentials-config.json` into a target directory for DBeaver.
+pub fn export_to_dbeaver_folder(
+    dir: &Path,
+    profiles: &[ConnectionProfile],
+    passwords: &HashMap<String, String>,
+    folder_by_profile: &HashMap<String, String>,
+    include_passwords: bool,
+) -> CoreResult<Vec<String>> {
+    std::fs::create_dir_all(dir)?;
+    let mut written = Vec::new();
+
+    let ds_json = export_to_dbeaver_json_with_folders(profiles, folder_by_profile)?;
+    let ds_path = dir.join("data-sources.json");
+    std::fs::write(&ds_path, ds_json)?;
+    written.push(ds_path.to_string_lossy().into_owned());
+
+    if include_passwords {
+        let creds = collect_dbeaver_credential_map(profiles, passwords);
+        if !creds.is_empty() {
+            let cred_bytes = encrypt_dbeaver_credentials(&creds)?;
+            let cred_path = dir.join("credentials-config.json");
+            std::fs::write(&cred_path, cred_bytes)?;
+            written.push(cred_path.to_string_lossy().into_owned());
+        }
+    }
+
+    // Deduplicate only if anything ever repeated
+    let mut seen = BTreeSet::new();
+    written.retain(|p| seen.insert(p.clone()));
+    Ok(written)
 }
 
 /// Decrypts DBeaver Community's `credentials-config.json` (AES-128-CBC with 16-byte IV prefix),
@@ -1103,15 +1308,10 @@ fn attr_val(e: &quick_xml::events::BytesStart<'_>, name: &str) -> Option<String>
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
-
-    use cbc::cipher::BlockEncryptMut;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
     use super::*;
-
-    type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 
     #[test]
     fn test_tidb_jdbc_mysql_url_preserves_driver_and_empty_db() {
@@ -1307,5 +1507,64 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].profile.name, "Legacy MySQL");
         assert_eq!(list[0].profile.db_type, DbEngineType::MySql);
+    }
+
+    #[test]
+    fn test_export_dbeaver_dbp_with_credentials_roundtrip() {
+        let mut profiles = parse_dbeaver_json(
+            r#"{
+              "folders": { "核心库": {} },
+              "connections": {
+                "mysql-prod-1": {
+                  "provider": "mysql",
+                  "driver": "mysql8",
+                  "name": "Orders PROD",
+                  "folder": "核心库",
+                  "save-password": true,
+                  "configuration": {
+                    "host": "10.0.1.8",
+                    "port": "3306",
+                    "database": "orders",
+                    "url": "jdbc:mysql://10.0.1.8:3306/orders",
+                    "type": "prod",
+                    "user": "readonly_user"
+                  }
+                }
+              }
+            }"#,
+            None,
+        )
+        .unwrap();
+
+        let id = profiles[0].profile.id.clone();
+        profiles[0].profile.source_uuid = Some("mysql-prod-1".to_string());
+        let profile_list = vec![profiles[0].profile.clone()];
+
+        let mut passwords = HashMap::new();
+        passwords.insert(id.clone(), "S3cr3t!Pass#2026".to_string());
+        let mut folders = HashMap::new();
+        folders.insert(id, "核心库".to_string());
+
+        let dbp_bytes = export_to_dbeaver_dbp_bytes(
+            &profile_list,
+            &passwords,
+            &folders,
+            true,
+            "PacerExport",
+        )
+        .unwrap();
+
+        let reimported = import_dbeaver_zip(&dbp_bytes, true).unwrap();
+        assert_eq!(reimported.len(), 1);
+        assert_eq!(reimported[0].profile.name, "Orders PROD");
+        assert_eq!(reimported[0].profile.env, EnvLevel::Prod);
+        assert_eq!(reimported[0].password.as_deref(), Some("S3cr3t!Pass#2026"));
+        if let ConnectionMode::Direct(ref d) = reimported[0].profile.mode {
+            assert_eq!(d.username.as_deref(), Some("readonly_user"));
+            assert_eq!(d.database.as_deref(), Some("orders"));
+            assert!(d.has_saved_password);
+        } else {
+            panic!("expected Direct connection");
+        }
     }
 }
