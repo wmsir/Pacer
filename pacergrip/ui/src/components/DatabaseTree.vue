@@ -51,10 +51,18 @@ const emit = defineEmits<{
   (e: 'delete-profile', profile: ConnectionProfile): void;
   (e: 'refresh-database', profile: ConnectionProfile, dbName: string): void;
   (e: 'new-console-for-db', profile: ConnectionProfile, dbName: string): void;
+  (e: 'create-table', profile: ConnectionProfile, dbName: string): void;
+  (e: 'export-db-ddl', profile: ConnectionProfile, dbName: string): void;
   (e: 'count-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'copy-table-columns', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'gen-insert', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'gen-update', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'import-table-data', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'gen-entity-code', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'gen-mock-data', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'rename-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'truncate-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'drop-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'refresh-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'copy-text', text: string): void;
 }>();
@@ -84,6 +92,7 @@ function engineShort(dbType: string | Record<string, string>): string {
   const norm = raw.toLowerCase();
   if (norm.includes('tidb')) return 'TiDB';
   if (norm.includes('sqlite')) return 'SQLite';
+  if (norm.includes('redis')) return 'Redis';
   if (norm.includes('postgres')) return 'PG';
   if (norm.includes('mysql')) return 'MySQL';
   if (norm.includes('maria')) return 'MariaDB';
@@ -101,9 +110,19 @@ function engineIcon(dbType: string | Record<string, string>): IdeIconName {
   const norm = raw.toLowerCase();
   if (norm.includes('tidb')) return 'db-tidb';
   if (norm.includes('sqlite')) return 'db-sqlite';
+  if (norm.includes('redis')) return 'db-redis';
   if (norm.includes('postgres') || norm.includes('kingbase') || norm.includes('gauss')) return 'db-postgres';
   if (norm.includes('mysql') || norm.includes('maria') || norm.includes('oceanbase')) return 'db-mysql';
   return 'db-generic';
+}
+
+function isRedisProfile(profile?: ConnectionProfile | null): boolean {
+  if (!profile) return false;
+  const raw =
+    typeof profile.dbType === 'string'
+      ? profile.dbType
+      : Object.values(profile.dbType)[0] ?? '';
+  return raw.toLowerCase().includes('redis');
 }
 
 function connectionsInProject(projectId: string): ConnectionProfile[] {
@@ -389,6 +408,7 @@ function closeContext() {
                       class="tree-row"
                       style="padding-left: 48px"
                       :class="{ selected: selectedNodeKey === `t:${p.id}:${db.name}:${tbl.name}` }"
+                      :title="tbl.comment ? `${tbl.name} — ${tbl.comment}` : tbl.name"
                       @click="
                         selectedNodeKey = `t:${p.id}:${db.name}:${tbl.name}`;
                         emit('select-table', p, db.name, tbl.name);
@@ -400,23 +420,29 @@ function closeContext() {
                       <span class="tree-chevron">
                         <IdeIcon :name="expandedTables[`${p.id}:${db.name}:${tbl.name}`] ? 'chevron-down' : 'chevron-right'" :size="11" />
                       </span>
-                      <IdeIcon name="table" :size="13" />
+                      <IdeIcon :name="isRedisProfile(p) ? 'key' : 'table'" :size="13" />
                       <span class="tree-label">{{ tbl.name }}</span>
-                      <span class="tree-meta">{{ tbl.estimatedRows ?? '' }}</span>
+                      <span class="tree-meta">
+                        {{
+                          isRedisProfile(p)
+                            ? [tbl.tableType, tbl.engine].filter(Boolean).join(' · ')
+                            : (tbl.estimatedRows ?? '')
+                        }}
+                      </span>
                       <span class="tree-hover-actions" @click.stop>
                         <button
                           class="icon-btn compact"
-                          :title="t('ctxQueryTop100')"
+                          :title="isRedisProfile(p) ? '读取键值 (GET / HGETALL / LRANGE ...)' : t('ctxQueryTop100')"
                           @click="emit('query-top100', p, db.name, tbl.name)"
                         >
                           <IdeIcon name="run" :size="11" color="var(--run-green-bright)" />
                         </button>
                         <button
                           class="icon-btn compact"
-                          :title="t('ctxViewDdl')"
+                          :title="isRedisProfile(p) ? '查看 Key 详细信息与命令模板' : t('ctxViewDdl')"
                           @click="emit('view-ddl', p, db.name, tbl.name)"
                         >
-                          DDL
+                          {{ isRedisProfile(p) ? 'INFO' : 'DDL' }}
                         </button>
                       </span>
                     </div>
@@ -528,14 +554,22 @@ function closeContext() {
 
       <template v-else-if="ctxMenu.kind === 'database' && ctxMenu.profile && ctxMenu.dbName">
         <button class="dropdown-item" @click="emit('refresh-database', ctxMenu.profile, ctxMenu.dbName)">
-          <span>刷新数据表列表</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '刷新 Key 列表 (SCAN)' : '刷新数据表列表' }}</span>
         </button>
         <button class="dropdown-item" @click="emit('new-console-for-db', ctxMenu.profile, ctxMenu.dbName)">
-          <span>新建此库 SQL 查询控制台</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '新建此库 Redis 命令控制台' : '新建此库 SQL 查询控制台' }}</span>
         </button>
+        <template v-if="!isRedisProfile(ctxMenu.profile)">
+          <button class="dropdown-item" @click="emit('create-table', ctxMenu.profile, ctxMenu.dbName)">
+            <span>✨ 可视化新建数据表...</span>
+          </button>
+          <button class="dropdown-item" @click="emit('export-db-ddl', ctxMenu.profile, ctxMenu.dbName)">
+            <span>📄 导出当前库全量建表 DDL</span>
+          </button>
+        </template>
         <div class="dropdown-sep" />
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.dbName)">
-          <span>复制数据库名</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '复制逻辑库名称' : '复制数据库名' }}</span>
         </button>
       </template>
 
@@ -544,60 +578,105 @@ function closeContext() {
           class="dropdown-item"
           @click="emit('query-top100', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ t('ctxQueryTop100') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '读取键值内容 (GET/HGETALL/...)' : t('ctxQueryTop100') }}</span>
         </button>
         <button
           class="dropdown-item"
           @click="emit('count-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>统计表总行数 (COUNT(*))</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '统计长度 / 元素数量' : '统计表总行数 (COUNT(*))' }}</span>
         </button>
         <button
           class="dropdown-item"
           @click="emit('view-ddl', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ t('ctxViewDdl') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '查看 Key 详情与操作命令' : t('ctxViewDdl') }}</span>
         </button>
         <button
           class="dropdown-item"
           @click="emit('select-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ t('ctxViewStructure') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '在右侧查看 Key 属性结构' : t('ctxViewStructure') }}</span>
         </button>
+        <template v-if="!isRedisProfile(ctxMenu.profile)">
+          <div class="dropdown-sep" />
+          <button
+            class="dropdown-item"
+            @click="emit('import-table-data', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>📥 导入 CSV / JSON 数据...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('gen-entity-code', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>💻 生成实体代码 (Java/Go/TS/Py/Rust)...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('gen-mock-data', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>🎲 生成 10 行 Mock 测试数据</span>
+          </button>
+        </template>
         <div class="dropdown-sep" />
         <button
           class="dropdown-item"
           @click="emit('gen-select', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ t('ctxGenSelect') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '插入查询命令到控制台' : t('ctxGenSelect') }}</span>
         </button>
-        <button
-          class="dropdown-item"
-          @click="emit('gen-insert', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
-        >
-          <span>生成 INSERT 模板到编辑器</span>
-        </button>
-        <button
-          class="dropdown-item"
-          @click="emit('gen-update', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
-        >
-          <span>生成 UPDATE 模板到编辑器</span>
-        </button>
-        <button
-          class="dropdown-item"
-          @click="emit('copy-table-columns', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
-        >
-          <span>复制全部列名（逗号分隔）</span>
-        </button>
+        <template v-if="!isRedisProfile(ctxMenu.profile)">
+          <button
+            class="dropdown-item"
+            @click="emit('gen-insert', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>生成 INSERT 模板到编辑器</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('gen-update', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>生成 UPDATE 模板到编辑器</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('copy-table-columns', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>复制全部列名（逗号分隔）</span>
+          </button>
+        </template>
         <div class="dropdown-sep" />
         <button
           class="dropdown-item"
           @click="emit('refresh-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>刷新字段与索引元数据</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '刷新 Key 属性与 TTL' : '刷新字段与索引元数据' }}</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('rename-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '✏️ 重命名 Key...' : '✏️ 重命名表...' }}</span>
         </button>
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.tableName)">
-          <span>{{ t('ctxCopyName') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '复制 Key 名称' : t('ctxCopyName') }}</span>
+        </button>
+        <div class="dropdown-sep" />
+        <button
+          v-if="!isRedisProfile(ctxMenu.profile)"
+          class="dropdown-item"
+          style="color: var(--prod)"
+          @click="emit('truncate-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>🧹 清空表数据 (TRUNCATE)</span>
+        </button>
+        <button
+          class="dropdown-item"
+          style="color: var(--prod)"
+          @click="emit('drop-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+        >
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '🗑️ 删除 Key (DEL)' : '🗑️ 删除表 (DROP TABLE)' }}</span>
         </button>
       </template>
     </div>

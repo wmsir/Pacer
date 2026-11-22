@@ -223,6 +223,17 @@ jobs:
             - **macOS `.app` 安全工作空间策略**：在 `/Applications`、`AppTranslocation` 沙盒或只读挂载卷启动时自动落盘至标准 `~/Library/Application Support/cn.fwpt.pacer`（绝不向 `.app` 包内部写入文件）；若将 `Pacer.app` 放在用户自定义可写目录，则优先在同级创建便携 `pacer-workspace/`。
             - **原生 Cocoa 编辑菜单与快捷键体验**：保留系统级 Edit 菜单确保 WKWebView 输入框与编辑器内 `⌘+C / ⌘+V / ⌘+X / ⌘+A / ⌘+Z` 零阻碍；拦截默认 Close Window 菜单避免 `⌘+W` 误关整个主窗口，使其专注关闭当前 SQL / Markdown 标签页；全面适配 macOS `⌥` (Option) 键位映射与 `⌘ / ⌥ / ⇧` 图标显示、访达 (Finder) 定位与 `~/Library/DBeaverData` 自动扫描。
 
+            ### v0.9.4 新增与优化 / What's New in v0.9.4
+            - **原生 Redis 数据库直连与交互查询支持**：
+              - 新增纯 Rust 异步 RESP2 + TLS (`redis://` / `rediss://`) 原生连接驱动（支持密码与 Redis 6+ ACL 多用户认证、`db0..db15` 键空间键值统计与只读保护）。
+              - 数据库树非阻塞 `SCAN` 浏览 Key 列表并实时标注类型（`string` / `hash` / `list` / `set` / `zset` / `stream`）与剩余 TTL；双击或点击运行按 Key 类型智能生成 `GET` / `HGETALL` / `LRANGE` / `SMEMBERS` / `ZRANGE ... WITHSCORES` / `XRANGE` 并将结果结构化渲染为可筛选导出表格。
+              - 支持逐行 Redis 命令控制台、Key 属性/Hash 字段结构检视、`MEMORY USAGE` / `INFO` 诊断计划，以及 `KEYS *` / `DEL` / `FLUSHDB` / `FLUSHALL` 高危命令 AST/风险拦截。
+            - **高频数据库生产力套件**：
+              - **CSV / TSV / JSON 数据导入向导**：支持原生文件选择与粘贴自动识别分隔符、字段映射、前 5 行预览、分批 `INSERT` 与忽略重复生成及执行。
+              - **5 语言实体代码生成器**：一键根据表结构生成 Java (Lombok + MyBatis-Plus)、Go (GORM + JSON Tag)、TypeScript、Python (dataclass + Pydantic) 与 Rust (`serde`) 实体定义。
+              - **可视化新建表设计器 & 表重命名弹窗**：表格化编辑字段、长度、主键/自增/非空、默认值、注释与索引，实时预览各库方言 `CREATE TABLE` DDL；支持跨方言安全重命名及 `TRUNCATE` / `DROP` 二次风险确认。
+              - **结果集与结构/编辑器效率升级**：新增结果列显隐筛选弹窗、拖拽表头调宽（双击还原）、紧凑「导出 / 复制」菜单（Excel TSV / UTF-8 BOM CSV / JSON / Markdown / `INSERT` / `UPDATE`）、右击格式化 JSON/复制整列与隐藏列；右侧结构面板新增列默认值/注释展示及快捷操作入口；编辑器新增「压缩为单行 SQL」及「复制为 Java / JSON 代码字符串」。
+
             ### v0.9.3 新增与优化 / What's New in v0.9.3
             - **全面升级连接属性配置（Options / SSH-SSL / Schemas）并直连生效**：
               - **Options 选项页**：新增事务控制（Auto / Manual）、架构切换策略、会话时区（自动注入连接初始化 SQL）、单会话连接池限制、定时保活检测、空闲自动断开超时、连接启动脚本（`Startup script`）与元数据内省级别设置，并由原生 Rust 驱动池真实执行。

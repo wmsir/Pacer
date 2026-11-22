@@ -17,9 +17,11 @@ import {
   formatSqlLiteral,
   generateGridMutationSql,
   quoteIdentifier,
-  toCsv,
+  toCsvWithBom,
   toInsertSql,
   toMarkdownTable,
+  toTsv,
+  toUpdateSql,
   type GridMutationPlan,
 } from '../utils/sqlTools';
 
@@ -124,6 +126,13 @@ const editingCell = ref<{
 } | null>(null);
 const inlineInputRef = ref<HTMLInputElement | null>(null);
 
+// Column visibility & drag-width state
+const hiddenColsByTab = reactive<Record<string, string[]>>({});
+const colWidths = reactive<Record<string, number>>({});
+const showColPicker = ref(false);
+const colPickerSearch = ref('');
+const showExportMenu = ref(false);
+
 // Per-result-tab mutation drafts
 const draftsByTab = reactive<Record<string, TabEditDraft>>({});
 
@@ -163,6 +172,100 @@ const activeDraft = computed<TabEditDraft | null>(() => {
   if (!res) return null;
   return ensureDraft(res.id);
 });
+
+const hiddenColsSet = computed(() => {
+  const res = currentResult.value;
+  if (!res) return new Set<string>();
+  return new Set(hiddenColsByTab[res.id] ?? []);
+});
+
+const visibleColumns = computed(() => {
+  const res = currentResult.value;
+  if (!res) return [];
+  const hidden = hiddenColsSet.value;
+  const shown = res.columns.filter((c) => !hidden.has(c));
+  return shown.length > 0 ? shown : res.columns;
+});
+
+const filteredPickerColumns = computed(() => {
+  const res = currentResult.value;
+  if (!res) return [];
+  const q = colPickerSearch.value.trim().toLowerCase();
+  if (!q) return res.columns;
+  return res.columns.filter((c) => c.toLowerCase().includes(q));
+});
+
+function toggleResultColumnVisible(col: string) {
+  const res = currentResult.value;
+  if (!res) return;
+  const hidden = new Set(hiddenColsByTab[res.id] ?? []);
+  if (hidden.has(col)) {
+    hidden.delete(col);
+  } else if (res.columns.length - hidden.size > 1) {
+    hidden.add(col);
+  } else {
+    emit('notify', '至少保留一列可见');
+    return;
+  }
+  hiddenColsByTab[res.id] = [...hidden];
+}
+
+function hideSpecificColumn(col: string) {
+  const res = currentResult.value;
+  if (!res) return;
+  const hidden = new Set(hiddenColsByTab[res.id] ?? []);
+  if (res.columns.length - hidden.size <= 1) {
+    emit('notify', '至少保留一列可见');
+    return;
+  }
+  hidden.add(col);
+  hiddenColsByTab[res.id] = [...hidden];
+  emit('notify', `已隐藏列 [${col}]，可在顶部「列」菜单恢复`);
+}
+
+function resetVisibleColumns() {
+  const res = currentResult.value;
+  if (!res) return;
+  delete hiddenColsByTab[res.id];
+}
+
+function showOnlyFirst10Columns() {
+  const res = currentResult.value;
+  if (!res) return;
+  hiddenColsByTab[res.id] = res.columns.slice(10);
+}
+
+function colStyle(col: string) {
+  const res = currentResult.value;
+  if (!res) return undefined;
+  const w = colWidths[`${res.id}:${col}`];
+  return w ? { width: `${w}px`, minWidth: `${w}px`, maxWidth: `${w}px` } : undefined;
+}
+
+function startColResize(e: MouseEvent, col: string) {
+  const res = currentResult.value;
+  if (!res) return;
+  const th = (e.currentTarget as HTMLElement)?.parentElement;
+  const startX = e.clientX;
+  const key = `${res.id}:${col}`;
+  const startWidth = colWidths[key] ?? (th ? Math.round(th.getBoundingClientRect().width) : 140);
+
+  const onMove = (mv: MouseEvent) => {
+    colWidths[key] = Math.max(52, Math.min(680, startWidth + (mv.clientX - startX)));
+  };
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove);
+    window.removeEventListener('mouseup', onUp);
+  };
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+}
+
+function resetColWidth(col: string) {
+  const res = currentResult.value;
+  if (!res) return;
+  delete colWidths[`${res.id}:${col}`];
+}
 
 const effectiveTargetTable = computed(() => {
   const res = currentResult.value;
@@ -541,14 +644,23 @@ function doExportCsv() {
   const res = currentResult.value;
   if (!res) return;
   const rows = displayedRows.value.map((r) => r.row);
-  downloadTextFile(`${res.title.replace(/[^\w.-]/g, '_')}.csv`, toCsv(res.columns, rows), 'text/csv;charset=utf-8');
-  emit('notify', '已导出 CSV 文件');
+  downloadTextFile(
+    `${res.title.replace(/[^\w.-]/g, '_')}.csv`,
+    toCsvWithBom(visibleColumns.value, rows),
+    'text/csv;charset=utf-8',
+  );
+  emit('notify', '已导出 UTF-8 BOM CSV 文件（Excel 打开不乱码）');
 }
 
 function doExportJson() {
   const res = currentResult.value;
   if (!res) return;
-  const rows = displayedRows.value.map((r) => r.row);
+  const cols = visibleColumns.value;
+  const rows = displayedRows.value.map((r) => {
+    const obj: Record<string, unknown> = {};
+    for (const c of cols) obj[c] = r.row[c];
+    return obj;
+  });
   downloadTextFile(
     `${res.title.replace(/[^\w.-]/g, '_')}.json`,
     JSON.stringify(rows, null, 2),
@@ -557,10 +669,16 @@ function doExportJson() {
   emit('notify', '已导出 JSON 文件');
 }
 
+function doCopyTsv() {
+  const res = currentResult.value;
+  if (!res) return;
+  void copyText(toTsv(visibleColumns.value, displayedRows.value.map((r) => r.row)));
+}
+
 function doCopyMarkdown() {
   const res = currentResult.value;
   if (!res) return;
-  void copyText(toMarkdownTable(res.columns, displayedRows.value.map((r) => r.row)));
+  void copyText(toMarkdownTable(visibleColumns.value, displayedRows.value.map((r) => r.row)));
 }
 
 function doCopyInsertSql() {
@@ -570,11 +688,58 @@ function doCopyInsertSql() {
   void copyText(
     toInsertSql(
       tableName,
-      res.columns,
+      visibleColumns.value,
       displayedRows.value.map((r) => r.row),
       res.engineKey,
     ),
   );
+}
+
+function doCopyUpdateSql() {
+  const res = currentResult.value;
+  if (!res) return;
+  const tableName = effectiveTargetTable.value || 'target_table';
+  void copyText(
+    toUpdateSql(
+      tableName,
+      visibleColumns.value,
+      res.primaryKeys,
+      displayedRows.value.map((r) => r.row),
+      res.engineKey,
+    ),
+  );
+}
+
+function doCopyColumnLines() {
+  const col = cellCtxMenu.col || activeStatsColumn.value;
+  if (!col) return;
+  const vals = displayedRows.value
+    .map((r) => r.row[col])
+    .filter((v) => v !== null && v !== undefined)
+    .map((v) => (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+  if (vals.length === 0) {
+    emit('notify', `列「${col}」暂无非空值可复制`);
+    return;
+  }
+  void copyText(vals.join('\n'));
+}
+
+function copyContextCellPrettyJson() {
+  const raw = getContextCellRaw();
+  if (raw === null || raw === undefined) {
+    void copyText('NULL');
+    return;
+  }
+  if (typeof raw === 'object') {
+    void copyText(JSON.stringify(raw, null, 2));
+    return;
+  }
+  const str = String(raw);
+  try {
+    void copyText(JSON.stringify(JSON.parse(str), null, 2));
+  } catch {
+    void copyText(str);
+  }
 }
 
 const activeStatsColumn = computed(() => {
@@ -941,7 +1106,15 @@ const astWarnings = computed(
 </script>
 
 <template>
-  <div class="services-panel" style="height: 100%" @click="cellCtxMenu.visible = false">
+  <div
+    class="services-panel"
+    style="height: 100%"
+    @click="
+      cellCtxMenu.visible = false;
+      showColPicker = false;
+      showExportMenu = false;
+    "
+  >
     <div class="services-tabs">
       <div class="services-tab-list">
         <button
@@ -1168,25 +1341,103 @@ const astWarnings = computed(
               </span>
             </div>
 
-            <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap">
+            <div style="display: flex; align-items: center; gap: 4px">
+              <div class="grid-popover-wrap" @click.stop>
+                <button
+                  class="btn btn-sm"
+                  :class="{ 'btn-primary': hiddenColsSet.size > 0 }"
+                  title="显示 / 隐藏结果列（支持宽表快速筛选）"
+                  @click="
+                    showExportMenu = false;
+                    showColPicker = !showColPicker;
+                  "
+                >
+                  列 ({{ visibleColumns.length }}/{{ currentResult.columns.length }}) ▾
+                </button>
+                <div v-if="showColPicker" class="dropdown-menu align-right grid-col-popover">
+                  <div style="padding: 4px 6px 6px; border-bottom: 1px solid var(--border-subtle)">
+                    <input
+                      v-model="colPickerSearch"
+                      class="field"
+                      style="padding: 3px 6px; font-size: 11px; margin-bottom: 5px"
+                      placeholder="搜索列名..."
+                    />
+                    <div style="display: flex; gap: 4px">
+                      <button class="icon-btn compact" @click="resetVisibleColumns">全显</button>
+                      <button
+                        v-if="currentResult.columns.length > 10"
+                        class="icon-btn compact"
+                        @click="showOnlyFirst10Columns"
+                      >
+                        仅前10列
+                      </button>
+                    </div>
+                  </div>
+                  <div style="max-height: 220px; overflow-y: auto; padding: 4px 0">
+                    <label
+                      v-for="c in filteredPickerColumns"
+                      :key="c"
+                      class="schema-check-row"
+                      style="font-family: var(--font-mono); font-size: 11.5px"
+                    >
+                      <input
+                        type="checkbox"
+                        :checked="!hiddenColsSet.has(c)"
+                        @change="toggleResultColumnVisible(c)"
+                      />
+                      <span style="overflow: hidden; text-overflow: ellipsis">{{ c }}</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               <button
                 class="btn btn-sm"
                 title="复制当前列为 SQL IN (...) 条件列表"
                 @click="doCopyColumnInSql"
               >
-                复制列 IN (...)
+                列 IN (...)
               </button>
               <button
                 class="btn btn-sm"
                 title="复制选中行为 JSON 对象"
                 @click="doCopySelectedRowJson"
               >
-                复制行 JSON
+                行 JSON
               </button>
-              <button class="btn btn-sm" @click="doExportCsv">{{ t('exportCsv') }}</button>
-              <button class="btn btn-sm" @click="doExportJson">{{ t('exportJson') }}</button>
-              <button class="btn btn-sm" @click="doCopyMarkdown">{{ t('copyMarkdown') }}</button>
-              <button class="btn btn-sm" @click="doCopyInsertSql">{{ t('copyInsertSql') }}</button>
+
+              <div class="grid-popover-wrap" @click.stop>
+                <button
+                  class="btn btn-sm"
+                  @click="
+                    showColPicker = false;
+                    showExportMenu = !showExportMenu;
+                  "
+                >
+                  导出 / 复制 ▾
+                </button>
+                <div v-if="showExportMenu" class="dropdown-menu align-right" style="min-width: 195px">
+                  <button class="dropdown-item" @click="showExportMenu = false; doCopyTsv()">
+                    <span>复制为 Excel (TSV)</span>
+                  </button>
+                  <button class="dropdown-item" @click="showExportMenu = false; doExportCsv()">
+                    <span>{{ t('exportCsv') }} (UTF-8)</span>
+                  </button>
+                  <button class="dropdown-item" @click="showExportMenu = false; doExportJson()">
+                    <span>{{ t('exportJson') }}</span>
+                  </button>
+                  <div class="dropdown-sep" />
+                  <button class="dropdown-item" @click="showExportMenu = false; doCopyMarkdown()">
+                    <span>{{ t('copyMarkdown') }}</span>
+                  </button>
+                  <button class="dropdown-item" @click="showExportMenu = false; doCopyInsertSql()">
+                    <span>{{ t('copyInsertSql') }}</span>
+                  </button>
+                  <button class="dropdown-item" @click="showExportMenu = false; doCopyUpdateSql()">
+                    <span>复制为 UPDATE SQL</span>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -1201,7 +1452,7 @@ const astWarnings = computed(
                   </tr>
                 </thead>
                 <tbody>
-                  <tr v-for="col in currentResult.columns" :key="col">
+                  <tr v-for="col in visibleColumns" :key="col">
                     <td style="font-weight: 600">{{ col }}</td>
                     <td
                       :class="{
@@ -1226,8 +1477,9 @@ const astWarnings = computed(
                   <tr>
                     <th class="row-num">#</th>
                     <th
-                      v-for="col in currentResult.columns"
+                      v-for="col in visibleColumns"
                       :key="col"
+                      :style="colStyle(col)"
                       @click="toggleSort(col)"
                     >
                       <IdeIcon v-if="currentResult.primaryKeys.includes(col)" name="key" :size="12" style="margin-right: 3px" />
@@ -1235,6 +1487,13 @@ const astWarnings = computed(
                       <span v-if="sortCol === col" style="margin-left: 4px; color: var(--accent)">
                         {{ sortDir === 'asc' ? '▲' : '▼' }}
                       </span>
+                      <span
+                        class="col-resize-handle"
+                        title="拖拽调整列宽（双击恢复自动宽度）"
+                        @mousedown.stop.prevent="startColResize($event, col)"
+                        @dblclick.stop="resetColWidth(col)"
+                        @click.stop
+                      />
                     </th>
                   </tr>
                 </thead>
@@ -1243,7 +1502,7 @@ const astWarnings = computed(
                     v-if="displayedRows.length === 0 && (activeDraft?.inserted.length ?? 0) === 0"
                     class="empty-data-row"
                   >
-                    <td :colspan="currentResult.columns.length + 1" class="empty-data-cell">
+                    <td :colspan="visibleColumns.length + 1" class="empty-data-cell">
                       <template v-if="filterText.trim()">
                         <span>当前筛选「{{ filterText }}」下无匹配数据</span>
                         <button
@@ -1276,8 +1535,9 @@ const astWarnings = computed(
                   >
                     <td class="row-num">{{ visibleIdx + 1 }}</td>
                     <td
-                      v-for="col in currentResult.columns"
+                      v-for="col in visibleColumns"
                       :key="col"
+                      :style="colStyle(col)"
                       :class="{
                         'num-cell': isNumeric(item.row[col]),
                         'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === col,
@@ -1328,8 +1588,9 @@ const astWarnings = computed(
                   >
                     <td class="row-num" title="待新增行">+{{ insIdx + 1 }}</td>
                     <td
-                      v-for="col in currentResult.columns"
+                      v-for="col in visibleColumns"
                       :key="col"
+                      :style="colStyle(col)"
                       :class="{
                         'selected-cell': selectedIsInserted && selectedRowOrigIdx === insIdx && selectedColName === col,
                       }"
@@ -1828,6 +2089,15 @@ const astWarnings = computed(
         class="dropdown-item"
         @click="
           cellCtxMenu.visible = false;
+          copyContextCellPrettyJson();
+        "
+      >
+        <span>格式化复制为 JSON</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
           filterText = formatCell(getContextCellRaw());
         "
       >
@@ -1846,10 +2116,28 @@ const astWarnings = computed(
         class="dropdown-item"
         @click="
           cellCtxMenu.visible = false;
+          doCopyColumnLines();
+        "
+      >
+        <span>复制整列值（逐行）</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
           doCopyColumnInSql();
         "
       >
         <span>复制整列为 IN (...)</span>
+      </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          hideSpecificColumn(cellCtxMenu.col);
+        "
+      >
+        <span>隐藏当前列 [{{ cellCtxMenu.col }}]</span>
       </button>
       <div class="dropdown-sep" />
       <button

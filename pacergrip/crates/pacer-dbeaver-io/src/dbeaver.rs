@@ -923,6 +923,9 @@ fn resolve_dbeaver_engine(
     if d_low.contains("clickhouse") || p_low.contains("clickhouse") {
         return DbEngineType::ClickHouse;
     }
+    if d_low.contains("redis") || p_low.contains("redis") {
+        return DbEngineType::Redis;
+    }
     if d_low.contains("mysql") || p_low.contains("mysql") {
         if name.to_ascii_lowercase().contains("tidb") {
             return DbEngineType::TiDb;
@@ -953,6 +956,7 @@ fn engine_to_dbeaver_driver(engine: &DbEngineType) -> (&'static str, &'static st
         DbEngineType::Dameng => ("generic", "dameng"),
         DbEngineType::SqlServer => ("sqlserver", "mssql_jdbc_ms_new"),
         DbEngineType::ClickHouse => ("clickhouse", "clickhouse"),
+        DbEngineType::Redis => ("redis", "redis"),
         DbEngineType::Unknown(_) => ("generic", "generic"),
     }
 }

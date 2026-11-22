@@ -2522,3 +2522,69 @@ table.dg-grid tr.row-inserted td {
   border-bottom: 1px solid rgba(247, 84, 100, 0.35);
   flex-shrink: 0;
 }
+
+/* ==================== Result Grid Extensions & Table Tools Designer (v0.9.4) ==================== */
+.grid-popover-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.grid-col-popover {
+  width: 240px;
+  padding: 4px 0;
+  z-index: 65;
+}
+
+.col-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  user-select: none;
+  z-index: 3;
+}
+
+.col-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.designer-scroll {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  overflow: auto;
+  max-height: 250px;
+  margin-bottom: 10px;
+}
+
+.designer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.designer-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-chrome);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.designer-table td {
+  padding: 4px 5px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  vertical-align: middle;
+}

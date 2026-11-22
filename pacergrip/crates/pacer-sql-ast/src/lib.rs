@@ -62,6 +62,10 @@ pub struct ScriptAnalysis {
 
 /// Splits and analyzes a SQL script using `sqlparser` (with lexical fallback for proprietary dialects).
 pub fn analyze_sql(sql: &str, db_type: &DbEngineType) -> ScriptAnalysis {
+    if matches!(db_type, DbEngineType::Redis) {
+        return analyze_redis_script(sql);
+    }
+
     let raw_chunks = split_sql_statements(sql);
     let dialect = dialect_for_engine(db_type);
 
@@ -119,9 +123,11 @@ fn dialect_for_engine(db_type: &DbEngineType) -> Box<dyn Dialect> {
         }
         DbEngineType::SqlServer => Box::new(MsSqlDialect {}),
         DbEngineType::Sqlite => Box::new(SQLiteDialect {}),
-        DbEngineType::Oracle | DbEngineType::Dameng | DbEngineType::ClickHouse | DbEngineType::Unknown(_) => {
-            Box::new(GenericDialect {})
-        }
+        DbEngineType::Oracle
+        | DbEngineType::Dameng
+        | DbEngineType::ClickHouse
+        | DbEngineType::Redis
+        | DbEngineType::Unknown(_) => Box::new(GenericDialect {}),
     }
 }
 
@@ -1137,6 +1143,295 @@ fn push_space_if_needed(out: &mut String) {
     out.push(' ');
 }
 
+/// Splits a Redis script into non-empty executable command lines, stripping `--`, `#`, and `//` comment lines
+/// as well as optional trailing semicolons outside quotes.
+pub fn split_redis_commands(script: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw_line in script.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with("--")
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("//")
+        {
+            continue;
+        }
+        let cleaned = strip_trailing_semicolon_outside_quotes(trimmed).trim();
+        if !cleaned.is_empty() {
+            out.push(cleaned.to_string());
+        }
+    }
+    out
+}
+
+fn strip_trailing_semicolon_outside_quotes(input: &str) -> &str {
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    let mut last_outside = false;
+    for ch in input.chars() {
+        if escaped {
+            escaped = false;
+            last_outside = false;
+            continue;
+        }
+        if (in_single || in_double) && ch == '\\' {
+            escaped = true;
+            last_outside = false;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            last_outside = false;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            last_outside = false;
+            continue;
+        }
+        last_outside = !in_single && !in_double && ch == ';';
+    }
+    if last_outside {
+        input.strip_suffix(';').unwrap_or(input)
+    } else {
+        input
+    }
+}
+
+/// Tokenizes a single Redis command line into arguments, supporting double quotes (`"..."`),
+/// single quotes (`'...'`), and backslash escapes inside double/single quotes.
+pub fn tokenize_redis_command(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut has_token = false;
+    let mut quote: Option<char> = None;
+    let mut chars = line.trim().chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if let Some(q) = quote {
+            if ch == '\\' {
+                if let Some(next_ch) = chars.next() {
+                    match next_ch {
+                        'n' => current.push('\n'),
+                        'r' => current.push('\r'),
+                        't' => current.push('\t'),
+                        '\\' => current.push('\\'),
+                        other if other == q => current.push(other),
+                        other => {
+                            current.push('\\');
+                            current.push(other);
+                        }
+                    }
+                }
+                continue;
+            }
+            if ch == q {
+                quote = None;
+                has_token = true;
+                continue;
+            }
+            current.push(ch);
+            continue;
+        }
+
+        if ch.is_whitespace() {
+            if has_token {
+                tokens.push(std::mem::take(&mut current));
+                has_token = false;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            has_token = true;
+            continue;
+        }
+        current.push(ch);
+        has_token = true;
+    }
+
+    if has_token || !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Analyzes a Redis command script for read-only vs write/admin safety and blocking/destructive risks.
+pub fn analyze_redis_script(sql: &str) -> ScriptAnalysis {
+    let commands = split_redis_commands(sql);
+    let mut statements = Vec::with_capacity(commands.len());
+
+    for (idx, cmd_text) in commands.into_iter().enumerate() {
+        let tokens = tokenize_redis_command(&cmd_text);
+        let (access_kind, statement_type, warnings) = classify_redis_command(idx, &tokens);
+        statements.push(StatementAnalysis {
+            index: idx,
+            sql: cmd_text,
+            access_kind,
+            statement_type,
+            expected_rows_hint: None,
+            warnings,
+        });
+    }
+
+    let overall_kind = aggregate_access_kind(&statements);
+    let requires_ticket = !statements.is_empty() && !matches!(overall_kind, SqlAccessKind::ReadOnly);
+
+    ScriptAnalysis {
+        overall_kind,
+        requires_ticket,
+        statements,
+        total_expected_rows_hint: None,
+    }
+}
+
+fn classify_redis_command(
+    statement_index: usize,
+    tokens: &[String],
+) -> (SqlAccessKind, String, Vec<SqlRiskWarning>) {
+    let mut warnings = Vec::new();
+    let Some(first) = tokens.first() else {
+        return (SqlAccessKind::Unknown, "UNKNOWN".to_string(), warnings);
+    };
+
+    let cmd = first.to_ascii_uppercase();
+    let sub = tokens
+        .get(1)
+        .map(|s| s.to_ascii_uppercase())
+        .unwrap_or_default();
+
+    // Two-word command disambiguation first.
+    match (cmd.as_str(), sub.as_str()) {
+        ("CONFIG", "GET") => return (SqlAccessKind::ReadOnly, "CONFIG GET".to_string(), warnings),
+        ("CONFIG", "SET" | "REWRITE" | "RESETSTAT") => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_ADMIN_CONFIG".to_string(),
+                level: RiskLevel::High,
+                message: format!("CONFIG {sub} 会修改 Redis 服务端运行时配置，请谨慎执行。"),
+                statement_index,
+            });
+            return (SqlAccessKind::AdminOrDcl, format!("CONFIG {sub}"), warnings);
+        }
+        ("ACL", "LIST" | "WHOAMI" | "USERS" | "GETUSER" | "CAT" | "LOG") => {
+            return (SqlAccessKind::ReadOnly, format!("ACL {sub}"), warnings)
+        }
+        ("ACL", _) => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_ACL_MUTATION".to_string(),
+                level: RiskLevel::Critical,
+                message: "ACL 权限变更命令将修改 Redis 用户权限规则。".to_string(),
+                statement_index,
+            });
+            return (SqlAccessKind::AdminOrDcl, format!("ACL {sub}"), warnings);
+        }
+        ("CLIENT", "LIST" | "ID" | "GETNAME" | "INFO") => {
+            return (SqlAccessKind::ReadOnly, format!("CLIENT {sub}"), warnings)
+        }
+        ("CLIENT", _) => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_CLIENT_ADMIN".to_string(),
+                level: RiskLevel::High,
+                message: format!("CLIENT {sub} 可能中断或变更客户端连接状态。"),
+                statement_index,
+            });
+            return (SqlAccessKind::AdminOrDcl, format!("CLIENT {sub}"), warnings);
+        }
+        ("MEMORY", "USAGE" | "STATS" | "DOCTOR" | "MALLOC-STATS") => {
+            return (SqlAccessKind::ReadOnly, format!("MEMORY {sub}"), warnings)
+        }
+        ("OBJECT", "ENCODING" | "REFCOUNT" | "IDLETIME" | "FREQ") => {
+            return (SqlAccessKind::ReadOnly, format!("OBJECT {sub}"), warnings)
+        }
+        ("SLOWLOG", "GET" | "LEN") => {
+            return (SqlAccessKind::ReadOnly, format!("SLOWLOG {sub}"), warnings)
+        }
+        ("CLUSTER", "INFO" | "NODES" | "SLOTS" | "SHARDS" | "KEYSLOT" | "COUNTKEYSINSLOT") => {
+            return (SqlAccessKind::ReadOnly, format!("CLUSTER {sub}"), warnings)
+        }
+        ("XINFO", _) => return (SqlAccessKind::ReadOnly, "XINFO".to_string(), warnings),
+        ("SCRIPT", "EXISTS") => return (SqlAccessKind::ReadOnly, "SCRIPT EXISTS".to_string(), warnings),
+        ("SCRIPT", _) => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_ADMIN_SCRIPT".to_string(),
+                level: RiskLevel::High,
+                message: format!("SCRIPT {sub} 会修改服务端脚本缓存或中止脚本。"),
+                statement_index,
+            });
+            return (SqlAccessKind::AdminOrDcl, format!("SCRIPT {sub}"), warnings);
+        }
+        _ => {}
+    }
+
+    match cmd.as_str() {
+        "PING" | "ECHO" | "INFO" | "DBSIZE" | "TIME" | "SCAN" | "TYPE" | "TTL" | "PTTL"
+        | "EXPIRETIME" | "PEXPIRETIME" | "EXISTS" | "GET" | "MGET" | "STRLEN" | "GETRANGE"
+        | "SUBSTR" | "GETBIT" | "BITCOUNT" | "BITPOS" | "HGET" | "HMGET" | "HGETALL"
+        | "HKEYS" | "HVALS" | "HLEN" | "HEXISTS" | "HSCAN" | "HSTRLEN" | "LRANGE" | "LLEN"
+        | "LINDEX" | "LPOS" | "SMEMBERS" | "SCARD" | "SISMEMBER" | "SMISMEMBER" | "SSCAN"
+        | "SDIFF" | "SINTER" | "SUNION" | "ZRANGE" | "ZREVRANGE" | "ZRANGEBYSCORE"
+        | "ZREVRANGEBYSCORE" | "ZRANGEBYLEX" | "ZREVRANGEBYLEX" | "ZCARD" | "ZSCORE"
+        | "ZMSCORE" | "ZRANK" | "ZREVRANK" | "ZCOUNT" | "ZLEXCOUNT" | "ZSCAN" | "XLEN"
+        | "XRANGE" | "XREVRANGE" | "SELECT" | "ROLE" | "COMMAND" | "LOLWUT" | "PFCOUNT"
+        | "GEOPOS" | "GEODIST" | "GEOHASH" | "GEORADIUS_RO" | "GEOSEARCH" | "JSON.GET"
+        | "JSON.MGET" | "JSON.TYPE" | "JSON.STRLEN" | "JSON.OBJKEYS" | "JSON.OBJLEN"
+        | "JSON.ARRLEN" | "AUTH" | "HELLO" => (SqlAccessKind::ReadOnly, cmd, warnings),
+
+        "KEYS" => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_BLOCKING_KEYS".to_string(),
+                level: RiskLevel::High,
+                message: "KEYS 命令会阻塞 Redis 主线程，生产环境建议改用非阻塞 SCAN 0 MATCH pattern COUNT 100。".to_string(),
+                statement_index,
+            });
+            (SqlAccessKind::ReadOnly, cmd, warnings)
+        }
+
+        "SET" | "MSET" | "MSETNX" | "SETEX" | "PSETEX" | "SETNX" | "GETSET" | "GETDEL"
+        | "GETEX" | "APPEND" | "SETRANGE" | "SETBIT" | "INCR" | "INCRBY" | "INCRBYFLOAT"
+        | "DECR" | "DECRBY" | "HSET" | "HMSET" | "HSETNX" | "HINCRBY" | "HINCRBYFLOAT"
+        | "HDEL" | "LPUSH" | "RPUSH" | "LPUSHX" | "RPUSHX" | "LPOP" | "RPOP" | "LSET"
+        | "LREM" | "LTRIM" | "LINSERT" | "SADD" | "SREM" | "SPOP" | "SMOVE" | "ZADD" | "ZREM"
+        | "ZINCRBY" | "ZPOPMIN" | "ZPOPMAX" | "ZREMRANGEBYRANK" | "ZREMRANGEBYSCORE"
+        | "EXPIRE" | "PEXPIRE" | "EXPIREAT" | "PEXPIREAT" | "PERSIST" | "RENAME" | "RENAMENX"
+        | "COPY" | "MOVE" | "XADD" | "XDEL" | "XTRIM" | "PFADD" | "GEOADD" | "JSON.SET"
+        | "JSON.DEL" => (SqlAccessKind::WriteDml, cmd, warnings),
+
+        "DEL" | "UNLINK" => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_DELETE_KEY".to_string(),
+                level: RiskLevel::High,
+                message: format!("{cmd} 将永久删除指定的 Redis Key 及其全部数据。"),
+                statement_index,
+            });
+            (SqlAccessKind::WriteDml, cmd, warnings)
+        }
+
+        "FLUSHDB" | "FLUSHALL" | "SWAPDB" => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_FLUSH_ALL".to_string(),
+                level: RiskLevel::Critical,
+                message: format!("{cmd} 将不可逆清空 Redis 数据库中的所有键值！"),
+                statement_index,
+            });
+            (SqlAccessKind::WriteDdl, cmd, warnings)
+        }
+
+        "SHUTDOWN" | "DEBUG" | "SLAVEOF" | "REPLICAOF" | "FAILOVER" | "MODULE" | "MIGRATE"
+        | "BGREWRITEAOF" | "BGSAVE" | "SAVE" | "EVAL" | "EVALSHA" => {
+            warnings.push(SqlRiskWarning {
+                code: "REDIS_ADMIN_COMMAND".to_string(),
+                level: RiskLevel::Critical,
+                message: format!("{cmd} 属于高危管理或服务端脚本命令，可能影响实例稳定性。"),
+                statement_index,
+            });
+            (SqlAccessKind::AdminOrDcl, cmd, warnings)
+        }
+
+        _ => (SqlAccessKind::Unknown, cmd, warnings),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1284,5 +1579,38 @@ GROUP BY customer_id;
         assert!(formatted.contains("\n  AND total_amount > 100"));
         assert!(formatted.contains("'where from'"));
         assert!(formatted.contains("\nLIMIT 20;"));
+    }
+
+    #[test]
+    fn test_redis_command_analysis_and_risk_classification() {
+        let script = r#"
+        -- inspect keys
+        # comment line
+        GET user:1001
+        HGETALL "session:a b"
+        KEYS *
+        SET temp:flag "hello \"world\"" EX 60;
+        FLUSHALL
+        "#;
+        let res = analyze_sql(script, &DbEngineType::Redis);
+        assert_eq!(res.statements.len(), 5);
+        assert_eq!(res.statements[0].access_kind, SqlAccessKind::ReadOnly);
+        assert!(res.statements[0].warnings.is_empty());
+        assert_eq!(res.statements[1].access_kind, SqlAccessKind::ReadOnly);
+        assert_eq!(res.statements[2].access_kind, SqlAccessKind::ReadOnly);
+        assert_eq!(res.statements[2].warnings[0].code, "REDIS_BLOCKING_KEYS");
+        assert_eq!(res.statements[2].warnings[0].level, RiskLevel::High);
+        assert_eq!(res.statements[3].access_kind, SqlAccessKind::WriteDml);
+        assert_eq!(res.statements[4].access_kind, SqlAccessKind::WriteDdl);
+        assert_eq!(res.statements[4].warnings[0].code, "REDIS_FLUSH_ALL");
+        assert_eq!(res.statements[4].warnings[0].level, RiskLevel::Critical);
+        assert_eq!(res.overall_kind, SqlAccessKind::WriteDdl);
+        assert!(res.requires_ticket);
+
+        let toks = tokenize_redis_command(r#"SET my:key "hello \"redis\"" EX 60"#);
+        assert_eq!(
+            toks,
+            vec!["SET", "my:key", "hello \"redis\"", "EX", "60"]
+        );
     }
 }

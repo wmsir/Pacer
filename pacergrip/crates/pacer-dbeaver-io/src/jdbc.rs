@@ -107,6 +107,14 @@ pub fn build_jdbc_url(
             .entry("socket".to_string())
             .or_insert_with(|| sock.to_string());
     }
+    let redis_ssl = matches!(db_type, DbEngineType::Redis)
+        && effective_params
+            .get("ssl")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+    if redis_ssl {
+        effective_params.remove("ssl");
+    }
 
     let base = match db_type {
         DbEngineType::Sqlite => format!("jdbc:sqlite:{db}"),
@@ -125,6 +133,10 @@ pub fn build_jdbc_url(
         DbEngineType::MariaDb => format!("jdbc:mariadb://{h}{port_part}{db_slash}"),
         DbEngineType::OceanBase => format!("jdbc:oceanbase://{h}{port_part}{db_slash}"),
         DbEngineType::ClickHouse => format!("jdbc:clickhouse://{h}{port_part}{db_slash}"),
+        DbEngineType::Redis => {
+            let scheme = if redis_ssl { "rediss" } else { "redis" };
+            format!("{scheme}://{h}{port_part}{db_slash}")
+        }
         // TiDB and MySQL both use standard `jdbc:mysql://host:port[/db]`.
         DbEngineType::TiDb | DbEngineType::MySql | DbEngineType::Unknown(_) => {
             format!("jdbc:mysql://{h}{port_part}{db_slash}")
@@ -217,6 +229,9 @@ fn parse_standard_url(raw_url: &str, after_jdbc: &str) -> CoreResult<ParsedJdbcU
     let (username, password, host, port) = parse_authority(authority);
 
     let mut params = BTreeMap::new();
+    if primary_scheme.eq_ignore_ascii_case("rediss") {
+        params.insert("ssl".to_string(), "true".to_string());
+    }
     if let Some(q) = query_part {
         parse_kv_pairs(q, '&', &mut params);
     }
@@ -475,5 +490,56 @@ fn non_empty(s: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_redis_and_rediss_url_parsing_and_building() {
+        let parsed = parse_connection_url(
+            "rediss://user:secret@redis.example.com:6380/2",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(parsed.db_type, DbEngineType::Redis);
+        assert_eq!(parsed.host.as_deref(), Some("redis.example.com"));
+        assert_eq!(parsed.port, Some(6380));
+        assert_eq!(parsed.database.as_deref(), Some("2"));
+        assert_eq!(parsed.username.as_deref(), Some("user"));
+        assert_eq!(parsed.password.as_deref(), Some("secret"));
+        assert_eq!(parsed.params.get("ssl").map(String::as_str), Some("true"));
+
+        let rebuilt_tls = build_jdbc_url(
+            &DbEngineType::Redis,
+            parsed.host.as_deref(),
+            parsed.port,
+            parsed.database.as_deref(),
+            &parsed.params,
+            None,
+        );
+        assert_eq!(rebuilt_tls, "rediss://redis.example.com:6380/2");
+
+        let legacy_auth =
+            parse_connection_url("redis://:onlypass@127.0.0.1/0", None, None).unwrap();
+        assert_eq!(legacy_auth.db_type, DbEngineType::Redis);
+        assert_eq!(legacy_auth.port, Some(6379));
+        assert_eq!(legacy_auth.username, None);
+        assert_eq!(legacy_auth.password.as_deref(), Some("onlypass"));
+        assert_eq!(legacy_auth.database.as_deref(), Some("0"));
+        assert!(!legacy_auth.params.contains_key("ssl"));
+
+        let rebuilt_plain = build_jdbc_url(
+            &DbEngineType::Redis,
+            legacy_auth.host.as_deref(),
+            legacy_auth.port,
+            legacy_auth.database.as_deref(),
+            &legacy_auth.params,
+            None,
+        );
+        assert_eq!(rebuilt_plain, "redis://127.0.0.1:6379/0");
     }
 }

@@ -166,6 +166,7 @@ const ENGINE_OPTIONS = [
   { value: 'postgreSql', label: 'PostgreSQL', badge: 'PG', defaultPort: 5432, scheme: 'jdbc:postgresql' },
   { value: 'oceanBase', label: 'OceanBase (MySQL 模式)', badge: 'OB', defaultPort: 2881, scheme: 'jdbc:oceanbase' },
   { value: 'sqlite', label: 'SQLite (本地嵌入式)', badge: 'SQLite', defaultPort: null, scheme: 'jdbc:sqlite' },
+  { value: 'redis', label: 'Redis (原生直连)', badge: 'Redis', defaultPort: 6379, scheme: 'redis' },
   { value: 'kingbase', label: '人大金仓 KingbaseES', badge: 'KB', defaultPort: 54321, scheme: 'jdbc:kingbase8' },
   { value: 'openGauss', label: 'openGauss', badge: 'OG', defaultPort: 5432, scheme: 'jdbc:opengauss' },
   { value: 'oracle', label: 'Oracle (元数据配置)', badge: 'ORA', defaultPort: 1521, scheme: 'jdbc:oracle:thin:@/' },
@@ -349,6 +350,7 @@ const connForm = reactive<{
 });
 
 const isSqliteEngine = computed(() => connForm.dbType === 'sqlite');
+const isRedisEngine = computed(() => connForm.dbType === 'redis');
 
 function normalizeDbTypeString(dbType: string | Record<string, string>): string {
   if (typeof dbType === 'string') return dbType;
@@ -383,6 +385,9 @@ function buildUrlFromFields(): string {
     base = `jdbc:dm://${h}${portPart}${dbPart}`;
   } else if (connForm.dbType === 'clickHouse') {
     base = `jdbc:clickhouse://${h}${portPart}${dbPart}`;
+  } else if (connForm.dbType === 'redis') {
+    const scheme = connForm.sslEnabled ? 'rediss' : 'redis';
+    base = `${scheme}://${h}${portPart}${dbPart}`;
   } else {
     // TiDB and MySQL both use standard `jdbc:mysql://host:port[/db]`
     base = `jdbc:mysql://${h}${portPart}${dbPart}`;
@@ -422,6 +427,11 @@ function onEngineChange() {
     if (!connForm.database) {
       connForm.database = 'C:/data/sample.db';
     }
+  } else if (connForm.dbType === 'redis') {
+    if (!connForm.host) connForm.host = '127.0.0.1';
+    if (!connForm.port) connForm.port = '6379';
+    if (!connForm.database) connForm.database = '0';
+    if (connForm.username === 'root') connForm.username = '';
   } else {
     if (!connForm.host) connForm.host = '127.0.0.1';
     if (connForm.authType === 'noAuth') connForm.authType = 'userPassword';
@@ -480,6 +490,11 @@ function onUrlManualInput() {
     connForm.dbType = 'dameng';
   } else if (scheme === 'clickhouse') {
     connForm.dbType = 'clickHouse';
+  } else if (scheme === 'redis' || scheme === 'rediss') {
+    connForm.dbType = 'redis';
+    if (scheme === 'rediss') {
+      connForm.sslEnabled = true;
+    }
   } else if (scheme === 'sqlserver') {
     connForm.dbType = 'sqlServer';
   }
@@ -1797,7 +1812,7 @@ function runImportLiveTemplates() {
                   v-model="connForm.username"
                   class="field"
                   style="max-width: 72%"
-                  placeholder="policy_d01_uat"
+                  :placeholder="isRedisEngine ? 'default（可选，仅 Redis 6+ ACL 多用户认证需要填写）' : 'policy_d01_uat'"
                 />
               </div>
 
@@ -1837,7 +1852,7 @@ function runImportLiveTemplates() {
               <input
                 v-model="connForm.database"
                 class="field"
-                placeholder="可留空（连接实例后浏览所有数据库）"
+                :placeholder="isRedisEngine ? '0（默认逻辑库 db0，范围 0 ~ 15）' : '可留空（连接实例后浏览所有数据库）'"
                 @input="syncUrlFromFields"
               />
             </div>
@@ -2155,7 +2170,7 @@ function runImportLiveTemplates() {
           <div class="conn-row">
             <label class="conn-row-label" />
             <label style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12.5px; font-weight: 500">
-              <input v-model="connForm.sslEnabled" type="checkbox" />
+              <input v-model="connForm.sslEnabled" type="checkbox" @change="isRedisEngine && syncUrlFromFields()" />
               <span>启用 SSL / TLS 加密连接 (Use SSL)</span>
             </label>
           </div>

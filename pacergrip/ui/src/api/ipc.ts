@@ -401,6 +401,19 @@ export async function pickCertificateOrKeyFile(
   return typeof res === 'string' ? res : null;
 }
 
+export async function pickDataImportFile(): Promise<string | null> {
+  assertTauri();
+  const res = await dialogOpen({
+    multiple: false,
+    directory: false,
+    filters: [
+      { name: 'CSV / TSV / JSON Data', extensions: ['csv', 'tsv', 'json', 'txt'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
 export async function listProjects(): Promise<WorkspaceProject[]> {
   assertTauri();
   return invoke('list_projects_cmd');

@@ -765,6 +765,7 @@ export function getEngineDisplayName(engineKey: string): string {
   if (e.includes('dameng') || e === 'dm') return '达梦 DM8';
   if (e.includes('sqlserver') || e.includes('mssql')) return 'SQL Server';
   if (e.includes('clickhouse')) return 'ClickHouse';
+  if (e.includes('redis')) return 'Redis';
   return engineKey || 'SQL';
 }
 
@@ -1134,6 +1135,29 @@ export function getExplainModesForEngine(engineKey: string): {
     };
   }
 
+  if (e.includes('redis')) {
+    return {
+      dialectLabel: 'Redis',
+      canRunDirectly: true,
+      options: [
+        {
+          mode: 'standard',
+          label: 'Redis Key 诊断 (MEMORY / ENCODING / TTL)',
+          shortSyntax: 'MEMORY USAGE',
+          executesQuery: false,
+          description: '检查当前命令目标 Key 的数据类型、TTL 过期时间、内部编码与内存占用',
+        },
+        {
+          mode: 'verbose',
+          label: 'Redis 实例状态总览',
+          shortSyntax: 'INFO',
+          executesQuery: false,
+          description: '查看 Redis 内存占用、命中率、客户端连接与各 db 键空间统计',
+        },
+      ],
+    };
+  }
+
   return {
     dialectLabel,
     canRunDirectly: true,
@@ -1172,7 +1196,16 @@ export function buildExplainPlanSql(
   const e = (engineKey || 'mysql').toLowerCase();
 
   let sql = '';
-  if (e.includes('tidb')) {
+  if (e.includes('redis')) {
+    if (resolvedMode === 'verbose') {
+      sql = 'INFO';
+    } else {
+      const firstCmd = splitRedisCommands(rawSql)[0] ?? rawSql.trim();
+      const argMatch = firstCmd.match(/^\S+\s+("(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\S+)/);
+      const targetKey = argMatch?.[1];
+      sql = targetKey ? `MEMORY USAGE ${targetKey}` : 'INFO keyspace';
+    }
+  } else if (e.includes('tidb')) {
     if (resolvedMode === 'analyze') sql = `EXPLAIN ANALYZE ${inner};`;
     else if (resolvedMode === 'verbose') sql = `EXPLAIN FORMAT = 'verbose' ${inner};`;
     else sql = `EXPLAIN ${inner};`;
@@ -1322,4 +1355,996 @@ export function buildSshTunnelCommand(
   const keyPart = ssh.keyFile?.trim() ? ` -i "${ssh.keyFile.trim()}"` : '';
   const portPart = sshPort !== 22 ? ` -p ${sshPort}` : '';
   return `ssh -N -L ${localPort}:${dbHost}:${dbPort}${keyPart}${portPart} ${user}@${host}`;
+}
+
+// ==================== High-Frequency Productivity Tools (v0.9.4) ====================
+
+export function toCsvWithBom(columns: string[], rows: Record<string, unknown>[]): string {
+  return `\uFEFF${toCsv(columns, rows)}`;
+}
+
+export function toTsv(columns: string[], rows: Record<string, unknown>[]): string {
+  if (columns.length === 0) return '';
+  const esc = (v: unknown) => {
+    if (v === null || v === undefined) return '';
+    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    return s.replace(/[\t\r\n]+/g, ' ');
+  };
+  return [
+    columns.map(esc).join('\t'),
+    ...rows.map((r) => columns.map((c) => esc(r[c])).join('\t')),
+  ].join('\n');
+}
+
+export function toUpdateSql(
+  tableName: string,
+  columns: string[],
+  primaryKeys: string[],
+  rows: Record<string, unknown>[],
+  engineKey = 'mysql',
+): string {
+  if (columns.length === 0 || rows.length === 0) return '';
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const safeTable = q(tableName || 'target_table');
+  const usablePks = primaryKeys.filter((pk) => columns.includes(pk));
+  const keyCols = usablePks.length > 0 ? usablePks : [columns[0]];
+  const setCols = columns.filter((c) => !keyCols.includes(c));
+  const effectiveSetCols = setCols.length > 0 ? setCols : columns;
+
+  return rows
+    .map((r) => {
+      const setClause = effectiveSetCols
+        .map((c) => `${q(c)} = ${formatSqlLiteral(r[c])}`)
+        .join(', ');
+      const whereClause = keyCols
+        .map((k) => {
+          const val = r[k];
+          return val === null || val === undefined ? `${q(k)} IS NULL` : `${q(k)} = ${formatSqlLiteral(val)}`;
+        })
+        .join(' AND ');
+      return `UPDATE ${safeTable} SET ${setClause} WHERE ${whereClause};`;
+    })
+    .join('\n');
+}
+
+export function detectCsvDelimiter(raw: string): string {
+  const firstLine = raw.replace(/^\uFEFF/, '').split(/\r?\n/).find((l) => l.trim().length > 0) ?? '';
+  let commas = 0;
+  let tabs = 0;
+  let semis = 0;
+  let inQuotes = false;
+  for (let i = 0; i < firstLine.length; i += 1) {
+    const ch = firstLine[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (!inQuotes) {
+      if (ch === ',') commas += 1;
+      else if (ch === '\t') tabs += 1;
+      else if (ch === ';') semis += 1;
+    }
+  }
+  if (tabs > commas && tabs >= semis) return '\t';
+  if (semis > commas && commas === 0 && tabs === 0) return ';';
+  return ',';
+}
+
+export function parseCsvText(
+  raw: string,
+  opts: { delimiter?: string; hasHeader?: boolean } = {},
+): { headers: string[]; rows: string[][]; delimiter: string } {
+  const text = raw.replace(/^\uFEFF/, '');
+  const delimiter = opts.delimiter || detectCsvDelimiter(text);
+  const hasHeader = opts.hasHeader !== false;
+  const matrix: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          field += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      row.push(field);
+      field = '';
+    } else if (ch === '\r') {
+      if (text[i + 1] === '\n') i += 1;
+      row.push(field);
+      if (row.length > 1 || row[0] !== '') matrix.push(row);
+      row = [];
+      field = '';
+    } else if (ch === '\n') {
+      row.push(field);
+      if (row.length > 1 || row[0] !== '') matrix.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += ch;
+    }
+  }
+
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    if (row.length > 1 || row[0] !== '') matrix.push(row);
+  }
+
+  if (matrix.length === 0) {
+    return { headers: [], rows: [], delimiter };
+  }
+
+  const maxWidth = matrix.reduce((m, r) => Math.max(m, r.length), 0);
+  if (!hasHeader) {
+    const headers = Array.from({ length: maxWidth }, (_, idx) => `col_${idx + 1}`);
+    return { headers, rows: matrix, delimiter };
+  }
+
+  const used = new Set<string>();
+  const headers = matrix[0].map((rawName, idx) => {
+    const base = rawName.trim() || `col_${idx + 1}`;
+    let name = base;
+    let suffix = 2;
+    while (used.has(name)) {
+      name = `${base}_${suffix++}`;
+    }
+    used.add(name);
+    return name;
+  });
+  return { headers, rows: matrix.slice(1), delimiter };
+}
+
+export function parseImportData(
+  raw: string,
+  format: 'auto' | 'csv' | 'json' = 'auto',
+  opts: { delimiter?: string; hasHeader?: boolean } = {},
+): {
+  detectedFormat: 'csv' | 'json';
+  headers: string[];
+  rows: Record<string, unknown>[];
+  delimiter?: string;
+} {
+  const cleaned = raw.replace(/^\uFEFF/, '').trim();
+  if (!cleaned) return { detectedFormat: 'csv', headers: [], rows: [], delimiter: ',' };
+
+  const shouldTryJson =
+    format === 'json' ||
+    (format === 'auto' && (cleaned.startsWith('[') || cleaned.startsWith('{')));
+
+  if (shouldTryJson) {
+    const parsed = JSON.parse(cleaned) as unknown;
+    let arr: unknown[] = [];
+    if (Array.isArray(parsed)) {
+      arr = parsed;
+    } else if (parsed && typeof parsed === 'object') {
+      const rec = parsed as Record<string, unknown>;
+      const nested = [rec.data, rec.rows, rec.records, rec.items].find((v) => Array.isArray(v));
+      arr = Array.isArray(nested) ? nested : [parsed];
+    }
+    const objRows = arr.filter((r): r is Record<string, unknown> => Boolean(r && typeof r === 'object'));
+    const headers: string[] = [];
+    const seen = new Set<string>();
+    for (const r of objRows.slice(0, 200)) {
+      for (const k of Object.keys(r)) {
+        if (!seen.has(k)) {
+          seen.add(k);
+          headers.push(k);
+        }
+      }
+    }
+    return { detectedFormat: 'json', headers, rows: objRows };
+  }
+
+  const csv = parseCsvText(cleaned, opts);
+  const rows: Record<string, unknown>[] = csv.rows.map((cells) => {
+    const obj: Record<string, unknown> = {};
+    for (let i = 0; i < csv.headers.length; i += 1) {
+      obj[csv.headers[i]] = cells[i] ?? '';
+    }
+    return obj;
+  });
+  return { detectedFormat: 'csv', headers: csv.headers, rows, delimiter: csv.delimiter };
+}
+
+function isNumericSqlType(dataType?: string): boolean {
+  if (!dataType) return false;
+  return /\b(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|serial)\b/i.test(
+    dataType,
+  );
+}
+
+function isBooleanSqlType(dataType?: string): boolean {
+  if (!dataType) return false;
+  return /\b(bool|boolean|bit)\b/i.test(dataType);
+}
+
+function isTextSqlType(dataType?: string): boolean {
+  if (!dataType) return false;
+  return /\b(char|varchar|text|clob|string|json|uuid|enum)\b/i.test(dataType);
+}
+
+function formatImportCellValue(val: unknown, targetType?: string): string {
+  if (val === null || val === undefined) return 'NULL';
+  if (typeof val === 'number') return Number.isFinite(val) ? String(val) : 'NULL';
+  if (typeof val === 'boolean') return val ? 'TRUE' : 'FALSE';
+  if (typeof val === 'object') return `'${JSON.stringify(val).replace(/'/g, "''")}'`;
+
+  const s = String(val);
+  if (s === '') return 'NULL';
+  const upper = s.trim().toUpperCase();
+  if (upper === 'NULL') return 'NULL';
+
+  if (isBooleanSqlType(targetType)) {
+    if (upper === 'TRUE' || s === '1') return 'TRUE';
+    if (upper === 'FALSE' || s === '0') return 'FALSE';
+  }
+  if (!isTextSqlType(targetType) && /^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(s.trim())) {
+    if (isNumericSqlType(targetType) || s.trim().length <= 15) {
+      return s.trim();
+    }
+  }
+  return `'${s.replace(/'/g, "''")}'`;
+}
+
+export function buildBatchInsertStatements(opts: {
+  tableName: string;
+  dbName?: string;
+  engineKey: string;
+  targetColumns: string[];
+  targetColumnTypes?: Record<string, string>;
+  rows: Array<Record<string, unknown>>;
+  batchSize?: number;
+  ignoreDuplicates?: boolean;
+}): string[] {
+  if (opts.targetColumns.length === 0 || opts.rows.length === 0) return [];
+  const q = (id: string) => quoteIdentifier(id, opts.engineKey);
+  const qualified =
+    opts.dbName && opts.dbName !== 'main' && opts.dbName !== 'default'
+      ? `${q(opts.dbName)}.${q(opts.tableName)}`
+      : q(opts.tableName);
+  const colList = opts.targetColumns.map(q).join(', ');
+  const eng = (opts.engineKey || 'mysql').toLowerCase();
+  const isPgFamily = eng.includes('postgres') || eng.includes('kingbase') || eng.includes('gauss') || eng === 'pg';
+  const isSqlite = eng.includes('sqlite');
+  const isMysqlFamily =
+    eng.includes('mysql') || eng.includes('tidb') || eng.includes('maria') || eng.includes('oceanbase');
+
+  const prefix =
+    opts.ignoreDuplicates && isSqlite
+      ? 'INSERT OR IGNORE INTO'
+      : opts.ignoreDuplicates && isMysqlFamily
+        ? 'INSERT IGNORE INTO'
+        : 'INSERT INTO';
+  const suffix = opts.ignoreDuplicates && isPgFamily ? ' ON CONFLICT DO NOTHING' : '';
+
+  const batchSize = Math.max(1, opts.batchSize ?? 100);
+  const out: string[] = [];
+
+  for (let start = 0; start < opts.rows.length; start += batchSize) {
+    const slice = opts.rows.slice(start, start + batchSize);
+    const tuples = slice.map((r) => {
+      const vals = opts.targetColumns.map((col) =>
+        formatImportCellValue(r[col], opts.targetColumnTypes?.[col]),
+      );
+      return `(${vals.join(', ')})`;
+    });
+    out.push(`${prefix} ${qualified} (${colList}) VALUES\n${tuples.join(',\n')}${suffix};`);
+  }
+
+  return out;
+}
+
+export type EntityCodeLang = 'java' | 'go' | 'typescript' | 'python' | 'rust';
+
+export interface EntityColumnInput {
+  name: string;
+  dataType: string;
+  nullable: boolean;
+  isPrimaryKey: boolean;
+  comment?: string | null;
+  defaultValue?: string | null;
+}
+
+function toPascalCase(raw: string): string {
+  return (
+    raw
+      .split(/[^A-Za-z0-9]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join('') || 'EntityModel'
+  );
+}
+
+function toCamelCase(raw: string): string {
+  const pascal = toPascalCase(raw);
+  return pascal.charAt(0).toLowerCase() + pascal.slice(1);
+}
+
+function toSnakeCase(raw: string): string {
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .toLowerCase()
+    .replace(/^_+|_+$/g, '') || 'field';
+}
+
+function classifySqlType(
+  rawType: string,
+): 'bool' | 'bigint' | 'int' | 'decimal' | 'float' | 'date' | 'datetime' | 'blob' | 'json' | 'string' {
+  const t = (rawType || '').toLowerCase();
+  if (/\btinyint\s*\(\s*1\s*\)|\bbool|\bboolean|\bbit\b/.test(t)) return 'bool';
+  if (/\bbigint|\bint8\b/.test(t)) return 'bigint';
+  if (/\bint|\bsmallint|\btinyint|\bmediumint|\bserial|\binteger/.test(t)) return 'int';
+  if (/\bdecimal|\bnumeric|\bnumber/.test(t)) return 'decimal';
+  if (/\bfloat|\bdouble|\breal/.test(t)) return 'float';
+  if (/\bdatetime|\btimestamp/.test(t)) return 'datetime';
+  if (/\bdate\b/.test(t)) return 'date';
+  if (/\bblob|\bbytea|\bbinary|\bvarbinary/.test(t)) return 'blob';
+  if (/\bjson/.test(t)) return 'json';
+  return 'string';
+}
+
+export function generateEntityCode(
+  tableName: string,
+  columns: EntityColumnInput[],
+  lang: EntityCodeLang,
+  opts: {
+    camelCase?: boolean;
+    withOrmTags?: boolean;
+    withComments?: boolean;
+    pythonStyle?: 'dataclass' | 'pydantic';
+  } = {},
+): { filename: string; code: string } {
+  const className = toPascalCase(tableName);
+  const camelCase = opts.camelCase !== false;
+  const withOrmTags = opts.withOrmTags !== false;
+  const withComments = opts.withComments !== false;
+
+  if (lang === 'java') {
+    const usesDecimal = columns.some((c) => classifySqlType(c.dataType) === 'decimal');
+    const usesTime = columns.some((c) => {
+      const k = classifySqlType(c.dataType);
+      return k === 'datetime' || k === 'date';
+    });
+    const imports = ['import java.io.Serializable;', 'import lombok.Data;'];
+    if (withOrmTags) {
+      imports.push(
+        'import com.baomidou.mybatisplus.annotation.IdType;',
+        'import com.baomidou.mybatisplus.annotation.TableField;',
+        'import com.baomidou.mybatisplus.annotation.TableId;',
+        'import com.baomidou.mybatisplus.annotation.TableName;',
+      );
+    }
+    if (usesDecimal) imports.push('import java.math.BigDecimal;');
+    if (usesTime) {
+      imports.push('import java.time.LocalDate;', 'import java.time.LocalDateTime;');
+    }
+
+    const fields = columns.map((c) => {
+      const k = classifySqlType(c.dataType);
+      const jType =
+        k === 'bool'
+          ? 'Boolean'
+          : k === 'bigint'
+            ? 'Long'
+            : k === 'int'
+              ? 'Integer'
+              : k === 'decimal'
+                ? 'BigDecimal'
+                : k === 'float'
+                  ? 'Double'
+                  : k === 'datetime'
+                    ? 'LocalDateTime'
+                    : k === 'date'
+                      ? 'LocalDate'
+                      : k === 'blob'
+                        ? 'byte[]'
+                        : 'String';
+      const fName = camelCase ? toCamelCase(c.name) : toSnakeCase(c.name);
+      const lines: string[] = [];
+      if (withComments && c.comment) {
+        lines.push(`    /** ${c.comment} */`);
+      }
+      if (withOrmTags) {
+        if (c.isPrimaryKey) {
+          lines.push(`    @TableId(value = "${c.name}", type = IdType.AUTO)`);
+        } else {
+          lines.push(`    @TableField("${c.name}")`);
+        }
+      }
+      lines.push(`    private ${jType} ${fName};`);
+      return lines.join('\n');
+    });
+
+    const headerAnns = ['@Data'];
+    if (withOrmTags) headerAnns.push(`@TableName("${tableName}")`);
+    return {
+      filename: `${className}.java`,
+      code: `${imports.join('\n')}\n\n${headerAnns.join('\n')}\npublic class ${className} implements Serializable {\n\n${fields.join('\n\n')}\n}\n`,
+    };
+  }
+
+  if (lang === 'go') {
+    const usesTime = columns.some((c) => {
+      const k = classifySqlType(c.dataType);
+      return k === 'datetime' || k === 'date';
+    });
+    const header = usesTime ? 'package model\n\nimport "time"\n\n' : 'package model\n\n';
+    const fields = columns.map((c) => {
+      const k = classifySqlType(c.dataType);
+      const base =
+        k === 'bool'
+          ? 'bool'
+          : k === 'bigint'
+            ? 'int64'
+            : k === 'int'
+              ? 'int'
+              : k === 'decimal' || k === 'float'
+                ? 'float64'
+                : k === 'datetime' || k === 'date'
+                  ? 'time.Time'
+                  : k === 'blob'
+                    ? '[]byte'
+                    : 'string';
+      const goType = c.nullable && !c.isPrimaryKey && base !== '[]byte' ? `*${base}` : base;
+      const goName = toPascalCase(c.name);
+      const jsonKey = camelCase ? toCamelCase(c.name) : toSnakeCase(c.name);
+      const gormParts = [`column:${c.name}`];
+      if (c.isPrimaryKey) gormParts.push('primaryKey');
+      const tag = withOrmTags ? ` \`gorm:"${gormParts.join(';')}" json:"${jsonKey}"\`` : '';
+      const comment = withComments && c.comment ? ` // ${c.comment}` : '';
+      return `\t${goName} ${goType}${tag}${comment}`;
+    });
+    const tableFn = withOrmTags
+      ? `\n\nfunc (${className}) TableName() string {\n\treturn "${tableName}"\n}`
+      : '';
+    return {
+      filename: `${toSnakeCase(tableName)}.go`,
+      code: `${header}type ${className} struct {\n${fields.join('\n')}\n}${tableFn}\n`,
+    };
+  }
+
+  if (lang === 'typescript') {
+    const fields = columns.map((c) => {
+      const k = classifySqlType(c.dataType);
+      const base =
+        k === 'bool'
+          ? 'boolean'
+          : k === 'int' || k === 'bigint' || k === 'float'
+            ? 'number'
+            : k === 'json'
+              ? 'Record<string, unknown>'
+              : 'string';
+      const tsType = c.nullable && !c.isPrimaryKey ? `${base} | null` : base;
+      const fName = camelCase ? toCamelCase(c.name) : c.name;
+      const comment = withComments && c.comment ? `  /** ${c.comment} */\n` : '';
+      return `${comment}  ${fName}: ${tsType};`;
+    });
+    return {
+      filename: `${className}.ts`,
+      code: `export interface ${className} {\n${fields.join('\n')}\n}\n`,
+    };
+  }
+
+  if (lang === 'python') {
+    const pydantic = opts.pythonStyle !== 'dataclass';
+    const imports = ['from typing import Optional'];
+    const usesDateTime = columns.some((c) => classifySqlType(c.dataType) === 'datetime');
+    const usesDate = columns.some((c) => classifySqlType(c.dataType) === 'date');
+    const usesDecimal = columns.some((c) => classifySqlType(c.dataType) === 'decimal');
+    if (usesDateTime) imports.push('from datetime import datetime');
+    if (usesDate) imports.push('from datetime import date');
+    if (usesDecimal) imports.push('from decimal import Decimal');
+    imports.push(pydantic ? 'from pydantic import BaseModel, Field' : 'from dataclasses import dataclass');
+
+    const fields = columns.map((c) => {
+      const k = classifySqlType(c.dataType);
+      const base =
+        k === 'bool'
+          ? 'bool'
+          : k === 'int' || k === 'bigint'
+            ? 'int'
+            : k === 'decimal'
+              ? 'Decimal'
+              : k === 'float'
+                ? 'float'
+                : k === 'datetime'
+                  ? 'datetime'
+                  : k === 'date'
+                    ? 'date'
+                    : k === 'json'
+                      ? 'dict'
+                      : k === 'blob'
+                        ? 'bytes'
+                        : 'str';
+      const pyType = c.nullable && !c.isPrimaryKey ? `Optional[${base}]` : base;
+      const fName = camelCase ? toCamelCase(c.name) : toSnakeCase(c.name);
+      const def =
+        pydantic && withOrmTags
+          ? c.nullable
+            ? ` = Field(default=None${c.comment ? `, description="${c.comment.replace(/"/g, '\\"')}"` : ''})`
+            : c.comment
+              ? ` = Field(..., description="${c.comment.replace(/"/g, '\\"')}")`
+              : ''
+          : c.nullable
+            ? ' = None'
+            : '';
+      const comment = withComments && c.comment && (!pydantic || !withOrmTags) ? `  # ${c.comment}` : '';
+      return `    ${fName}: ${pyType}${def}${comment}`;
+    });
+
+    const clsHeader = pydantic
+      ? `class ${className}(BaseModel):`
+      : `@dataclass\nclass ${className}:`;
+    return {
+      filename: `${toSnakeCase(tableName)}.py`,
+      code: `${imports.join('\n')}\n\n\n${clsHeader}\n${fields.join('\n')}\n`,
+    };
+  }
+
+  // Rust
+  const fields = columns.map((c) => {
+    const k = classifySqlType(c.dataType);
+    const base =
+      k === 'bool'
+        ? 'bool'
+        : k === 'bigint'
+          ? 'i64'
+          : k === 'int'
+            ? 'i32'
+            : k === 'float'
+              ? 'f64'
+              : k === 'json'
+                ? 'serde_json::Value'
+                : k === 'blob'
+                  ? 'Vec<u8>'
+                  : 'String';
+    const rsType = c.nullable && !c.isPrimaryKey ? `Option<${base}>` : base;
+    const fName = toSnakeCase(c.name);
+    const lines: string[] = [];
+    if (withComments && c.comment) lines.push(`    /// ${c.comment}`);
+    lines.push(`    pub ${fName}: ${rsType},`);
+    return lines.join('\n');
+  });
+  const derives = withOrmTags
+    ? `#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]\n${camelCase ? '#[serde(rename_all = "camelCase")]\n' : ''}`
+    : '#[derive(Debug, Clone)]\n';
+  return {
+    filename: `${toSnakeCase(tableName)}.rs`,
+    code: `${derives}pub struct ${className} {\n${fields.join('\n')}\n}\n`,
+  };
+}
+
+export function generateMockInsertSql(
+  tableName: string,
+  dbName: string | undefined,
+  columns: EntityColumnInput[],
+  engineKey: string,
+  rowCount = 10,
+): string {
+  if (columns.length === 0) return '';
+  const targetCols = columns
+    .filter((c) => !(c.isPrimaryKey && /\bint|\bbigint/i.test(c.dataType)))
+    .map((c) => c);
+  const activeCols = targetCols.length > 0 ? targetCols : columns;
+  const rows: Array<Record<string, unknown>> = [];
+
+  for (let i = 1; i <= rowCount; i += 1) {
+    const row: Record<string, unknown> = {};
+    for (const c of activeCols) {
+      const nameLow = c.name.toLowerCase();
+      const k = classifySqlType(c.dataType);
+      if (nameLow.includes('email')) {
+        row[c.name] = `user${i}@example.com`;
+      } else if (nameLow.includes('phone') || nameLow.includes('mobile')) {
+        row[c.name] = `1380000${String(1000 + i).slice(-4)}`;
+      } else if (nameLow.includes('status') || nameLow.includes('state')) {
+        row[c.name] = k === 'string' ? (i % 2 === 0 ? 'ACTIVE' : 'PENDING') : i % 2;
+      } else if (k === 'bool') {
+        row[c.name] = i % 2 === 1;
+      } else if (k === 'bigint' || k === 'int') {
+        row[c.name] = i * 10;
+      } else if (k === 'decimal' || k === 'float') {
+        row[c.name] = Number((i * 19.5).toFixed(2));
+      } else if (k === 'date') {
+        row[c.name] = `2026-01-${String((i % 28) + 1).padStart(2, '0')}`;
+      } else if (k === 'datetime') {
+        row[c.name] = `2026-01-${String((i % 28) + 1).padStart(2, '0')} 10:${String(i % 60).padStart(2, '0')}:00`;
+      } else if (k === 'json') {
+        row[c.name] = `{"seq":${i},"mock":true}`;
+      } else {
+        row[c.name] = `${c.name}_sample_${i}`;
+      }
+    }
+    rows.push(row);
+  }
+
+  const targetColumnTypes: Record<string, string> = {};
+  for (const c of activeCols) targetColumnTypes[c.name] = c.dataType;
+
+  const stmts = buildBatchInsertStatements({
+    tableName,
+    dbName,
+    engineKey,
+    targetColumns: activeCols.map((c) => c.name),
+    targetColumnTypes,
+    rows,
+    batchSize: rowCount,
+    ignoreDuplicates: false,
+  });
+  return `-- 自动生成 ${rowCount} 行 Mock 测试数据 (${tableName})\n${stmts.join('\n')}\n`;
+}
+
+export interface CreateTableColumnDraft {
+  name: string;
+  dataType: string;
+  length: string;
+  nullable: boolean;
+  primaryKey: boolean;
+  autoIncrement: boolean;
+  defaultValue: string;
+  comment: string;
+}
+
+export interface CreateTableIndexDraft {
+  name: string;
+  columns: string;
+  unique: boolean;
+}
+
+export interface CreateTableSpec {
+  dbName?: string;
+  tableName: string;
+  comment?: string;
+  columns: CreateTableColumnDraft[];
+  indexes: CreateTableIndexDraft[];
+}
+
+export function generateCreateTableDdl(spec: CreateTableSpec, engineKey: string): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const rawTable = spec.tableName.trim() || 'new_table';
+  const qualifiedTable =
+    spec.dbName && spec.dbName !== 'main' && spec.dbName !== 'default'
+      ? `${q(spec.dbName)}.${q(rawTable)}`
+      : q(rawTable);
+  const eng = (engineKey || 'mysql').toLowerCase();
+  const isSqlite = eng.includes('sqlite');
+  const isPgFamily = eng.includes('postgres') || eng.includes('kingbase') || eng.includes('gauss') || eng === 'pg';
+  const isMysqlFamily =
+    eng.includes('mysql') || eng.includes('tidb') || eng.includes('maria') || eng.includes('oceanbase');
+  const isOracleOrDm = eng.includes('oracle') || eng.includes('dameng') || eng === 'dm';
+  const isMsSql = eng.includes('sqlserver') || eng.includes('mssql');
+  const isClickHouse = eng.includes('clickhouse');
+
+  const pkCols = spec.columns.filter((c) => c.primaryKey && c.name.trim());
+  const colDefs: string[] = [];
+
+  for (const col of spec.columns) {
+    const colName = col.name.trim();
+    if (!colName) continue;
+    let typeExpr = (col.dataType.trim() || 'VARCHAR').toUpperCase();
+    if (col.length.trim() && !typeExpr.includes('(')) {
+      typeExpr = `${typeExpr}(${col.length.trim()})`;
+    }
+    if (isPgFamily && col.autoIncrement) {
+      typeExpr = typeExpr.includes('BIG') ? 'BIGSERIAL' : 'SERIAL';
+    } else if (isSqlite && col.autoIncrement) {
+      typeExpr = 'INTEGER';
+    }
+
+    const parts = [q(colName), typeExpr];
+    if (!col.nullable || col.primaryKey) {
+      if (!(isSqlite && col.autoIncrement && pkCols.length === 1)) {
+        parts.push('NOT NULL');
+      }
+    }
+    if (col.autoIncrement) {
+      if (isMysqlFamily) parts.push('AUTO_INCREMENT');
+      else if (isSqlite && pkCols.length === 1 && col.primaryKey) parts.push('PRIMARY KEY AUTOINCREMENT');
+      else if (isMsSql) parts.push('IDENTITY(1,1)');
+      else if (isOracleOrDm) parts.push('GENERATED BY DEFAULT AS IDENTITY');
+    }
+    if (col.defaultValue.trim() && !(isPgFamily && col.autoIncrement)) {
+      const def = col.defaultValue.trim();
+      const literal =
+        /^(?:CURRENT_TIMESTAMP|NOW\(\)|NULL|TRUE|FALSE|-?\d+(?:\.\d+)?)$/i.test(def) || def.startsWith("'")
+          ? def
+          : `'${def.replace(/'/g, "''")}'`;
+      parts.push(`DEFAULT ${literal}`);
+    }
+    if (isMysqlFamily && col.comment.trim()) {
+      parts.push(`COMMENT '${col.comment.trim().replace(/'/g, "''")}'`);
+    }
+    colDefs.push(`  ${parts.join(' ')}`);
+  }
+
+  const sqliteInlinePk = isSqlite && pkCols.length === 1 && pkCols[0].autoIncrement;
+  if (pkCols.length > 0 && !sqliteInlinePk && !isClickHouse) {
+    colDefs.push(`  PRIMARY KEY (${pkCols.map((c) => q(c.name.trim())).join(', ')})`);
+  }
+
+  let footer = ';';
+  if (isMysqlFamily) {
+    const tblComment = spec.comment?.trim()
+      ? ` COMMENT='${spec.comment.trim().replace(/'/g, "''")}'`
+      : '';
+    footer = ` ENGINE=InnoDB DEFAULT CHARSET=utf8mb4${tblComment};`;
+  } else if (isClickHouse) {
+    const orderCols = pkCols.length > 0 ? pkCols.map((c) => q(c.name.trim())).join(', ') : 'tuple()';
+    footer = ` ENGINE = MergeTree() ORDER BY (${orderCols});`;
+  }
+
+  const statements = [`CREATE TABLE ${qualifiedTable} (\n${colDefs.join(',\n')}\n)${footer}`];
+
+  if (isPgFamily || isOracleOrDm) {
+    if (spec.comment?.trim()) {
+      statements.push(
+        `COMMENT ON TABLE ${qualifiedTable} IS '${spec.comment.trim().replace(/'/g, "''")}';`,
+      );
+    }
+    for (const c of spec.columns) {
+      if (c.name.trim() && c.comment.trim()) {
+        statements.push(
+          `COMMENT ON COLUMN ${qualifiedTable}.${q(c.name.trim())} IS '${c.comment.trim().replace(/'/g, "''")}';`,
+        );
+      }
+    }
+  }
+
+  for (const idx of spec.indexes) {
+    const idxName = idx.name.trim();
+    const cols = idx.columns
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (!idxName || cols.length === 0) continue;
+    const kw = idx.unique ? 'CREATE UNIQUE INDEX' : 'CREATE INDEX';
+    statements.push(`${kw} ${q(idxName)} ON ${qualifiedTable} (${cols.map(q).join(', ')});`);
+  }
+
+  return statements.join('\n');
+}
+
+export function buildRenameTableSql(
+  dbName: string | undefined,
+  oldName: string,
+  newName: string,
+  engineKey: string,
+): string {
+  if (isRedisEngineKey(engineKey)) {
+    return `RENAME ${quoteRedisArg(oldName)} ${quoteRedisArg(newName)}`;
+  }
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const hasDb = Boolean(dbName && dbName !== 'main' && dbName !== 'default');
+  const fullOld = hasDb ? `${q(dbName!)}.${q(oldName)}` : q(oldName);
+  const fullNew = hasDb ? `${q(dbName!)}.${q(newName)}` : q(newName);
+  const eng = (engineKey || 'mysql').toLowerCase();
+  if (eng.includes('mysql') || eng.includes('tidb') || eng.includes('maria') || eng.includes('oceanbase')) {
+    return `RENAME TABLE ${fullOld} TO ${fullNew};`;
+  }
+  return `ALTER TABLE ${fullOld} RENAME TO ${q(newName)};`;
+}
+
+export function buildTruncateTableSql(
+  dbName: string | undefined,
+  tableName: string,
+  engineKey: string,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const hasDb = Boolean(dbName && dbName !== 'main' && dbName !== 'default');
+  const full = hasDb ? `${q(dbName!)}.${q(tableName)}` : q(tableName);
+  if ((engineKey || '').toLowerCase().includes('sqlite')) {
+    return `DELETE FROM ${full}`;
+  }
+  return `TRUNCATE TABLE ${full}`;
+}
+
+export function buildDropTableSql(
+  dbName: string | undefined,
+  tableName: string,
+  engineKey: string,
+): string {
+  if (isRedisEngineKey(engineKey)) {
+    return `DEL ${quoteRedisArg(tableName)}`;
+  }
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const hasDb = Boolean(dbName && dbName !== 'main' && dbName !== 'default');
+  const full = hasDb ? `${q(dbName!)}.${q(tableName)}` : q(tableName);
+  return `DROP TABLE ${full}`;
+}
+
+export function minifySqlText(sql: string): string {
+  let out = '';
+  let i = 0;
+  const n = sql.length;
+  let lastWasSpace = true;
+
+  while (i < n) {
+    const ch = sql[i];
+    const next = sql[i + 1] ?? '';
+
+    if (ch === '-' && next === '-') {
+      while (i < n && sql[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i += 1;
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const q = ch;
+      const start = i;
+      i += 1;
+      while (i < n) {
+        if (sql[i] === '\\' && q !== '"') {
+          i += 2;
+          continue;
+        }
+        if (sql[i] === q) {
+          if (sql[i + 1] === q) {
+            i += 2;
+            continue;
+          }
+          i += 1;
+          break;
+        }
+        i += 1;
+      }
+      out += sql.slice(start, i);
+      lastWasSpace = false;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      if (!lastWasSpace) {
+        out += ' ';
+        lastWasSpace = true;
+      }
+      i += 1;
+      continue;
+    }
+    out += ch;
+    lastWasSpace = false;
+    i += 1;
+  }
+
+  return out.trim();
+}
+
+export function escapeSqlAsCodeString(sql: string, style: 'java' | 'json'): string {
+  const trimmed = sql.trim();
+  if (style === 'json') {
+    return JSON.stringify(trimmed);
+  }
+  const lines = trimmed.split(/\r?\n/);
+  if (lines.length === 1) {
+    return `"${lines[0].replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+  return lines
+    .map((line, idx) => {
+      const esc = line.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const suffix = idx < lines.length - 1 ? ' " +' : ';';
+      return `"${esc}${suffix}`;
+    })
+    .join('\n');
+}
+
+// ==================== Redis Command & Key Helpers ====================
+
+export function isRedisEngineKey(engineKey?: string | null): boolean {
+  return (engineKey ?? '').toLowerCase().includes('redis');
+}
+
+export function quoteRedisArg(arg: string): string {
+  if (!arg || /[\s"'\x00-\x1f]/.test(arg)) {
+    return `"${arg.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  }
+  return arg;
+}
+
+export function buildRedisInspectCommand(
+  key: string,
+  keyType?: string | null,
+  limit = 100,
+): string {
+  const qk = quoteRedisArg(key);
+  const stop = Math.max(0, Math.floor(limit) - 1);
+  const kind = (keyType || '').toLowerCase();
+  if (kind === 'hash') return `HGETALL ${qk}`;
+  if (kind === 'list') return `LRANGE ${qk} 0 ${stop}`;
+  if (kind === 'set') return `SMEMBERS ${qk}`;
+  if (kind === 'zset') return `ZRANGE ${qk} 0 ${stop} WITHSCORES`;
+  if (kind === 'stream') return `XRANGE ${qk} - + COUNT ${Math.max(1, Math.floor(limit))}`;
+  return `GET ${qk}`;
+}
+
+export function buildRedisCountCommand(key: string, keyType?: string | null): string {
+  const qk = quoteRedisArg(key);
+  const kind = (keyType || '').toLowerCase();
+  if (kind === 'hash') return `HLEN ${qk}`;
+  if (kind === 'list') return `LLEN ${qk}`;
+  if (kind === 'set') return `SCARD ${qk}`;
+  if (kind === 'zset') return `ZCARD ${qk}`;
+  if (kind === 'stream') return `XLEN ${qk}`;
+  return `STRLEN ${qk}`;
+}
+
+function cleanRedisCommandLine(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.startsWith('--') || trimmed.startsWith('#') || trimmed.startsWith('//')) {
+    return '';
+  }
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let trailingSemi = false;
+  for (let i = 0; i < trimmed.length; i += 1) {
+    const ch = trimmed[i];
+    if (escaped) {
+      escaped = false;
+      trailingSemi = false;
+      continue;
+    }
+    if ((inSingle || inDouble) && ch === '\\') {
+      escaped = true;
+      trailingSemi = false;
+      continue;
+    }
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+      trailingSemi = false;
+      continue;
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+      trailingSemi = false;
+      continue;
+    }
+    trailingSemi = !inSingle && !inDouble && ch === ';';
+  }
+  return (trailingSemi ? trimmed.slice(0, -1) : trimmed).trim();
+}
+
+export function splitRedisCommands(content: string): string[] {
+  const out: string[] = [];
+  for (const line of content.split(/\r?\n/)) {
+    const cmd = cleanRedisCommandLine(line);
+    if (cmd) out.push(cmd);
+  }
+  return out;
+}
+
+export function extractRedisCommandAtLine(
+  content: string,
+  lineNumber1Based: number,
+): string | null {
+  const lines = content.split(/\r?\n/);
+  if (lines.length === 0) return null;
+  const idx = Math.max(0, Math.min(lines.length - 1, lineNumber1Based - 1));
+  const cur = cleanRedisCommandLine(lines[idx]);
+  if (cur) return cur;
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    const prev = cleanRedisCommandLine(lines[i]);
+    if (prev) return prev;
+  }
+  for (let i = idx + 1; i < lines.length; i += 1) {
+    const next = cleanRedisCommandLine(lines[i]);
+    if (next) return next;
+  }
+  return null;
 }

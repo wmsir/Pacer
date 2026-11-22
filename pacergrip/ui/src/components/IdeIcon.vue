@@ -48,6 +48,7 @@ export type IdeIconName =
   | 'db-mysql'
   | 'db-postgres'
   | 'db-sqlite'
+  | 'db-redis'
   | 'db-generic'
   | 'leaf'
   | 'clock'
@@ -192,6 +193,12 @@ withDefaults(
       <ellipse cx="8" cy="3.8" rx="5.1" ry="1.9" fill="#22C55E" fill-opacity="0.2" stroke="#22C55E" stroke-width="1.35" />
       <path d="M2.9 3.8V12.1C2.9 13.2 5.2 14.1 8 14.1C10.8 14.1 13.1 13.2 13.1 12.1V3.8" stroke="#22C55E" stroke-width="1.35" />
       <path d="M2.9 8C2.9 9.05 5.2 9.9 8 9.9C10.8 9.9 13.1 9.05 13.1 8" stroke="#22C55E" stroke-width="1.2" />
+    </template>
+
+    <template v-else-if="name === 'db-redis'">
+      <path d="M8 2L13.8 4.8L8 7.6L2.2 4.8L8 2Z" fill="#DC382D" fill-opacity="0.24" stroke="#DC382D" stroke-width="1.3" stroke-linejoin="round" />
+      <path d="M2.2 8.2L8 11L13.8 8.2" stroke="#DC382D" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
+      <path d="M2.2 11.2L8 14L13.8 11.2" stroke="#DC382D" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" />
     </template>
 
     <template v-else-if="name === 'schema'">

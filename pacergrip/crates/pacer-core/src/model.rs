@@ -18,6 +18,7 @@ pub enum DbEngineType {
     SqlServer,
     Sqlite,
     ClickHouse,
+    Redis,
     Unknown(String),
 }
 
@@ -52,6 +53,8 @@ impl DbEngineType {
             Self::Sqlite
         } else if norm.contains("clickhouse") {
             Self::ClickHouse
+        } else if norm.contains("redis") {
+            Self::Redis
         } else {
             Self::Unknown(raw.trim().to_string())
         }
@@ -71,6 +74,7 @@ impl DbEngineType {
             Self::SqlServer => "sqlserver",
             Self::Sqlite => "sqlite",
             Self::ClickHouse => "clickhouse",
+            Self::Redis => "redis",
             Self::Unknown(s) => s.as_str(),
         }
     }
@@ -87,6 +91,7 @@ impl DbEngineType {
             Self::TiDb => Some(4000),
             Self::SqlServer => Some(1433),
             Self::ClickHouse => Some(8123),
+            Self::Redis => Some(6379),
             Self::Sqlite | Self::Unknown(_) => None,
         }
     }

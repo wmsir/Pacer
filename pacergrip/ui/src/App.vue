@@ -59,20 +59,30 @@ import {
 } from './api/ipc';
 import {
   BUILTIN_SNIPPETS,
+  buildDropTableSql,
   buildExplainPlanSql,
+  buildRedisCountCommand,
+  buildRedisInspectCommand,
+  buildTruncateTableSql,
   convertSelectionToSqlIn,
   countLines,
+  escapeSqlAsCodeString,
   estimateUtf8Bytes,
   extractMarkdownSqlBlocksLocal,
+  extractRedisCommandAtLine,
   extractSingleTableTarget,
   extractSqlParameters,
   formatBytes,
+  generateMockInsertSql,
   getEngineDisplayName,
   getExplainModesForEngine,
+  isRedisEngineKey,
   isWriteOrDdlStatement,
   matchesFilterPattern,
+  minifySqlText,
   parseMarkdownSegments,
   quoteIdentifier,
+  splitRedisCommands,
   transformSqlTextCase,
   type ExplainPlanMode,
   type SqlSnippet,
@@ -101,6 +111,11 @@ import Modals, {
   type ParamModalContext,
   type SearchEverywhereItem,
 } from './components/Modals.vue';
+import TableToolsModals, {
+  type ActiveToolModalKind,
+  type DbToolContext,
+  type TableToolContext,
+} from './components/TableToolsModals.vue';
 
 interface EditorTab {
   id: string;
@@ -533,6 +548,7 @@ const activeDialectLabel = computed(() => {
   if (activeTab.value.fileKind === 'markdown') return 'Markdown + SQL';
   if (activeTab.value.fileKind === 'json') return 'JSON';
   if (activeTab.value.fileKind === 'xml') return 'XML';
+  if (isRedisEngineKey(activeEngineKey.value)) return 'Redis 命令';
   return `SQL (${getEngineDisplayName(activeEngineKey.value)})`;
 });
 
@@ -644,6 +660,13 @@ const passwordProfile = ref<ConnectionProfile | null>(null);
 const pendingAfterPassword = ref<(() => Promise<void>) | null>(null);
 const pendingCloseTabId = ref<string | null>(null);
 const unsavedContext = ref<{ title: string; path: string | null } | null>(null);
+const activeToolModal = ref<ActiveToolModalKind>('none');
+const toolTableContext = ref<TableToolContext | null>(null);
+const toolDbContext = ref<DbToolContext | null>(null);
+
+function isRedisProfile(profile: ConnectionProfile | null | undefined): boolean {
+  return Boolean(profile && isRedisEngineKey(engineKeyOf(profile)));
+}
 
 const encodingModalContext = computed<EncodingModalContext | null>(() => {
   const tab = activeTab.value;
@@ -1438,6 +1461,13 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
     activeTab.value.profileId = profile.id;
     activeTab.value.dbName = dbName;
   }
+  if (isRedisProfile(profile)) {
+    const tbl = (tablesByKey[`${profile.id}:${dbName}`] ?? []).find((t) => t.name === tableName);
+    const limit = maxRowsLimit.value ?? 100;
+    const cmd = buildRedisInspectCommand(tableName, tbl?.tableType, limit);
+    await executeStatementsBatch([cmd], `${tableName} (${tbl?.tableType || 'key'})`, profile, dbName);
+    return;
+  }
   const engineKey = engineKeyOf(profile);
   const quotedTable = quoteIdentifier(tableName, engineKey);
   const sql = `SELECT * FROM ${quotedTable} LIMIT 100;`;
@@ -1446,6 +1476,12 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
 
 async function handleCountTable(profile: ConnectionProfile, dbName: string, tableName: string) {
   syncActiveProjectForProfile(profile);
+  if (isRedisProfile(profile)) {
+    const tbl = (tablesByKey[`${profile.id}:${dbName}`] ?? []).find((t) => t.name === tableName);
+    const cmd = buildRedisCountCommand(tableName, tbl?.tableType);
+    await executeStatementsBatch([cmd], `${tableName} (长度统计)`, profile, dbName);
+    return;
+  }
   const engineKey = engineKeyOf(profile);
   const quotedTable = quoteIdentifier(tableName, engineKey);
   const sql = `SELECT COUNT(*) AS total_rows FROM ${quotedTable};`;
@@ -1459,15 +1495,25 @@ async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableNa
     ddlText.value = ddl;
     ddlTitle.value = `${profile.name} · ${dbName}.${tableName}`;
     activeServiceTab.value = 'ddl';
-    setStatus(`已加载表 DDL: ${tableName}`);
+    setStatus(
+      isRedisProfile(profile) ? `已加载 Redis Key 详情: ${tableName}` : `已加载表 DDL: ${tableName}`,
+    );
   } catch (err) {
-    setStatus(`获取 DDL 失败: ${String(err)}`, true);
+    setStatus(`获取详情失败: ${String(err)}`, true);
   } finally {
     busy.value = false;
   }
 }
 
 async function handleGenSelect(profile: ConnectionProfile, dbName: string, tableName: string) {
+  if (isRedisProfile(profile)) {
+    const tbl = (tablesByKey[`${profile.id}:${dbName}`] ?? []).find((t) => t.name === tableName);
+    const limit = maxRowsLimit.value ?? 100;
+    const cmd = `${buildRedisInspectCommand(tableName, tbl?.tableType, limit)}\n`;
+    insertGeneratedSqlSnippet(profile, dbName, cmd);
+    setStatus(`已生成 Redis Key ${tableName} 查询命令到编辑器`);
+    return;
+  }
   const cols = await ensureTableColumns(profile, dbName, tableName);
   const engineKey = engineKeyOf(profile);
   const quotedTable = quoteIdentifier(tableName, engineKey);
@@ -1554,8 +1600,218 @@ function handleNewConsoleForDb(profile: ConnectionProfile, dbName: string) {
   syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
   selectedDbName.value = dbName;
-  createNewConsoleTab('', profile.id, dbName);
+  const seed = isRedisProfile(profile)
+    ? `-- Redis 命令控制台: ${profile.name} (${dbName})\n-- 常用命令: PING | INFO keyspace | SCAN 0 COUNT 50 | GET key | HGETALL key | LRANGE key 0 99 | ZRANGE key 0 99 WITHSCORES\nSCAN 0 COUNT 50\n`
+    : '';
+  createNewConsoleTab(seed, profile.id, dbName);
   setStatus(`已新建查询控制台 -> ${profile.name} / ${dbName}`);
+}
+
+// ==================== High-Frequency Table Productivity Handlers ====================
+
+function handleOpenCreateTable(profile: ConnectionProfile, dbName: string) {
+  if (isRedisProfile(profile)) {
+    setStatus('Redis 为键值数据库，请在控制台直接执行 SET / HSET / LPUSH / ZADD 创建键值', true);
+    return;
+  }
+  syncActiveProjectForProfile(profile);
+  selectedProfileId.value = profile.id;
+  selectedDbName.value = dbName;
+  toolDbContext.value = {
+    profileId: profile.id,
+    profileName: profile.name,
+    profileEnv: profile.env,
+    engineKey: engineKeyOf(profile),
+    dbName,
+  };
+  activeToolModal.value = 'create-table';
+}
+
+function openCreateTableFromToolbar() {
+  const prof = activeProfile.value ?? connections.value[0];
+  if (!prof) {
+    setStatus('请先创建并连接数据源，再使用可视化新建数据表', true);
+    return;
+  }
+  const dbName = activeTab.value?.dbName || selectedDbName.value || databasesByProfile[prof.id]?.[0]?.name || '';
+  if (!dbName) {
+    setStatus('请先选择一个目标数据库，再使用可视化新建数据表', true);
+    return;
+  }
+  handleOpenCreateTable(prof, dbName);
+}
+
+async function handleExportDbDdl(profile: ConnectionProfile, dbName: string) {
+  if (isRedisProfile(profile)) {
+    setStatus('Redis 不使用建表 DDL，可点击任意 Key 查看详细信息模板');
+    return;
+  }
+  busy.value = true;
+  try {
+    let tables = tablesByKey[`${profile.id}:${dbName}`];
+    if (!tables || tables.length === 0) {
+      tables = await listTables(profile.id, dbName);
+      tablesByKey[`${profile.id}:${dbName}`] = tables;
+    }
+    if (tables.length === 0) {
+      setStatus(`数据库 ${dbName} 暂无可导出的表`, true);
+      return;
+    }
+    const parts: string[] = [
+      `-- Pacer 全量建表 DDL 导出`,
+      `-- 数据源: ${profile.name} (${engineKeyOf(profile)})`,
+      `-- 数据库: ${dbName}`,
+      `-- 表数量: ${tables.length}`,
+      `-- 导出时间: ${new Date().toLocaleString()}`,
+      '',
+    ];
+    for (const tbl of tables) {
+      parts.push(`-- ----------------------------`);
+      parts.push(`-- Table structure for ${tbl.name}`);
+      parts.push(`-- ----------------------------`);
+      try {
+        const ddl = await getTableDdl(profile.id, dbName, tbl.name);
+        const trimmed = ddl.trim();
+        parts.push(trimmed.endsWith(';') ? trimmed : `${trimmed};`);
+      } catch (err) {
+        parts.push(`-- [跳过 ${tbl.name}] 获取 DDL 失败: ${String(err)}`);
+      }
+      parts.push('');
+    }
+    createNewConsoleTab(parts.join('\n'), profile.id, dbName);
+    if (activeTab.value) {
+      activeTab.value.title = `${dbName}_ddl.sql`;
+    }
+    setStatus(`已导出 ${dbName} 共 ${tables.length} 张表的建表 DDL 到新标签页`);
+  } catch (err) {
+    setStatus(`导出全库 DDL 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleOpenImportTableData(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  toolTableContext.value = {
+    profileId: profile.id,
+    profileName: profile.name,
+    profileEnv: profile.env,
+    engineKey: engineKeyOf(profile),
+    dbName,
+    tableName,
+    columns: cols,
+  };
+  activeToolModal.value = 'import-data';
+}
+
+async function handleOpenGenEntityCode(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  toolTableContext.value = {
+    profileId: profile.id,
+    profileName: profile.name,
+    profileEnv: profile.env,
+    engineKey: engineKeyOf(profile),
+    dbName,
+    tableName,
+    columns: cols,
+  };
+  activeToolModal.value = 'codegen';
+}
+
+async function handleGenMockData(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  const cols = await ensureTableColumns(profile, dbName, tableName);
+  if (cols.length === 0) {
+    setStatus(`未能读取 ${tableName} 的字段定义，请先刷新元数据`, true);
+    return;
+  }
+  const sql = generateMockInsertSql(tableName, dbName, cols, engineKeyOf(profile), 10);
+  insertGeneratedSqlSnippet(profile, dbName, `${sql}\n`);
+  setStatus(`已生成 ${tableName} 10 行 Mock INSERT 数据到编辑器`);
+}
+
+async function handleOpenRenameTable(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  toolTableContext.value = {
+    profileId: profile.id,
+    profileName: profile.name,
+    profileEnv: profile.env,
+    engineKey: engineKeyOf(profile),
+    dbName,
+    tableName,
+    columns: columnsByKey[`${profile.id}:${dbName}:${tableName}`] ?? [],
+  };
+  activeToolModal.value = 'rename-table';
+}
+
+async function handleTruncateTable(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  const sql = buildTruncateTableSql(dbName, tableName, engineKeyOf(profile));
+  await runStatementsWithGuard([sql], `清空 ${tableName}`, profile, dbName, true);
+}
+
+async function handleDropTable(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+) {
+  const sql = buildDropTableSql(dbName, tableName, engineKeyOf(profile));
+  await runStatementsWithGuard(
+    [sql],
+    isRedisProfile(profile) ? `删除 Key ${tableName}` : `删除表 ${tableName}`,
+    profile,
+    dbName,
+    true,
+  );
+}
+
+async function handleRunToolStatements(
+  statements: string[],
+  label: string,
+  profileId: string,
+  dbName: string,
+  refreshDb = false,
+) {
+  activeToolModal.value = 'none';
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (!prof) {
+    setStatus('未找到目标数据源连接', true);
+    return;
+  }
+  await runStatementsWithGuard(statements, label, prof, dbName, true);
+  if (refreshDb) {
+    await loadTablesForDb(prof, dbName);
+  }
+}
+
+function handleSendToolSqlToEditor(sql: string, profileId?: string, dbName?: string) {
+  activeToolModal.value = 'none';
+  const prof = profileId ? connections.value.find((c) => c.id === profileId) : activeProfile.value;
+  if (prof && dbName) {
+    insertGeneratedSqlSnippet(prof, dbName, `${sql}\n`);
+  } else if (activeTab.value) {
+    editorRef.value?.insertText(`${sql}\n`);
+  } else {
+    createNewConsoleTab(`${sql}\n`, profileId, dbName);
+  }
+  setStatus('已将生成的语句写入控制台编辑器');
 }
 
 // ==================== SQL Execution Engine (with High-Risk Guard) ====================
@@ -1568,11 +1824,18 @@ async function runActiveEditor(runAll: boolean) {
     setStatus('请先在顶部工具栏选择一个目标数据源', true);
     return;
   }
+  const isRedis = isRedisProfile(prof);
 
   // 1. Selected text ALWAYS has highest priority (works in .md, .sql, .txt!)
   const selected = tab.cursor.selectedText.trim();
   if (!runAll && selected) {
-    await runStatementsWithGuard([selected], '选中 SQL', prof, tab.dbName);
+    const stmts = isRedis ? splitRedisCommands(selected) : [selected];
+    await runStatementsWithGuard(
+      stmts.length > 0 ? stmts : [selected],
+      isRedis ? '选中 Redis 命令' : '选中 SQL',
+      prof,
+      tab.dbName,
+    );
     return;
   }
 
@@ -1605,7 +1868,27 @@ async function runActiveEditor(runAll: boolean) {
     return;
   }
 
-  // 3. Regular SQL console/file: single statement at cursor or full script
+  // 3. Redis console: line-oriented commands without semicolons
+  if (isRedis) {
+    if (!runAll) {
+      const cmd = extractRedisCommandAtLine(tab.content, tab.cursor.line) ?? tab.content.trim();
+      if (!cmd) {
+        setStatus('当前编辑器为空，无可执行 Redis 命令（如 GET user:1001、SCAN 0 COUNT 50）', true);
+        return;
+      }
+      await runStatementsWithGuard([cmd], tab.title, prof, tab.dbName);
+    } else {
+      const cmds = splitRedisCommands(tab.content);
+      if (cmds.length === 0) {
+        setStatus('当前 Redis 控制台为空', true);
+        return;
+      }
+      await runStatementsWithGuard(cmds, tab.title, prof, tab.dbName);
+    }
+    return;
+  }
+
+  // 4. Regular SQL console/file: single statement at cursor or full script
   if (!runAll) {
     const stmt = await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset);
     const toRun = (stmt ?? tab.content).trim();
@@ -1655,9 +1938,11 @@ async function runStatementsWithGuard(
   dbName: string,
   skipParams = false,
 ) {
-  const joined = statements.join(';\n');
+  const isRedis = isRedisProfile(profile);
+  const joined = statements.join(isRedis ? '\n' : ';\n');
 
-  if (!skipParams) {
+  // Redis keys naturally contain colons (`user:1001`); never trigger SQL named-parameter prompt for Redis.
+  if (!skipParams && !isRedis) {
     const params = extractSqlParameters(joined);
     if (params.length > 0) {
       paramContext.value = {
@@ -1803,6 +2088,7 @@ async function executeStatementsBatch(
   const availableTables = (tablesByKey[`${profile.id}:${dbName}`] ?? []).map((t) => t.name);
   const engineKey = engineKeyOf(profile);
   const readOnly = isProfileReadOnly(profile);
+  const isRedis = isRedisProfile(profile);
 
   if (!explicitTableName && activeTab.value?.path) {
     saveFileDbBinding(activeTab.value.path, profile.id, dbName, targetProjectId);
@@ -1814,13 +2100,15 @@ async function executeStatementsBatch(
       if (!sql) continue;
       const tabId = `res-${Date.now()}-${idx}`;
       const tabTitle = statements.length > 1 ? `${label} #${idx + 1}` : label;
-      const detected = explicitTableName
-        ? { db: dbName, table: explicitTableName }
-        : extractSingleTableTarget(sql);
+      const detected = isRedis
+        ? null
+        : explicitTableName
+          ? { db: dbName, table: explicitTableName }
+          : extractSingleTableTarget(sql);
       const effectiveDb = detected?.db || dbName;
-      const sourceTable = detected?.table ?? null;
+      const sourceTable = isRedis ? null : (detected?.table ?? null);
       const primaryKeys =
-        sourceTable && effectiveDb
+        !isRedis && sourceTable && effectiveDb
           ? await resolveTablePrimaryKeys(profile, effectiveDb, sourceTable)
           : [];
 
@@ -1833,9 +2121,9 @@ async function executeStatementsBatch(
         profileEnv: profile.env,
         engineKey,
         dbName: effectiveDb,
-        readOnly,
+        readOnly: readOnly || isRedis,
         sourceTable,
-        availableTables,
+        availableTables: isRedis ? [] : availableTables,
         primaryKeys,
         columns: [],
         rows: [],
@@ -1848,7 +2136,7 @@ async function executeStatementsBatch(
         profileName: profile.name,
         dbName: effectiveDb || undefined,
         level: 'sql',
-        summary: '执行 SQL',
+        summary: isRedis ? '执行 Redis 命令' : '执行 SQL',
         detail: sql,
       });
 
@@ -1868,6 +2156,7 @@ async function executeStatementsBatch(
       );
       item.summary = summary;
       if (
+        !isRedis &&
         summary.success &&
         !summary.isDmlOrDdl &&
         item.columns.length === 0 &&
@@ -1933,8 +2222,16 @@ async function executeStatementsBatch(
       setStatus(`执行异常: ${lastError}`, true);
     } else {
       setStatus(
-        `执行成功 · ${newTabs.length} 条语句 · ${totalRowsAll} 行 · ${totalMsAll} ms (${profile.name})`,
+        `执行成功 · ${newTabs.length} 条${isRedis ? '命令' : '语句'} · ${totalRowsAll} 行 · ${totalMsAll} ms (${profile.name})`,
       );
+      if (
+        dbName &&
+        statements.some((s) =>
+          /^(create|drop|alter|rename|truncate|del|unlink|flushdb|flushall)\b/i.test(s.trim()),
+        )
+      ) {
+        void loadTablesForDb(profile, dbName);
+      }
     }
     await refreshHistory();
   } catch (err) {
@@ -2113,7 +2410,11 @@ async function resolveActiveSqlForExplain(): Promise<string> {
     sql = findEnclosingMarkdownBlock(tab.cursor.line)?.sql ?? '';
   }
   if (!sql) {
-    sql = (await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset)) ?? tab.content;
+    if (isRedisProfile(activeProfile.value)) {
+      sql = extractRedisCommandAtLine(tab.content, tab.cursor.line) ?? tab.content;
+    } else {
+      sql = (await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset)) ?? tab.content;
+    }
   }
   return sql.trim();
 }
@@ -2130,7 +2431,7 @@ async function handleGenerateExplainPlan(
   openMenu.value = null;
   const rawSql = await resolveActiveSqlForExplain();
   if (!rawSql) {
-    setStatus('当前编辑器没有可生成执行计划的 SQL 语句', true);
+    setStatus('当前编辑器没有可生成执行计划的语句', true);
     return;
   }
 
@@ -2171,6 +2472,14 @@ async function handleGenerateExplainPlan(
       setStatus(
         `${plan.dialectLabel} 当前为语法方言生成模式（未绑定直连驱动），已在新控制台生成 ${plan.modeLabel}`,
       );
+      return;
+    }
+    if (isRedisProfile(prof)) {
+      if (plan.mode === 'verbose') {
+        await executeStatementsBatch(['INFO'], 'Redis INFO', prof, dbName || 'db0');
+      } else {
+        await runExplainSql(rawSql, 'Redis · Key 诊断');
+      }
       return;
     }
     if (plan.executesQuery && (prof.env === 'PROD' || isWriteOrDdlStatement(rawSql))) {
@@ -2300,6 +2609,32 @@ function handleTransformSqlCase(mode: 'upper' | 'lower') {
     updateTabContent(transformSqlTextCase(tab.content, mode));
     setStatus(`已将全文 SQL 转为${mode === 'upper' ? '大写' : '小写'}`);
   }
+}
+
+function handleMinifyActiveSql() {
+  const tab = activeTab.value;
+  if (!tab || tab.readOnly) return;
+  const sel = tab.cursor.selectedText;
+  if (sel.trim()) {
+    editorRef.value?.replaceSelection(minifySqlText(sel));
+    setStatus('已将选中 SQL 压缩为单行');
+  } else {
+    updateTabContent(minifySqlText(tab.content));
+    setStatus('已将当前控制台 SQL 压缩为单行');
+  }
+}
+
+async function handleCopySqlAsCode(style: 'java' | 'json') {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const source = tab.cursor.selectedText.trim() || tab.content.trim();
+  if (!source) {
+    setStatus('当前编辑器为空，无内容可复制', true);
+    return;
+  }
+  const code = escapeSqlAsCodeString(source, style);
+  await copyText(code);
+  setStatus(`已复制为 ${style === 'java' ? 'Java StringConcat' : 'JSON String'} 格式`);
 }
 
 async function refreshHistory() {
@@ -2930,7 +3265,8 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-new-project', category: 'action', label: t('newProject'), detail: '新建多数据源工作区项目（共享统一控制台日志）', badge: '项目' },
     { id: 'act-dock-files', category: 'action', label: `将本地文件面板移至${filesDockSide.value === 'right' ? '左侧' : '右侧'}`, detail: '自由配置本地文件与脚本停靠在左侧或右侧', badge: '布局' },
     { id: 'act-locate-file', category: 'action', label: '在文件树中定位当前打开的文件', detail: '自动展开目录树并滚动高亮当前文档', badge: keymap.getDisplay('locateFile') },
-    { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite 数据源', badge: '数据库' },
+    { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite / Redis 数据源', badge: '数据库' },
+    { id: 'act-create-table', category: 'action', label: '可视化新建数据表...', detail: '零手写 DDL，可视化设计字段、主键、自增与索引并实时预览生成 SQL', badge: '建模' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
     { id: 'act-new-console', category: 'action', label: t('newConsole'), detail: '新建 SQL 查询控制台标签页', badge: keymap.getDisplay('newConsole') },
     {
@@ -2941,6 +3277,8 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
       badge: activeExplainMeta.value.dialectLabel,
     },
     { id: 'act-format', category: 'action', label: t('formatSql'), detail: '格式化当前控制台 SQL', badge: keymap.getDisplay('formatSql') },
+    { id: 'act-minify-sql', category: 'action', label: '压缩为单行 SQL', detail: '去除换行与注释，适合日志/命令行快速复制粘贴', badge: 'SQL' },
+    { id: 'act-copy-java-sql', category: 'action', label: '复制 SQL 为 Java 代码字符串', detail: '自动转义引号与换行，直接粘贴进 Java/Spring 代码', badge: '代码' },
     { id: 'act-theme-dark', category: 'action', label: `切换主题：${t('themeDark')}`, detail: '经典深色 Darcula 界面与编辑器配色', badge: '主题' },
     { id: 'act-theme-light', category: 'action', label: `切换主题：${t('themeLight')}`, detail: '明亮清爽 IntelliJ Light 界面与编辑器配色', badge: '主题' },
     { id: 'act-theme-eyecare', category: 'action', label: `切换主题：${t('themeEyecare')}`, detail: '柔和绿豆沙护眼色（#CCE8CF），适合长时间阅读', badge: '护眼' },
@@ -3017,10 +3355,13 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     else if (item.id === 'act-new-conn') {
       editingProfile.value = null;
       activeModal.value = 'connection';
-    } else if (item.id === 'act-import') activeModal.value = 'import';
+    } else if (item.id === 'act-create-table') openCreateTableFromToolbar();
+    else if (item.id === 'act-import') activeModal.value = 'import';
     else if (item.id === 'act-new-console') createNewConsoleTab('');
     else if (item.id === 'act-gen-explain') await handleGenerateExplainPlan('standard', 'new-console');
     else if (item.id === 'act-format') await formatActiveSql();
+    else if (item.id === 'act-minify-sql') handleMinifyActiveSql();
+    else if (item.id === 'act-copy-java-sql') await handleCopySqlAsCode('java');
     else if (item.id === 'act-theme-dark') applyTheme('dark');
     else if (item.id === 'act-theme-light') applyTheme('light');
     else if (item.id === 'act-theme-eyecare') applyTheme('eyecare');
@@ -3578,6 +3919,15 @@ onBeforeUnmount(() => {
               <button class="dropdown-item" @click="openMenu = null; handleTransformSqlCase('lower')">
                 <span>SQL 语句/选区转小写</span>
               </button>
+              <button class="dropdown-item" @click="openMenu = null; handleMinifyActiveSql()">
+                <span>压缩为单行 SQL</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleCopySqlAsCode('java')">
+                <span>复制为代码字符串 (Java String)</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleCopySqlAsCode('json')">
+                <span>复制为单行 JSON 字符串</span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; saveCurrentAsSnippet()">
                 <span>保存当前 SQL 为代码片段</span>
               </button>
@@ -3603,6 +3953,9 @@ onBeforeUnmount(() => {
             <div v-if="openMenu === 'database'" class="dropdown-menu">
               <button class="dropdown-item" @click="openMenu = null; openConnectionModal(null)">
                 <span>{{ t('newConnection') }}...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; openCreateTableFromToolbar()">
+                <span>✨ 可视化新建数据表...</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; activeModal = 'import'">
                 <span>{{ t('importDbeaver') }}</span>
@@ -4067,6 +4420,14 @@ onBeforeUnmount(() => {
           @duplicate-profile="handleDuplicateProfile"
           @refresh-database="handleRefreshDatabase"
           @new-console-for-db="handleNewConsoleForDb"
+          @create-table="handleOpenCreateTable"
+          @export-db-ddl="handleExportDbDdl"
+          @import-table-data="handleOpenImportTableData"
+          @gen-entity-code="handleOpenGenEntityCode"
+          @gen-mock-data="handleGenMockData"
+          @rename-table="handleOpenRenameTable"
+          @truncate-table="handleTruncateTable"
+          @drop-table="handleDropTable"
           @test-profile="handleTestProfile"
           @edit-profile="openConnectionModal"
           @delete-profile="handleDeleteProfile"
@@ -4752,10 +5113,56 @@ onBeforeUnmount(() => {
         <template v-else-if="rightTool === 'structure'">
           <div class="tw-header">
             <span>{{ t('toolStructure') }}</span>
-            <div v-if="inspectedTable" class="tw-actions">
+            <div v-if="inspectedTable" class="tw-actions" style="gap: 4px">
+              <template
+                v-if="!isRedisProfile(connections.find((c) => c.id === inspectedTable?.profileId))"
+              >
+                <button
+                  class="icon-btn compact"
+                  title="导入 CSV / JSON 数据到当前表"
+                  @click="
+                    () => {
+                      const p = connections.find((c) => c.id === inspectedTable?.profileId);
+                      if (p && inspectedTable) {
+                        handleOpenImportTableData(p, inspectedTable.dbName, inspectedTable.tableName);
+                      }
+                    }
+                  "
+                >
+                  导入
+                </button>
+                <button
+                  class="icon-btn compact"
+                  title="生成实体代码 (Java/Go/TS/Python/Rust)"
+                  @click="
+                    () => {
+                      const p = connections.find((c) => c.id === inspectedTable?.profileId);
+                      if (p && inspectedTable) {
+                        handleOpenGenEntityCode(p, inspectedTable.dbName, inspectedTable.tableName);
+                      }
+                    }
+                  "
+                >
+                  代码
+                </button>
+                <button
+                  class="icon-btn compact"
+                  title="生成 10 行 Mock INSERT 数据"
+                  @click="
+                    () => {
+                      const p = connections.find((c) => c.id === inspectedTable?.profileId);
+                      if (p && inspectedTable) {
+                        handleGenMockData(p, inspectedTable.dbName, inspectedTable.tableName);
+                      }
+                    }
+                  "
+                >
+                  Mock
+                </button>
+              </template>
               <button
                 class="icon-btn compact"
-                title="查看建表 DDL"
+                title="查看建表 DDL / Key 操作详情"
                 @click="
                   () => {
                     const p = connections.find((c) => c.id === inspectedTable?.profileId);
@@ -4765,7 +5172,11 @@ onBeforeUnmount(() => {
                   }
                 "
               >
-                DDL
+                {{
+                  isRedisProfile(connections.find((c) => c.id === inspectedTable?.profileId))
+                    ? 'INFO'
+                    : 'DDL'
+                }}
               </button>
             </div>
           </div>
@@ -4801,28 +5212,43 @@ onBeforeUnmount(() => {
                 v-for="col in inspectedColumns"
                 :key="col.name"
                 style="
-                  display: flex;
-                  align-items: center;
-                  justify-content: space-between;
                   padding: 4px 6px;
                   border-bottom: 1px solid var(--border-subtle);
                   font-size: 11.5px;
                 "
               >
-                <div style="min-width: 0; overflow: hidden; text-overflow: ellipsis">
-                  <IdeIcon v-if="col.isPrimaryKey" name="key" :size="12" style="margin-right: 4px" />
-                  <span style="font-family: var(--font-mono)">{{ col.name }}</span>
+                <div style="display: flex; align-items: center; justify-content: space-between; gap: 6px">
+                  <div style="min-width: 0; overflow: hidden; text-overflow: ellipsis">
+                    <IdeIcon v-if="col.isPrimaryKey" name="key" :size="12" style="margin-right: 4px" />
+                    <span style="font-family: var(--font-mono)">{{ col.name }}</span>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0">
+                    <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px">
+                      {{ col.dataType }}
+                    </span>
+                    <span
+                      class="pill"
+                      :class="col.nullable ? 'pill-neutral' : 'pill-test'"
+                    >
+                      {{ col.nullable ? t('nullableYes') : t('nullableNo') }}
+                    </span>
+                  </div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 4px; flex-shrink: 0">
-                  <span style="color: var(--text-secondary); font-family: var(--font-mono); font-size: 10.5px">
-                    {{ col.dataType }}
+                <div
+                  v-if="col.defaultValue || col.comment"
+                  style="
+                    font-size: 10.5px;
+                    color: var(--text-muted);
+                    margin-top: 2px;
+                    display: flex;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                  "
+                >
+                  <span v-if="col.defaultValue" style="font-family: var(--font-mono)">
+                    default={{ col.defaultValue }}
                   </span>
-                  <span
-                    class="pill"
-                    :class="col.nullable ? 'pill-neutral' : 'pill-test'"
-                  >
-                    {{ col.nullable ? t('nullableYes') : t('nullableNo') }}
-                  </span>
+                  <span v-if="col.comment">{{ col.comment }}</span>
                 </div>
               </div>
 
@@ -5227,6 +5653,17 @@ onBeforeUnmount(() => {
       @select-search-item="handleSelectSearchItem"
       @unsaved-save-close="confirmUnsavedSaveClose"
       @unsaved-discard-close="confirmUnsavedDiscardClose"
+      @notify="setStatus($event)"
+    />
+
+    <TableToolsModals
+      :active-tool-modal="activeToolModal"
+      :table-context="toolTableContext"
+      :db-context="toolDbContext"
+      :busy="busy"
+      @close="activeToolModal = 'none'"
+      @run-statements="handleRunToolStatements"
+      @send-sql-to-editor="handleSendToolSqlToEditor"
       @notify="setStatus($event)"
     />
 
