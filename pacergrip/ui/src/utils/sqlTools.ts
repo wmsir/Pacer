@@ -3169,3 +3169,126 @@ export function isConnectionProfileReadOnly(prof: ConnectionProfile | undefined 
   return Boolean(cfg.readOnly) || !prof.capabilities.canDml;
 }
 
+// ==================== 2D Virtualized Result Grid Layout Helpers ====================
+
+export interface VirtualRange {
+  start: number;
+  end: number;
+  beforeSize: number;
+  afterSize: number;
+  totalSize: number;
+}
+
+/**
+ * Estimates fixed pixel column widths from column names and the first 25 sampled rows
+ * so wide tables (70–300+ columns) render deterministically with `table-layout: fixed`.
+ */
+export function computeGridColumnWidths(
+  columns: string[],
+  rows: Array<Record<string, unknown>>,
+  overrides?: Record<string, number>,
+): number[] {
+  const sample = rows.slice(0, 25);
+  return columns.map((col) => {
+    const manual = overrides?.[col];
+    if (typeof manual === 'number' && Number.isFinite(manual) && manual > 0) {
+      return Math.round(manual);
+    }
+    let maxChars = Math.min(36, col.length + 3);
+    for (let i = 0; i < sample.length; i += 1) {
+      const val = sample[i]?.[col];
+      if (val === null || val === undefined) {
+        if (maxChars < 6) maxChars = 6;
+        continue;
+      }
+      const len =
+        typeof val === 'object' ? Math.min(44, JSON.stringify(val).length) : String(val).length;
+      if (len > maxChars) {
+        maxChars = Math.min(44, len);
+      }
+      if (maxChars >= 44) break;
+    }
+    return Math.max(88, Math.min(280, Math.round(maxChars * 7.6 + 28)));
+  });
+}
+
+export function computeFixedVirtualRange(
+  scrollOffset: number,
+  viewportSize: number,
+  itemSize: number,
+  totalCount: number,
+  overscan = 8,
+): VirtualRange {
+  if (totalCount <= 0 || itemSize <= 0) {
+    return { start: 0, end: 0, beforeSize: 0, afterSize: 0, totalSize: 0 };
+  }
+  const totalSize = totalCount * itemSize;
+  const safeOffset = Math.max(0, scrollOffset);
+  const safeViewport = Math.max(itemSize, viewportSize);
+  const firstVisible = Math.floor(safeOffset / itemSize);
+  const lastVisible = Math.ceil((safeOffset + safeViewport) / itemSize);
+  const start = Math.max(0, Math.min(totalCount - 1, firstVisible - overscan));
+  const end = Math.max(start + 1, Math.min(totalCount, lastVisible + overscan));
+  return {
+    start,
+    end,
+    beforeSize: start * itemSize,
+    afterSize: Math.max(0, (totalCount - end) * itemSize),
+    totalSize,
+  };
+}
+
+export function computeVariableVirtualRange(
+  scrollOffset: number,
+  viewportSize: number,
+  sizes: number[],
+  overscan = 5,
+): VirtualRange {
+  const totalCount = sizes.length;
+  if (totalCount === 0) {
+    return { start: 0, end: 0, beforeSize: 0, afterSize: 0, totalSize: 0 };
+  }
+  const offsets = new Array<number>(totalCount + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < totalCount; i += 1) {
+    offsets[i + 1] = offsets[i] + Math.max(1, sizes[i] ?? 120);
+  }
+  const totalSize = offsets[totalCount];
+  const safeStartPx = Math.max(0, scrollOffset);
+  const safeEndPx = Math.max(safeStartPx + 1, safeStartPx + Math.max(1, viewportSize));
+
+  // Binary search first index whose right edge exceeds safeStartPx
+  let lo = 0;
+  let hi = totalCount - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (offsets[mid + 1] <= safeStartPx) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  const firstVisible = lo;
+
+  // Binary search last index whose left edge is before safeEndPx
+  lo = firstVisible;
+  hi = totalCount - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (offsets[mid] < safeEndPx) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const lastVisible = lo;
+
+  const start = Math.max(0, firstVisible - overscan);
+  const end = Math.min(totalCount, lastVisible + overscan + 1);
+  const beforeSize = offsets[start];
+  const afterSize = Math.max(0, totalSize - offsets[end]);
+
+  return { start, end, beforeSize, afterSize, totalSize };
+}
+
+

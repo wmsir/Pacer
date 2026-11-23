@@ -518,6 +518,12 @@ fn decode_sqlite_cell(row: &SqliteRow, idx: usize) -> JsonValue {
     }
 }
 
+/// Balances IPC chunk byte sizes for wide tables (fewer rows/chunk when dozens of columns exist).
+pub(crate) fn adaptive_chunk_size(col_count: usize) -> usize {
+    let cols = col_count.max(1);
+    (6_000 / cols).clamp(25, STREAM_CHUNK_SIZE)
+}
+
 pub(crate) async fn stream_chunks(
     columns: &[String],
     rows: Vec<BTreeMap<String, JsonValue>>,
@@ -536,8 +542,9 @@ pub(crate) async fn stream_chunks(
         return;
     }
 
-    let total_batches = rows.len().div_ceil(STREAM_CHUNK_SIZE);
-    for (batch_index, slice) in rows.chunks(STREAM_CHUNK_SIZE).enumerate() {
+    let chunk_size = adaptive_chunk_size(columns.len());
+    let total_batches = rows.len().div_ceil(chunk_size);
+    for (batch_index, slice) in rows.chunks(chunk_size).enumerate() {
         let is_last = batch_index + 1 == total_batches;
         let chunk = QueryChunk {
             columns: columns.to_vec(),

@@ -133,6 +133,11 @@ const props = defineProps<{
   shortcutsInitialTab?: 'keymap' | 'templates';
   maxRowsLimit?: number | null;
   engineKey?: string;
+  connections?: ConnectionProfile[];
+  connHealthByProfile?: Record<
+    string,
+    { status: 'ok' | 'error' | 'testing'; message?: string; latencyMs?: number }
+  >;
   busy: boolean;
 }>();
 
@@ -142,6 +147,10 @@ const emit = defineEmits<{
   (e: 'delete-project', projectId: string): void;
   (e: 'execute-grid-sql', payload: GridMutationPreviewPayload, editedSql: string): void;
   (e: 'save-connection', draft: ConnectionDraft, password: string | null, closeAfter: boolean): void;
+  (e: 'select-edit-profile', profile: ConnectionProfile): void;
+  (e: 'new-edit-profile'): void;
+  (e: 'duplicate-edit-profile', profile: ConnectionProfile): void;
+  (e: 'delete-edit-profile', profile: ConnectionProfile): void;
   (e: 'import-dbeaver-path', path: string, includePasswords: boolean): void;
   (e: 'import-dbeaver-text', text: string): void;
   (e: 'export-dbeaver-json'): void;
@@ -936,24 +945,54 @@ function submitConnection(closeAfter: boolean) {
   emit('save-connection', draft, pwd, closeAfter);
 }
 
-watch(
-  () => [props.activeModal, props.editingProfile] as const,
-  ([modal, prof]) => {
-    if (modal !== 'connection') return;
-    connTab.value = 'general';
-    testResult.value = null;
-    bannerExpanded.value = false;
-    commentExpanded.value = false;
-    startupExpanded.value = false;
-    schemaPatternExpanded.value = false;
-    objectFilterExpanded.value = false;
-    showPasswordPlain.value = false;
-    showSslKeyPasswordPlain.value = false;
-    urlExpanded.value = false;
-    schemaSearchText.value = '';
-    fetchedSchemas.value = prof && props.editingProfileDatabases ? [...props.editingProfileDatabases] : [];
+const connSidebarSearch = ref('');
+const filteredSidebarConnections = computed(() => {
+  const list = props.connections ?? [];
+  const q = connSidebarSearch.value.trim().toLowerCase();
+  if (!q) return list;
+  return list.filter((c) => {
+    const host = c.fingerprint.host ?? '';
+    const db = c.fingerprint.database ?? '';
+    const eng = normalizeDbTypeString(c.dbType);
+    return (
+      c.name.toLowerCase().includes(q) ||
+      host.toLowerCase().includes(q) ||
+      db.toLowerCase().includes(q) ||
+      eng.toLowerCase().includes(q)
+    );
+  });
+});
 
-    if (prof) {
+function sidebarEngineShort(dbType: string | Record<string, string>): string {
+  const raw = typeof dbType === 'string' ? dbType : Object.values(dbType)[0] ?? 'DB';
+  const norm = raw.toLowerCase();
+  if (norm.includes('tidb')) return 'TiDB';
+  if (norm.includes('sqlite')) return 'SQLite';
+  if (norm.includes('redis')) return 'Redis';
+  if (norm.includes('postgres')) return 'PG';
+  if (norm.includes('mysql')) return 'MySQL';
+  if (norm.includes('maria')) return 'MariaDB';
+  if (norm.includes('oceanbase')) return 'OB';
+  if (norm.includes('kingbase')) return 'KB';
+  if (norm.includes('gauss')) return 'OG';
+  return raw;
+}
+
+function applyEditingProfileToForm(prof: ConnectionProfile | null) {
+  connTab.value = 'general';
+  testResult.value = null;
+  bannerExpanded.value = false;
+  commentExpanded.value = false;
+  startupExpanded.value = false;
+  schemaPatternExpanded.value = false;
+  objectFilterExpanded.value = false;
+  showPasswordPlain.value = false;
+  showSslKeyPasswordPlain.value = false;
+  urlExpanded.value = false;
+  schemaSearchText.value = '';
+  fetchedSchemas.value = prof && props.editingProfileDatabases ? [...props.editingProfileDatabases] : [];
+
+  if (prof) {
       const cfg = (prof.mode?.config ?? {}) as Partial<DirectConfig>;
       const opt = cfg.options ?? {};
       connForm.id = prof.id ? prof.id : null;
@@ -1092,8 +1131,20 @@ watch(
       connForm.objectFilter = '';
       connForm.advancedProps = [];
     }
+}
+
+watch(
+  () => [props.activeModal, props.editingProfile] as const,
+  ([modal, prof]) => {
+    if (modal !== 'connection') return;
+    applyEditingProfileToForm(prof);
   },
 );
+
+function handleSidebarNewConnection() {
+  applyEditingProfileToForm(null);
+  emit('new-edit-profile');
+}
 
 // ==================== 8. Project Create/Edit & 9. Grid Mutation SQL Preview ====================
 const PROJECT_COLORS = ['#3574F0', '#22C55E', '#F59E0B', '#EF4444', '#A855F7', '#06B6D4', '#EC4899'];
@@ -1608,13 +1659,97 @@ function runImportLiveTemplates() {
 </script>
 
 <template>
-  <!-- 1. JetBrains-Style Connection Editor Modal (Bidirectional URL Binding + Inline Test Connection) -->
+  <!-- 1. IDE Two-Pane Data Sources & Connection Settings Dialog -->
   <div
     v-if="activeModal === 'connection'"
     class="modal-backdrop"
     @click.self="emit('close')"
   >
-    <div class="conn-modal-card">
+    <div class="conn-modal-card with-sidebar">
+      <!-- Left Data Sources Sidebar -->
+      <aside class="conn-sidebar">
+        <div class="conn-sidebar-header">
+          <span>数据源配置 ({{ (connections ?? []).length }})</span>
+          <div style="display: flex; align-items: center; gap: 2px">
+            <button
+              class="icon-btn compact"
+              type="button"
+              title="新建数据源连接"
+              @click="handleSidebarNewConnection"
+            >
+              <IdeIcon name="plus" :size="13" />
+            </button>
+            <button
+              v-if="editingProfile && editingProfile.id"
+              class="icon-btn compact"
+              type="button"
+              title="复制当前数据源"
+              @click="emit('duplicate-edit-profile', editingProfile)"
+            >
+              <IdeIcon name="copy" :size="12" />
+            </button>
+            <button
+              v-if="editingProfile && editingProfile.id"
+              class="icon-btn compact"
+              type="button"
+              title="删除当前数据源"
+              @click="emit('delete-edit-profile', editingProfile)"
+            >
+              <IdeIcon name="trash" :size="12" color="var(--prod)" />
+            </button>
+          </div>
+        </div>
+        <div style="padding: 6px 6px 4px; border-bottom: 1px solid var(--border-subtle)">
+          <input
+            v-model="connSidebarSearch"
+            class="field"
+            style="padding: 4px 7px; font-size: 11.5px"
+            placeholder="筛选连接名称、主机..."
+          />
+        </div>
+        <div class="conn-sidebar-list">
+          <div
+            v-if="!editingProfile || !editingProfile.id"
+            class="conn-sidebar-item active"
+          >
+            <span class="conn-status-dot testing" />
+            <span class="conn-sidebar-item-name">{{ connForm.name.trim() || '新建数据源（未保存）' }}</span>
+            <span class="conn-sidebar-item-meta">{{ sidebarEngineShort(connForm.dbType) }}</span>
+          </div>
+          <div
+            v-for="c in filteredSidebarConnections"
+            :key="c.id"
+            class="conn-sidebar-item"
+            :class="{ active: editingProfile?.id === c.id }"
+            :title="`${c.name} (${c.env}) · ${c.fingerprint.host ?? c.fingerprint.database ?? ''}`"
+            @click="emit('select-edit-profile', c)"
+          >
+            <span
+              class="conn-status-dot"
+              :class="connHealthByProfile?.[c.id]?.status ?? 'unknown'"
+            />
+            <span class="conn-sidebar-item-name">{{ c.name }}</span>
+            <span
+              v-if="c.env === 'PROD' || c.env === 'TEST'"
+              class="pill"
+              :class="c.env === 'PROD' ? 'pill-prod' : 'pill-test'"
+              style="font-size: 9px; padding: 0 4px; flex-shrink: 0"
+            >
+              {{ c.env }}
+            </span>
+            <span class="conn-sidebar-item-meta">{{ sidebarEngineShort(c.dbType) }}</span>
+          </div>
+          <div
+            v-if="filteredSidebarConnections.length === 0"
+            style="padding: 14px 8px; text-align: center; font-size: 11px; color: var(--text-muted)"
+          >
+            无匹配数据源
+          </div>
+        </div>
+      </aside>
+
+      <!-- Right Connection Properties Editor -->
+      <div class="conn-main-pane">
       <div class="conn-modal-body">
         <!-- Top Name + Color Row -->
         <div class="conn-top-grid">
@@ -2589,6 +2724,7 @@ function runImportLiveTemplates() {
             {{ t('btnApply') }}
           </button>
         </div>
+      </div>
       </div>
     </div>
   </div>

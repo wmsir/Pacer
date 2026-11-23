@@ -1,5 +1,10 @@
 import { reactive, ref } from 'vue';
 
+export const IS_MAC: boolean =
+  typeof navigator !== 'undefined' && /mac|darwin/i.test(navigator.platform || navigator.userAgent);
+
+export const FILE_MANAGER_LABEL: string = IS_MAC ? '访达 (Finder)' : '系统资源管理器';
+
 export type ShortcutCategory = 'execution' | 'tabs' | 'files' | 'panels' | 'editor';
 
 export type ShortcutActionId =
@@ -17,6 +22,7 @@ export type ShortcutActionId =
   | 'saveFileAs'
   | 'searchEverywhere'
   | 'locateFile'
+  | 'openDataSources'
   | 'openKeymap'
   | 'toggleDbPanel'
   | 'toggleFilesPanel'
@@ -148,6 +154,13 @@ export const SHORTCUT_ACTIONS: ShortcutActionDef[] = [
     defaultCombo: 'Alt+F1',
   },
   {
+    id: 'openDataSources',
+    category: 'files',
+    labelZh: '打开数据源与连接配置',
+    labelEn: 'Data Sources & Connections',
+    defaultCombo: IS_MAC ? 'Ctrl+;' : 'Ctrl+Alt+Shift+S',
+  },
+  {
     id: 'openKeymap',
     category: 'files',
     labelZh: '打开快捷键配置 (Keymap)',
@@ -242,6 +255,7 @@ export const KEYMAP_PRESETS: Record<'idea' | 'vscode', Record<ShortcutActionId, 
     saveFileAs: 'Ctrl+Shift+S',
     searchEverywhere: 'Ctrl+K',
     locateFile: 'Alt+F1',
+    openDataSources: IS_MAC ? 'Ctrl+;' : 'Ctrl+Alt+Shift+S',
     openKeymap: 'Ctrl+,',
     toggleDbPanel: 'Alt+1',
     toggleFilesPanel: 'Alt+2',
@@ -269,6 +283,7 @@ export const KEYMAP_PRESETS: Record<'idea' | 'vscode', Record<ShortcutActionId, 
     saveFileAs: 'Ctrl+Shift+S',
     searchEverywhere: 'Ctrl+P',
     locateFile: 'Alt+F1',
+    openDataSources: IS_MAC ? 'Ctrl+;' : 'Ctrl+Alt+Shift+S',
     openKeymap: 'Ctrl+,',
     toggleDbPanel: 'Ctrl+B',
     toggleFilesPanel: 'Ctrl+Shift+E',
@@ -336,11 +351,6 @@ export function normalizeCombo(raw: string): string {
   return tokens.join('+');
 }
 
-export const IS_MAC: boolean =
-  typeof navigator !== 'undefined' && /mac|darwin/i.test(navigator.platform || navigator.userAgent);
-
-export const FILE_MANAGER_LABEL: string = IS_MAC ? '访达 (Finder)' : '系统资源管理器';
-
 function resolveKeyTokenFromEvent(e: KeyboardEvent): string {
   if (e.code === 'Equal' || e.key === '=' || e.key === '+') return '=';
   if (e.code === 'Minus' || e.key === '-' || e.key === '_') return '-';
@@ -348,8 +358,8 @@ function resolveKeyTokenFromEvent(e: KeyboardEvent): string {
   if (e.code === 'Comma' || e.key === ',') return ',';
   if (e.code === 'Period' || e.key === '.') return '.';
   if (e.code === 'Semicolon' || e.key === ';') return ';';
-  // macOS Option+letter/digit produces dead keys or accented glyphs in e.key; recover physical key from e.code.
-  if (IS_MAC && e.altKey && e.code) {
+  // Recover physical key across Windows/Linux AltGr/IME and macOS Option combinations.
+  if ((e.altKey || e.ctrlKey || e.metaKey) && e.code) {
     const keyMatch = /^Key([A-Z])$/.exec(e.code);
     if (keyMatch) return keyMatch[1];
     const digitMatch = /^Digit([0-9])$/.exec(e.code);

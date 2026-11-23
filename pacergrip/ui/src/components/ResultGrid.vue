@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useI18n } from '../i18n';
 import {
   exportRowsXlsx,
@@ -16,6 +16,9 @@ import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
 import {
   buildChartDataFromRows,
+  computeFixedVirtualRange,
+  computeGridColumnWidths,
+  computeVariableVirtualRange,
   decodeUnixTimestampHint,
   detectChartColumns,
   downloadTextFile,
@@ -93,6 +96,7 @@ const props = defineProps<{
   ddlTitle: string;
   historyEntries: QueryHistoryEntry[];
   astAnalysis: ScriptAnalysis | null;
+  executing?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -350,8 +354,17 @@ function isCellModified(origIdx: number, col: string): boolean {
   return Object.prototype.hasOwnProperty.call(draft.modified[origIdx], col);
 }
 
+const deletedRowSet = computed(() => new Set(activeDraft.value?.deleted ?? []));
+
 function isRowDeleted(origIdx: number): boolean {
-  return Boolean(activeDraft.value?.deleted.includes(origIdx));
+  return deletedRowSet.value.has(origIdx);
+}
+
+function onCellMouseEnter(ev: MouseEvent, origIdx: number, col: string) {
+  const el = ev.currentTarget as HTMLElement | null;
+  if (el) {
+    el.title = originalCellTooltip(origIdx, col);
+  }
 }
 
 function originalCellTooltip(origIdx: number, col: string): string {
@@ -1140,7 +1153,148 @@ const astWarnings = computed(
   () => props.astAnalysis?.statements.flatMap((s) => s.warnings) ?? [],
 );
 
-// ==================== Quick Chart View State & Geometry ====================
+// ==================== 2D Virtualized Grid Layout State ====================
+const gridScrollRef = ref<HTMLDivElement | null>(null);
+const scrollTop = ref(0);
+const scrollLeft = ref(0);
+const viewportHeight = ref(360);
+const viewportWidth = ref(1100);
+
+const VIRTUAL_ROW_HEIGHT = 27;
+const COL_VIRTUAL_THRESHOLD = 20;
+
+let scrollRafId: number | null = null;
+let resizeObserver: ResizeObserver | null = null;
+
+function syncViewportDimensions() {
+  const el = gridScrollRef.value;
+  if (!el) return;
+  viewportHeight.value = Math.max(160, el.clientHeight);
+  viewportWidth.value = Math.max(320, el.clientWidth);
+}
+
+function onGridScroll() {
+  if (scrollRafId !== null) return;
+  scrollRafId = window.requestAnimationFrame(() => {
+    scrollRafId = null;
+    const el = gridScrollRef.value;
+    if (!el) return;
+    scrollTop.value = el.scrollTop;
+    scrollLeft.value = el.scrollLeft;
+  });
+}
+
+onMounted(() => {
+  syncViewportDimensions();
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      syncViewportDimensions();
+    });
+    if (gridScrollRef.value) {
+      resizeObserver.observe(gridScrollRef.value);
+    }
+  }
+});
+
+watch(gridScrollRef, (el, prev) => {
+  if (prev && resizeObserver) resizeObserver.unobserve(prev);
+  if (el) {
+    if (resizeObserver) resizeObserver.observe(el);
+    syncViewportDimensions();
+  }
+});
+
+onBeforeUnmount(() => {
+  if (scrollRafId !== null) {
+    window.cancelAnimationFrame(scrollRafId);
+    scrollRafId = null;
+  }
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+});
+
+watch(
+  () => [props.activeResultTabId, filterText.value],
+  () => {
+    scrollTop.value = 0;
+    scrollLeft.value = 0;
+    if (gridScrollRef.value) {
+      gridScrollRef.value.scrollTop = 0;
+      gridScrollRef.value.scrollLeft = 0;
+    }
+  },
+);
+
+const currentColWidthOverrides = computed(() => {
+  const res = currentResult.value;
+  if (!res) return undefined;
+  const prefix = `${res.id}:`;
+  const out: Record<string, number> = {};
+  let hasAny = false;
+  for (const [k, v] of Object.entries(colWidths)) {
+    if (k.startsWith(prefix)) {
+      out[k.slice(prefix.length)] = v;
+      hasAny = true;
+    }
+  }
+  return hasAny ? out : undefined;
+});
+
+const columnWidthsPx = computed(() =>
+  computeGridColumnWidths(
+    visibleColumns.value,
+    currentResult.value?.rows ?? [],
+    currentColWidthOverrides.value,
+  ),
+);
+
+const rowWindow = computed(() =>
+  computeFixedVirtualRange(
+    scrollTop.value,
+    viewportHeight.value,
+    VIRTUAL_ROW_HEIGHT,
+    displayedRows.value.length,
+    8,
+  ),
+);
+
+const renderedRows = computed(() =>
+  displayedRows.value.slice(rowWindow.value.start, rowWindow.value.end),
+);
+
+const colWindow = computed(() => {
+  const widths = columnWidthsPx.value;
+  if (visibleColumns.value.length <= COL_VIRTUAL_THRESHOLD) {
+    const totalSize = widths.reduce((sum, w) => sum + w, 0);
+    return { start: 0, end: widths.length, beforeSize: 0, afterSize: 0, totalSize };
+  }
+  return computeVariableVirtualRange(
+    scrollLeft.value,
+    Math.max(400, viewportWidth.value - 44),
+    widths,
+    5,
+  );
+});
+
+const renderedColumns = computed(() => {
+  const start = colWindow.value.start;
+  const cols = visibleColumns.value.slice(start, colWindow.value.end);
+  const widths = columnWidthsPx.value;
+  return cols.map((col, idx) => ({
+    col,
+    width: widths[start + idx] ?? 130,
+  }));
+});
+
+const renderedColSpan = computed(
+  () =>
+    1 +
+    (colWindow.value.beforeSize > 0 ? 1 : 0) +
+    renderedColumns.value.length +
+    (colWindow.value.afterSize > 0 ? 1 : 0),
+);
+
+// ==================== Quick Chart View State & Geometry (Lazy-Evaluated) ====================
 const CHART_PALETTE = [
   '#3574f0',
   '#5fad65',
@@ -1154,7 +1308,7 @@ const CHART_PALETTE = [
 
 const chartDetected = computed(() => {
   const res = currentResult.value;
-  if (!res) {
+  if (!chartMode.value || !res) {
     return {
       labelCandidates: [] as string[],
       numericColumns: [] as string[],
@@ -1169,8 +1323,9 @@ const chartDetected = computed(() => {
 });
 
 watch(
-  () => [props.activeResultTabId, currentResult.value?.columns.join('|')],
-  () => {
+  () => [chartMode.value, props.activeResultTabId, currentResult.value?.columns.join('|')],
+  ([enabled]) => {
+    if (!enabled) return;
     const det = chartDetected.value;
     chartLabelCol.value = det.defaultLabelCol;
     chartValueCol.value = det.defaultValueCol;
@@ -1178,16 +1333,20 @@ watch(
   { immediate: true },
 );
 
-const chartDataset = computed(() =>
-  buildChartDataFromRows(
+const chartDataset = computed(() => {
+  if (!chartMode.value) {
+    return { points: [], min: 0, max: 0, sum: 0, totalRows: 0 };
+  }
+  return buildChartDataFromRows(
     displayedRows.value.map((r) => r.row),
     chartLabelCol.value || chartDetected.value.defaultLabelCol,
     chartValueCol.value || chartDetected.value.defaultValueCol,
     24,
-  ),
-);
+  );
+});
 
 const chartBars = computed(() => {
+  if (!chartMode.value) return [];
   const pts = chartDataset.value.points;
   if (pts.length === 0) return [];
   const W = 680;
@@ -1219,6 +1378,7 @@ const chartBars = computed(() => {
 });
 
 const chartLinePointsAttr = computed(() => {
+  if (!chartMode.value) return '';
   const pts = chartDataset.value.points;
   if (pts.length === 0) return '';
   const W = 680;
@@ -1242,6 +1402,7 @@ const chartLinePointsAttr = computed(() => {
 });
 
 const chartLineNodes = computed(() => {
+  if (!chartMode.value) return [];
   const raw = chartLinePointsAttr.value;
   if (!raw) return [];
   return raw.split(' ').map((pair, idx) => {
@@ -1252,6 +1413,7 @@ const chartLineNodes = computed(() => {
 });
 
 const chartPieSlices = computed(() => {
+  if (!chartMode.value) return [];
   const positives = chartDataset.value.points.filter((p) => p.value > 0);
   const total = positives.reduce((acc, p) => acc + p.value, 0);
   if (total <= 0) return [];
@@ -1418,10 +1580,19 @@ function exportQuickChartSvg() {
       </div>
     </div>
 
+    <div v-if="executing" class="grid-loading-bar" />
+
     <div class="services-body">
       <!-- ==================== 1. Editable Result Grid Tab ==================== -->
       <template v-if="activeServiceTab === 'result'">
-        <div v-if="!currentResult || currentResult.columns.length === 0" class="empty-state">
+        <div
+          v-if="executing && (!currentResult || currentResult.columns.length === 0)"
+          class="empty-state grid-loading-panel"
+        >
+          <span class="pill pill-test">⏳ 正在执行查询...</span>
+          <span>正在连接数据库执行并接收结果数据，请稍候...</span>
+        </div>
+        <div v-else-if="!currentResult || currentResult.columns.length === 0" class="empty-state">
           <div v-if="!currentResult">{{ t('emptyGridHint') }}</div>
           <div v-else-if="currentResult.summary?.isDmlOrDdl">
             <span class="pill pill-dev">执行成功</span>
@@ -1542,9 +1713,11 @@ function exportQuickChartSvg() {
               >
                 👁 {{ t('valueViewer') }}
               </button>
-              <span v-if="currentResult.summary" style="font-size: 11px; color: var(--text-secondary)">
+              <span v-if="executing" class="pill pill-test">⏳ 正在执行新查询...</span>
+              <span v-else-if="currentResult.summary" style="font-size: 11px; color: var(--text-secondary)">
                 {{ currentResult.profileName }} · {{ currentResult.summary.durationMs }} ms ·
                 {{ t('rowsCount', { count: displayedRows.length }) }}
+                <template v-if="visibleColumns.length > 0"> · {{ visibleColumns.length }} 列</template>
                 <template v-if="!currentResult.readOnly"> · 双击单元格可直接修改</template>
                 <template v-else> · <IdeIcon name="lock" :size="11" /> 只读</template>
               </span>
@@ -1658,7 +1831,7 @@ function exportQuickChartSvg() {
           </div>
 
           <div class="grid-split">
-            <div class="grid-scroll">
+            <div ref="gridScrollRef" class="grid-scroll" @scroll.passive="onGridScroll">
               <!-- Quick Visualization Chart Mode -->
               <div v-if="chartMode" class="chart-workspace">
                 <div class="chart-toolbar">
@@ -1870,30 +2043,41 @@ function exportQuickChartSvg() {
                 </tbody>
               </table>
 
-              <!-- Standard Editable Pacer Result Grid -->
-              <table v-else class="dg-grid">
+              <!-- Standard 2D-Virtualized Editable Pacer Result Grid -->
+              <table
+                v-else
+                class="dg-grid dg-grid-fixed"
+                :style="{ width: `${44 + colWindow.totalSize}px` }"
+              >
+                <colgroup>
+                  <col style="width: 44px" />
+                  <col v-if="colWindow.beforeSize > 0" :style="{ width: `${colWindow.beforeSize}px` }" />
+                  <col v-for="rc in renderedColumns" :key="`col-${rc.col}`" :style="{ width: `${rc.width}px` }" />
+                  <col v-if="colWindow.afterSize > 0" :style="{ width: `${colWindow.afterSize}px` }" />
+                </colgroup>
                 <thead>
                   <tr>
                     <th class="row-num">#</th>
+                    <th v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <th
-                      v-for="col in visibleColumns"
-                      :key="col"
-                      :style="colStyle(col)"
-                      @click="toggleSort(col)"
+                      v-for="rc in renderedColumns"
+                      :key="rc.col"
+                      @click="toggleSort(rc.col)"
                     >
-                      <IdeIcon v-if="currentResult.primaryKeys.includes(col)" name="key" :size="12" style="margin-right: 3px" />
-                      <span>{{ col }}</span>
-                      <span v-if="sortCol === col" style="margin-left: 4px; color: var(--accent)">
+                      <IdeIcon v-if="currentResult.primaryKeys.includes(rc.col)" name="key" :size="12" style="margin-right: 3px" />
+                      <span>{{ rc.col }}</span>
+                      <span v-if="sortCol === rc.col" style="margin-left: 4px; color: var(--accent)">
                         {{ sortDir === 'asc' ? '▲' : '▼' }}
                       </span>
                       <span
                         class="col-resize-handle"
                         title="拖拽调整列宽（双击恢复自动宽度）"
-                        @mousedown.stop.prevent="startColResize($event, col)"
-                        @dblclick.stop="resetColWidth(col)"
+                        @mousedown.stop.prevent="startColResize($event, rc.col)"
+                        @dblclick.stop="resetColWidth(rc.col)"
                         @click.stop
                       />
                     </th>
+                    <th v-if="colWindow.afterSize > 0" class="virtual-spacer-cell" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1901,7 +2085,7 @@ function exportQuickChartSvg() {
                     v-if="displayedRows.length === 0 && (activeDraft?.inserted.length ?? 0) === 0"
                     class="empty-data-row"
                   >
-                    <td :colspan="visibleColumns.length + 1" class="empty-data-cell">
+                    <td :colspan="renderedColSpan" class="empty-data-cell">
                       <template v-if="filterText.trim()">
                         <span>当前筛选「{{ filterText }}」下无匹配数据</span>
                         <button
@@ -1926,33 +2110,39 @@ function exportQuickChartSvg() {
                     </td>
                   </tr>
 
-                  <!-- Existing DB Rows -->
+                  <!-- Top Virtual Row Spacer -->
+                  <tr v-if="rowWindow.beforeSize > 0" class="virtual-spacer-row">
+                    <td :colspan="renderedColSpan" :style="{ height: `${rowWindow.beforeSize}px` }" />
+                  </tr>
+
+                  <!-- Virtualized Windowed DB Rows -->
                   <tr
-                    v-for="(item, visibleIdx) in displayedRows"
+                    v-for="(item, localIdx) in renderedRows"
                     :key="`orig-${item.origIdx}`"
+                    class="dg-grid-row"
                     :class="{ 'row-deleted': isRowDeleted(item.origIdx) }"
                   >
-                    <td class="row-num">{{ visibleIdx + 1 }}</td>
+                    <td class="row-num">{{ rowWindow.start + localIdx + 1 }}</td>
+                    <td v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <td
-                      v-for="col in visibleColumns"
-                      :key="col"
-                      :style="colStyle(col)"
+                      v-for="rc in renderedColumns"
+                      :key="rc.col"
                       :class="{
-                        'num-cell': isNumeric(item.row[col]),
-                        'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === col,
-                        'cell-dirty': isCellModified(item.origIdx, col),
+                        'num-cell': isNumeric(item.row[rc.col]),
+                        'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === rc.col,
+                        'cell-dirty': isCellModified(item.origIdx, rc.col),
                       }"
-                      :title="originalCellTooltip(item.origIdx, col)"
-                      @click="selectCell(false, item.origIdx, col)"
-                      @dblclick="startEditCell(false, item.origIdx, col)"
-                      @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, col)"
+                      @mouseenter="onCellMouseEnter($event, item.origIdx, rc.col)"
+                      @click="selectCell(false, item.origIdx, rc.col)"
+                      @dblclick="startEditCell(false, item.origIdx, rc.col)"
+                      @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, rc.col)"
                     >
                       <div
                         v-if="
                           editingCell &&
                           !editingCell.isInserted &&
                           editingCell.rowIdx === item.origIdx &&
-                          editingCell.col === col
+                          editingCell.col === rc.col
                         "
                         class="cell-inline-editor"
                         @click.stop
@@ -1971,37 +2161,43 @@ function exportQuickChartSvg() {
                         </button>
                       </div>
                       <template v-else>
-                        <span v-if="item.row[col] === null || item.row[col] === undefined" class="null-pill">
+                        <span v-if="item.row[rc.col] === null || item.row[rc.col] === undefined" class="null-pill">
                           &lt;NULL&gt;
                         </span>
-                        <span v-else>{{ formatCell(item.row[col]) }}</span>
+                        <span v-else>{{ formatCell(item.row[rc.col]) }}</span>
                       </template>
                     </td>
+                    <td v-if="colWindow.afterSize > 0" class="virtual-spacer-cell" />
+                  </tr>
+
+                  <!-- Bottom Virtual Row Spacer -->
+                  <tr v-if="rowWindow.afterSize > 0" class="virtual-spacer-row">
+                    <td :colspan="renderedColSpan" :style="{ height: `${rowWindow.afterSize}px` }" />
                   </tr>
 
                   <!-- Newly Inserted Rows -->
                   <tr
                     v-for="(insRow, insIdx) in activeDraft?.inserted ?? []"
                     :key="`ins-${insIdx}`"
-                    class="row-inserted"
+                    class="dg-grid-row row-inserted"
                   >
                     <td class="row-num" title="待新增行">+{{ insIdx + 1 }}</td>
+                    <td v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <td
-                      v-for="col in visibleColumns"
-                      :key="col"
-                      :style="colStyle(col)"
+                      v-for="rc in renderedColumns"
+                      :key="rc.col"
                       :class="{
-                        'selected-cell': selectedIsInserted && selectedRowOrigIdx === insIdx && selectedColName === col,
+                        'selected-cell': selectedIsInserted && selectedRowOrigIdx === insIdx && selectedColName === rc.col,
                       }"
-                      @click="selectCell(true, insIdx, col)"
-                      @dblclick="startEditCell(true, insIdx, col)"
+                      @click="selectCell(true, insIdx, rc.col)"
+                      @dblclick="startEditCell(true, insIdx, rc.col)"
                     >
                       <div
                         v-if="
                           editingCell &&
                           editingCell.isInserted &&
                           editingCell.rowIdx === insIdx &&
-                          editingCell.col === col
+                          editingCell.col === rc.col
                         "
                         class="cell-inline-editor"
                         @click.stop
@@ -2016,13 +2212,14 @@ function exportQuickChartSvg() {
                         <button class="cell-inline-btn" @click="commitInlineEdit(false)">✓</button>
                       </div>
                       <template v-else>
-                        <span v-if="insRow[col] === null" class="null-pill">&lt;NULL&gt;</span>
-                        <span v-else-if="insRow[col] === ''" style="color: var(--text-muted); font-style: italic">
+                        <span v-if="insRow[rc.col] === null" class="null-pill">&lt;NULL&gt;</span>
+                        <span v-else-if="insRow[rc.col] === ''" style="color: var(--text-muted); font-style: italic">
                           &lt;双击填写&gt;
                         </span>
-                        <span v-else>{{ formatCell(insRow[col]) }}</span>
+                        <span v-else>{{ formatCell(insRow[rc.col]) }}</span>
                       </template>
                     </td>
+                    <td v-if="colWindow.afterSize > 0" class="virtual-spacer-cell" />
                   </tr>
                 </tbody>
               </table>

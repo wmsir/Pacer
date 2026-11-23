@@ -687,14 +687,45 @@ export async function executeSql(
 ): Promise<QuerySummary> {
   assertTauri();
   const onChunk = new Channel<QueryChunk>();
-  onChunk.onmessage = onData;
-  return invoke('execute_sql_cmd', {
+  let sawLastChunk = false;
+  let receivedRows = 0;
+  let resolveLastChunk: (() => void) | null = null;
+  const lastChunkDone = new Promise<void>((resolve) => {
+    resolveLastChunk = resolve;
+  });
+
+  onChunk.onmessage = (chunk) => {
+    receivedRows += chunk.rows?.length ?? 0;
+    onData(chunk);
+    if (chunk.isLast && !sawLastChunk) {
+      sawLastChunk = true;
+      resolveLastChunk?.();
+    }
+  };
+
+  const summary = await invoke<QuerySummary>('execute_sql_cmd', {
     profileId,
     dbName,
     sql,
     limit,
     onChunk,
   });
+
+  // Guard against WebView2 Channel message delivery arriving slightly after command return on wide tables.
+  if (
+    !sawLastChunk &&
+    summary.success &&
+    !summary.isDmlOrDdl &&
+    (summary.totalRows > receivedRows || summary.totalRows === 0)
+  ) {
+    await Promise.race([
+      lastChunkDone,
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 1500);
+      }),
+    ]);
+  }
+  return summary;
 }
 
 export async function explainSql(

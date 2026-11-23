@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useI18n } from './i18n';
 import {
   analyzeSql,
@@ -614,6 +614,7 @@ const ddlTitle = ref<string>('');
 const historyEntries = ref<QueryHistoryEntry[]>([]);
 const astAnalysis = ref<ScriptAnalysis | null>(null);
 const busy = ref(false);
+const queryExecuting = ref(false);
 const statusMessage = ref('就绪 · 支持多项目多数据源管理、DBeaver 导入、结果集直接修改与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
 
@@ -2683,6 +2684,9 @@ async function executeStatementsBatch(
   explicitTableName?: string,
 ) {
   busy.value = true;
+  queryExecuting.value = true;
+  activeServiceTab.value = 'result';
+  bottomVisible.value = true;
   const newTabs: ResultTabItem[] = [];
   let totalRowsAll = 0;
   let totalMsAll = 0;
@@ -2710,28 +2714,15 @@ async function executeStatementsBatch(
           : extractSingleTableTarget(sql);
       const effectiveDb = detected?.db || dbName;
       const sourceTable = isRedis ? null : (detected?.table ?? null);
-      const primaryKeys =
-        !isRedis && sourceTable && effectiveDb
-          ? await resolveTablePrimaryKeys(profile, effectiveDb, sourceTable)
-          : [];
 
-      const item: ResultTabItem = {
-        id: tabId,
-        title: tabTitle,
-        sql,
-        profileId: profile.id,
-        profileName: profile.name,
-        profileEnv: profile.env,
-        engineKey,
-        dbName: effectiveDb,
-        readOnly: readOnly || isRedis,
-        sourceTable,
-        availableTables: isRedis ? [] : availableTables,
-        primaryKeys,
-        columns: [],
-        rows: [],
-        summary: null,
-      };
+      // Kick off primary key metadata lookup in parallel so wide queries never stall waiting for SHOW COLUMNS.
+      const pkPromise =
+        !isRedis && sourceTable && effectiveDb
+          ? resolveTablePrimaryKeys(profile, effectiveDb, sourceTable).catch(() => [] as string[])
+          : Promise.resolve([] as string[]);
+
+      const rawColumns: string[] = [];
+      const rawRows: Record<string, unknown>[] = [];
 
       pushProjectLog({
         projectId: targetProjectId,
@@ -2749,20 +2740,21 @@ async function executeStatementsBatch(
         sql,
         maxRowsLimit.value,
         (chunk) => {
-          if (item.columns.length === 0 && chunk.columns.length > 0) {
-            item.columns = chunk.columns;
+          if (rawColumns.length === 0 && chunk.columns.length > 0) {
+            rawColumns.push(...chunk.columns);
           }
           if (chunk.rows.length > 0) {
-            item.rows.push(...chunk.rows);
+            rawRows.push(...chunk.rows);
           }
         },
       );
-      item.summary = summary;
+
+      let finalCols = rawColumns;
       if (
         !isRedis &&
         summary.success &&
         !summary.isDmlOrDdl &&
-        item.columns.length === 0 &&
+        finalCols.length === 0 &&
         sourceTable &&
         effectiveDb &&
         (explicitTableName ||
@@ -2779,9 +2771,29 @@ async function executeStatementsBatch(
           }
         }
         if (metaCols && metaCols.length > 0) {
-          item.columns = metaCols.map((c) => c.name);
+          finalCols = metaCols.map((c) => c.name);
         }
       }
+
+      const primaryKeys = await pkPromise;
+      const item: ResultTabItem = {
+        id: tabId,
+        title: tabTitle,
+        sql,
+        profileId: profile.id,
+        profileName: profile.name,
+        profileEnv: profile.env,
+        engineKey,
+        dbName: effectiveDb,
+        readOnly: readOnly || isRedis,
+        sourceTable,
+        availableTables: isRedis ? [] : availableTables,
+        primaryKeys,
+        columns: markRaw(finalCols),
+        rows: markRaw(rawRows),
+        summary,
+      };
+
       totalMsAll += summary.durationMs;
       totalRowsAll += summary.totalRows;
 
@@ -2840,7 +2852,7 @@ async function executeStatementsBatch(
         void loadTablesForDb(profile, dbName);
       }
     }
-    await refreshHistory();
+    void refreshHistory();
   } catch (err) {
     const msg = String(err);
     if (looksLikeConnectionFailure(msg)) {
@@ -2858,6 +2870,7 @@ async function executeStatementsBatch(
     activeServiceTab.value = 'output';
     setStatus(`执行 SQL 出错: ${msg}`, true);
   } finally {
+    queryExecuting.value = false;
     busy.value = false;
   }
 }
@@ -3876,6 +3889,7 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-dock-files', category: 'action', label: `将本地文件面板移至${filesDockSide.value === 'right' ? '左侧' : '右侧'}`, detail: '自由配置本地文件与脚本停靠在左侧或右侧', badge: '布局' },
     { id: 'act-locate-file', category: 'action', label: '在文件树中定位当前打开的文件', detail: '自动展开目录树并滚动高亮当前文档', badge: keymap.getDisplay('locateFile') },
     { id: 'act-new-conn', category: 'action', label: t('newConnection'), detail: '配置 TiDB / MySQL / PostgreSQL / SQLite / Redis 数据源', badge: '数据库' },
+    { id: 'act-open-datasources', category: 'action', label: '数据源与连接配置管理器...', detail: '按快捷键快速打开数据源列表与连接属性设置窗', badge: keymap.getDisplay('openDataSources') },
     { id: 'act-test-all-conn', category: 'action', label: '⚡ 批量测活当前项目数据源', detail: '并发探测数据源连通性并更新绿/红健康状态指示点', badge: '运维' },
     { id: 'act-create-table', category: 'action', label: '可视化新建数据表...', detail: '零手写 DDL，可视化设计字段、主键、自增与索引并实时预览生成 SQL', badge: '建模' },
     { id: 'act-object-search', category: 'action', label: '🔍 在数据库中全局查找表/字段/Key...', detail: '跨表检索表名、列名、注释与 Redis Key 模式', badge: '搜索' },
@@ -3970,7 +3984,8 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     else if (item.id === 'act-new-conn') {
       editingProfile.value = null;
       activeModal.value = 'connection';
-    } else if (item.id === 'act-test-all-conn') await handleTestAllConnections();
+    } else if (item.id === 'act-open-datasources') openDataSourcesDialog(false);
+    else if (item.id === 'act-test-all-conn') await handleTestAllConnections();
     else if (item.id === 'act-create-table') openCreateTableFromToolbar();
     else if (item.id === 'act-object-search') handleOpenObjectSearch();
     else if (item.id === 'act-schema-diff') handleOpenSchemaDiff();
@@ -4061,6 +4076,17 @@ function onGlobalKeydown(e: KeyboardEvent) {
   ) {
     e.preventDefault();
     activeModal.value = activeModal.value === 'search' ? 'none' : 'search';
+    return;
+  }
+
+  if (
+    matchesCombo(e, keymap.getCombo('openDataSources')) ||
+    (mod && e.altKey && e.shiftKey && e.code === 'KeyS') ||
+    (IS_MAC && mod && !e.altKey && !e.shiftKey && e.code === 'Semicolon')
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    openDataSourcesDialog(true);
     return;
   }
 
@@ -4229,6 +4255,32 @@ function openConnectionModal(profile: ConnectionProfile | null, targetProjectId?
   }
   editingProfile.value = profile;
   activeModal.value = 'connection';
+}
+
+function openDataSourcesDialog(toggleIfOpen = false) {
+  if (toggleIfOpen && activeModal.value === 'connection') {
+    activeModal.value = 'none';
+    return;
+  }
+  editingProfile.value = activeProfile.value ?? connections.value[0] ?? null;
+  activeModal.value = 'connection';
+}
+
+function handleDuplicateProfileInModal(profile: ConnectionProfile) {
+  const cloned: ConnectionProfile = {
+    ...profile,
+    id: '',
+    name: `${profile.name} (副本)`,
+  };
+  editingProfile.value = cloned;
+  activeModal.value = 'connection';
+}
+
+async function handleDeleteProfileInModal(profile: ConnectionProfile) {
+  await handleDeleteProfile(profile);
+  if (activeModal.value === 'connection') {
+    editingProfile.value = connections.value[0] ?? null;
+  }
 }
 
 function openImportModalForProject(targetProjectId?: string) {
@@ -4571,6 +4623,10 @@ onBeforeUnmount(() => {
               {{ t('menuDatabase') }}
             </button>
             <div v-if="openMenu === 'database'" class="dropdown-menu">
+              <button class="dropdown-item" @click="openMenu = null; openDataSourcesDialog(false)">
+                <span>⚙️ 数据源与连接配置...</span>
+                <span class="shortcut-hint">{{ keymap.getDisplay('openDataSources') }}</span>
+              </button>
               <button class="dropdown-item" @click="openMenu = null; openConnectionModal(null)">
                 <span>{{ t('newConnection') }}...</span>
               </button>
@@ -5007,7 +5063,11 @@ onBeforeUnmount(() => {
           <IdeIcon name="project-add" :size="14" />
           <span>{{ t('newProjectShort') }}</span>
         </button>
-        <button class="btn btn-primary btn-sm" @click="openConnectionModal(null)">
+        <button
+          class="btn btn-primary btn-sm"
+          :title="`打开数据源与连接配置 (${keymap.getDisplay('openDataSources')})`"
+          @click="openConnectionModal(null)"
+        >
           <IdeIcon name="plus" :size="13" />
           <span>{{ t('newConnection') }}</span>
         </button>
@@ -5735,6 +5795,7 @@ onBeforeUnmount(() => {
             :ddl-title="ddlTitle"
             :history-entries="historyEntries"
             :ast-analysis="astAnalysis"
+            :executing="queryExecuting"
             @update:active-service-tab="activeServiceTab = $event"
             @update:active-result-tab-id="activeResultTabId = $event"
             @close-result-tab="closeResultTab"
@@ -6318,6 +6379,8 @@ onBeforeUnmount(() => {
       :shortcuts-initial-tab="shortcutsInitialTab"
       :max-rows-limit="maxRowsLimit"
       :engine-key="activeEngineKey"
+      :connections="connections"
+      :conn-health-by-profile="connHealthByProfile"
       :busy="busy"
       @close="
         pendingCloseTabId = null;
@@ -6329,6 +6392,10 @@ onBeforeUnmount(() => {
       @delete-project="handleDeleteProject"
       @execute-grid-sql="handleExecuteGridSql"
       @save-connection="handleSaveConnection"
+      @select-edit-profile="editingProfile = $event"
+      @new-edit-profile="editingProfile = null"
+      @duplicate-edit-profile="handleDuplicateProfileInModal"
+      @delete-edit-profile="handleDeleteProfileInModal"
       @import-dbeaver-path="handleImportDbeaverPath"
       @import-dbeaver-text="handleImportDbeaverText"
       @export-dbeaver-json="handleExportDbeaverJson"

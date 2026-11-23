@@ -790,4 +790,13 @@ mod tests {
         drop(backend);
         let _ = std::fs::remove_file(&tmp);
     }
+
+    #[test]
+    fn test_adaptive_chunk_size_scales_for_wide_tables() {
+        assert_eq!(crate::sqlite::adaptive_chunk_size(0), 500);
+        assert_eq!(crate::sqlite::adaptive_chunk_size(5), 500);
+        assert_eq!(crate::sqlite::adaptive_chunk_size(10), 500);
+        assert_eq!(crate::sqlite::adaptive_chunk_size(76), 78);
+        assert_eq!(crate::sqlite::adaptive_chunk_size(300), 25);
+    }
 }
