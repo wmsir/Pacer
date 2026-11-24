@@ -9,6 +9,7 @@ pacer-core = { path = "../pacer-core" }
 pacer-sql-ast = { path = "../pacer-sql-ast" }
 sqlx.workspace = true
 tokio.workspace = true
+futures-util.workspace = true
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

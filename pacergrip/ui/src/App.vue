@@ -579,15 +579,40 @@ const activeSchemaMap = computed<Record<string, string[]>>(() => {
 });
 
 const isMarkdownTab = computed(() => activeTab.value?.fileKind === 'markdown');
+const debouncedMdContent = ref('');
+let mdDebounceTimer: number | null = null;
+watch(
+  () => [activeTab.value?.id, activeTab.value?.fileKind, activeTab.value?.content] as const,
+  ([id, kind, content], prev) => {
+    if (mdDebounceTimer !== null) {
+      window.clearTimeout(mdDebounceTimer);
+      mdDebounceTimer = null;
+    }
+    if (kind !== 'markdown' || typeof content !== 'string') {
+      debouncedMdContent.value = '';
+      return;
+    }
+    const prevId = prev?.[0];
+    if (id !== prevId || content.length <= 2000) {
+      debouncedMdContent.value = content;
+      return;
+    }
+    mdDebounceTimer = window.setTimeout(() => {
+      mdDebounceTimer = null;
+      debouncedMdContent.value = activeTab.value?.id === id ? (activeTab.value?.content ?? '') : '';
+    }, 180);
+  },
+  { immediate: true },
+);
 
 const activeMdBlocks = computed<MarkdownSqlBlock[]>(() => {
-  if (!isMarkdownTab.value || !activeTab.value) return [];
-  return extractMarkdownSqlBlocksLocal(activeTab.value.content);
+  if (!isMarkdownTab.value || !debouncedMdContent.value) return [];
+  return extractMarkdownSqlBlocksLocal(debouncedMdContent.value);
 });
 
 const activeMdSegments = computed(() => {
-  if (!isMarkdownTab.value || !activeTab.value) return [];
-  return parseMarkdownSegments(activeTab.value.content);
+  if (!isMarkdownTab.value || !debouncedMdContent.value) return [];
+  return parseMarkdownSegments(debouncedMdContent.value);
 });
 
 const activeDialectLabel = computed(() => {
@@ -856,6 +881,7 @@ function updateTabContentByTarget(tab: EditorTab | null | undefined, next: strin
   tab.cursor.lineCount = countLines(next);
   tab.cursor.charCount = next.length;
   scheduleAstInspect();
+  scheduleSaveSession();
 }
 
 function handleSplitCursorChange(telemetry: EditorCursorTelemetry) {
@@ -896,7 +922,7 @@ async function refreshAstInspection() {
       sqlCandidate = tab.content.trim();
     }
   }
-  if (!sqlCandidate) {
+  if (!sqlCandidate || sqlCandidate.length > 200_000) {
     astAnalysis.value = null;
     return;
   }
@@ -1211,16 +1237,25 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
         })
         .catch(() => {});
     }
-    // Prefetch first few tables' columns silently for instant SQL autocomplete
-    for (const tbl of tables.slice(0, 12)) {
-      const cKey = `${profile.id}:${dbName}:${tbl.name}`;
-      if (!columnsByKey[cKey]) {
-        listColumns(profile.id, dbName, tbl.name)
-          .then((cols) => {
-            columnsByKey[cKey] = cols;
-          })
-          .catch(() => {});
-      }
+    // Prefetch first few tables' columns silently and apply in one batch
+    const toPrefetch = tables
+      .slice(0, 12)
+      .filter((tbl) => !columnsByKey[`${profile.id}:${dbName}:${tbl.name}`]);
+    if (toPrefetch.length > 0) {
+      void Promise.allSettled(
+        toPrefetch.map((tbl) =>
+          listColumns(profile.id, dbName, tbl.name).then((cols) => ({
+            key: `${profile.id}:${dbName}:${tbl.name}`,
+            cols,
+          })),
+        ),
+      ).then((results) => {
+        for (const r of results) {
+          if (r.status === 'fulfilled') {
+            columnsByKey[r.value.key] = r.value.cols;
+          }
+        }
+      });
     }
   } catch (err) {
     setStatus(`加载表列表失败 (${dbName}): ${String(err)}`, true);
@@ -3025,6 +3060,7 @@ async function executeStatementsBatch(
 
     if (newTabs.length > 0) {
       resultTabs.value = mergeResultTabsWithPins(newTabs);
+      resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
       activeResultTabId.value = newTabs[0].id;
       activeServiceTab.value = lastError && newTabs[0].columns.length === 0 ? 'output' : 'result';
     }
@@ -3608,6 +3644,7 @@ async function runExplainSql(sql: string, customTitle?: string) {
       },
     };
     resultTabs.value = mergeResultTabsWithPins([item]);
+    resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
     activeResultTabId.value = tabId;
     activeServiceTab.value = 'result';
     pushProjectLog({
@@ -3717,10 +3754,13 @@ async function refreshHistory() {
 }
 
 function mergeResultTabsWithPins(incoming: ResultTabItem[]): ResultTabItem[] {
-  const pinnedExisting = resultTabs.value.filter((r) => r.pinned);
+  const pinnedExisting = resultTabs.value.filter((r) => r.pinned).slice(0, 12);
   const unpinnedExisting = resultTabs.value.filter((r) => !r.pinned);
-  const maxUnpinned = Math.max(4, 12 - pinnedExisting.length);
-  return [...pinnedExisting, ...incoming, ...unpinnedExisting].slice(0, pinnedExisting.length + maxUnpinned);
+  const maxTotal = 16;
+  return [...pinnedExisting, ...incoming, ...unpinnedExisting].slice(
+    0,
+    Math.max(maxTotal, pinnedExisting.length + incoming.length),
+  );
 }
 
 function togglePinResultTab(id: string) {
@@ -3732,6 +3772,7 @@ function togglePinResultTab(id: string) {
 
 function closeOtherResultTabs(keepId: string) {
   resultTabs.value = resultTabs.value.filter((r) => r.id === keepId || r.pinned);
+  resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
   if (!resultTabs.value.some((r) => r.id === activeResultTabId.value)) {
     activeResultTabId.value = keepId;
   }
@@ -3739,6 +3780,7 @@ function closeOtherResultTabs(keepId: string) {
 
 function closeResultTab(id: string) {
   resultTabs.value = resultTabs.value.filter((r) => r.id !== id);
+  resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
   if (activeResultTabId.value === id) {
     activeResultTabId.value = resultTabs.value[0]?.id ?? '';
   }
@@ -4847,7 +4889,11 @@ function scheduleSaveSession() {
     }
     if (isTauriRuntime()) {
       for (const tab of tabs.value) {
-        if (!tab.path && lastSavedScratchContent[tab.id] !== tab.content) {
+        if (
+          !tab.path &&
+          tab.content.length <= 500_000 &&
+          lastSavedScratchContent[tab.id] !== tab.content
+        ) {
           const snapshot = tab.content;
           void saveConsoleScratch(tab.title, snapshot)
             .then((savedPath) => {
@@ -4860,7 +4906,7 @@ function scheduleSaveSession() {
         }
       }
     }
-  }, 400);
+  }, 1200);
 }
 
 async function restoreEditorSession() {
@@ -4943,11 +4989,21 @@ async function restoreEditorSession() {
 }
 
 watch(
-  [tabs, activeTabId, selectedProfileId, selectedDbName],
+  [
+    () =>
+      tabs.value
+        .map(
+          (t) =>
+            `${t.id}:${t.title}:${t.path ?? ''}:${t.profileId}:${t.dbName}:${t.mdViewMode}:${t.readOnly ? 1 : 0}`,
+        )
+        .join('|'),
+    activeTabId,
+    selectedProfileId,
+    selectedDbName,
+  ],
   () => {
     scheduleSaveSession();
   },
-  { deep: true },
 );
 
 watch(activeTabId, () => {

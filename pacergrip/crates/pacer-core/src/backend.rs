@@ -47,6 +47,10 @@ pub trait DbBackend: Send + Sync {
         tx: mpsc::Sender<QueryChunk>,
     ) -> CoreResult<QuerySummary>;
 
+    async fn cancel_running_query(&self, _query_id: &str) -> CoreResult<bool> {
+        Ok(false)
+    }
+
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult>;
 
     async fn transaction_status(&self) -> CoreResult<TransactionStatus> {

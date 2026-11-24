@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use native_tls::{Certificate, TlsConnector as NativeTlsConnector};
 use serde_json::Value as JsonValue;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_native_tls::{TlsConnector, TlsStream};
@@ -23,6 +23,9 @@ use crate::ssh_tunnel::{open_ssh_tunnel, SshTunnelHandle};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESP_DEPTH: usize = 16;
+const MAX_RESP_BULK_BYTES: usize = 16 * 1024 * 1024;
+const MAX_RESP_ARRAY_ITEMS: usize = 50_000;
+const MAX_RESP_LINE_BYTES: usize = 1024 * 1024;
 const SCAN_KEY_CAP: usize = 200;
 const SCAN_MAX_ROUNDS: usize = 24;
 const DEFAULT_ARRAY_ROW_LIMIT: usize = 1000;
@@ -331,94 +334,128 @@ impl RedisConn {
     }
 
     async fn read_value_with_timeout(&mut self, depth: usize) -> CoreResult<RespValue> {
-        tokio::time::timeout(IO_TIMEOUT, self.read_value(depth))
+        tokio::time::timeout(IO_TIMEOUT, read_resp_value(&mut self.stream, depth))
             .await
             .map_err(|_| CoreError::Transport("Redis server response timed out".to_string()))?
     }
+}
 
-    fn read_value<'a>(
-        &'a mut self,
-        depth: usize,
-    ) -> Pin<Box<dyn std::future::Future<Output = CoreResult<RespValue>> + Send + 'a>> {
-        Box::pin(async move {
-            if depth > MAX_RESP_DEPTH {
-                return Err(CoreError::ParseError(
-                    "RESP nesting depth exceeded maximum limit".to_string(),
-                ));
-            }
-            let line = self.read_crlf_line().await?;
-            let (prefix, rest) = line
-                .split_first()
-                .ok_or_else(|| CoreError::Transport("Redis closed connection unexpectedly".to_string()))?;
-            let header = std::str::from_utf8(rest)
-                .map_err(|e| CoreError::ParseError(format!("Invalid UTF-8 in RESP header: {e}")))?
-                .to_string();
-
-            match *prefix {
-                b'+' => Ok(RespValue::SimpleString(header)),
-                b'-' => Ok(RespValue::Error(header)),
-                b':' => {
-                    let n = header.trim().parse::<i64>().map_err(|e| {
-                        CoreError::ParseError(format!("Invalid RESP integer '{header}': {e}"))
-                    })?;
-                    Ok(RespValue::Integer(n))
-                }
-                b'$' => {
-                    let len = header.trim().parse::<isize>().map_err(|e| {
-                        CoreError::ParseError(format!("Invalid RESP bulk length '{header}': {e}"))
-                    })?;
-                    if len < 0 {
-                        return Ok(RespValue::Null);
-                    }
-                    let byte_len = len as usize;
-                    let mut buf = vec![0u8; byte_len + 2];
-                    self.stream.read_exact(&mut buf).await.map_err(|e| {
-                        CoreError::Transport(format!("Redis stream read interrupted: {e}"))
-                    })?;
-                    buf.truncate(byte_len);
-                    Ok(RespValue::BulkBytes(buf))
-                }
-                b'*' => {
-                    let count = header.trim().parse::<isize>().map_err(|e| {
-                        CoreError::ParseError(format!("Invalid RESP array length '{header}': {e}"))
-                    })?;
-                    if count < 0 {
-                        return Ok(RespValue::Null);
-                    }
-                    let cap = (count as usize).min(100_000);
-                    let mut items = Vec::with_capacity(cap);
-                    for _ in 0..count {
-                        items.push(self.read_value(depth + 1).await?);
-                    }
-                    Ok(RespValue::Array(items))
-                }
-                other => Err(CoreError::ParseError(format!(
-                    "Unsupported RESP type byte '{}' in reply '{header}'",
-                    char::from(other)
-                ))),
-            }
-        })
-    }
-
-    async fn read_crlf_line(&mut self) -> CoreResult<Vec<u8>> {
-        let mut line = Vec::new();
-        let n = self
-            .stream
-            .read_until(b'\n', &mut line)
+async fn discard_exact<S: AsyncRead + Unpin>(reader: &mut S, mut remaining: usize) -> CoreResult<()> {
+    let mut scratch = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = remaining.min(scratch.len());
+        reader
+            .read_exact(&mut scratch[..want])
             .await
-            .map_err(|e| CoreError::Transport(format!("Redis socket read failed: {e}")))?;
-        if n == 0 {
-            return Err(CoreError::Transport(
-                "Redis connection closed by remote host".to_string(),
+            .map_err(|e| CoreError::Transport(format!("Redis stream read interrupted: {e}")))?;
+        remaining -= want;
+    }
+    Ok(())
+}
+
+async fn read_resp_crlf_line<S: AsyncBufRead + AsyncRead + Unpin>(reader: &mut S) -> CoreResult<Vec<u8>> {
+    let mut line = Vec::new();
+    let n = reader
+        .take((MAX_RESP_LINE_BYTES + 1) as u64)
+        .read_until(b'\n', &mut line)
+        .await
+        .map_err(|e| CoreError::Transport(format!("Redis socket read failed: {e}")))?;
+    if n == 0 {
+        return Err(CoreError::Transport(
+            "Redis connection closed by remote host".to_string(),
+        ));
+    }
+    if n > MAX_RESP_LINE_BYTES {
+        return Err(CoreError::ParseError(format!(
+            "Redis protocol line exceeded safety cap ({MAX_RESP_LINE_BYTES} bytes)"
+        )));
+    }
+    if line.ends_with(b"\r\n") {
+        line.truncate(line.len() - 2);
+    } else if line.ends_with(b"\n") {
+        line.truncate(line.len() - 1);
+    }
+    Ok(line)
+}
+
+fn read_resp_value<'a, S: AsyncBufRead + AsyncRead + Unpin + Send>(
+    reader: &'a mut S,
+    depth: usize,
+) -> Pin<Box<dyn std::future::Future<Output = CoreResult<RespValue>> + Send + 'a>> {
+    Box::pin(async move {
+        if depth > MAX_RESP_DEPTH {
+            return Err(CoreError::ParseError(
+                "RESP nesting depth exceeded maximum limit".to_string(),
             ));
         }
-        if line.ends_with(b"\r\n") {
-            line.truncate(line.len() - 2);
-        } else if line.ends_with(b"\n") {
-            line.truncate(line.len() - 1);
+        let line = read_resp_crlf_line(reader).await?;
+        let (prefix, rest) = line
+            .split_first()
+            .ok_or_else(|| CoreError::Transport("Redis closed connection unexpectedly".to_string()))?;
+        let header = std::str::from_utf8(rest)
+            .map_err(|e| CoreError::ParseError(format!("Invalid UTF-8 in RESP header: {e}")))?
+            .to_string();
+
+        match *prefix {
+            b'+' => Ok(RespValue::SimpleString(header)),
+            b'-' => Ok(RespValue::Error(header)),
+            b':' => {
+                let n = header.trim().parse::<i64>().map_err(|e| {
+                    CoreError::ParseError(format!("Invalid RESP integer '{header}': {e}"))
+                })?;
+                Ok(RespValue::Integer(n))
+            }
+            b'$' => {
+                let len = header.trim().parse::<isize>().map_err(|e| {
+                    CoreError::ParseError(format!("Invalid RESP bulk length '{header}': {e}"))
+                })?;
+                if len < 0 {
+                    return Ok(RespValue::Null);
+                }
+                let byte_len = len as usize;
+                if byte_len > MAX_RESP_BULK_BYTES {
+                    discard_exact(reader, byte_len.saturating_add(2)).await?;
+                    return Ok(RespValue::SimpleString(format!(
+                        "<BIG VALUE {byte_len} bytes 超过 {}MB 安全预览上限，请使用专用工具或范围切片查看>",
+                        MAX_RESP_BULK_BYTES / (1024 * 1024)
+                    )));
+                }
+                let mut buf = vec![0u8; byte_len + 2];
+                reader.read_exact(&mut buf).await.map_err(|e| {
+                    CoreError::Transport(format!("Redis stream read interrupted: {e}"))
+                })?;
+                buf.truncate(byte_len);
+                Ok(RespValue::BulkBytes(buf))
+            }
+            b'*' => {
+                let count = header.trim().parse::<isize>().map_err(|e| {
+                    CoreError::ParseError(format!("Invalid RESP array length '{header}': {e}"))
+                })?;
+                if count < 0 {
+                    return Ok(RespValue::Null);
+                }
+                let total = count as usize;
+                let keep = total.min(MAX_RESP_ARRAY_ITEMS);
+                let mut items = Vec::with_capacity(keep);
+                for idx in 0..total {
+                    let elem = read_resp_value(reader, depth + 1).await?;
+                    if idx < keep {
+                        items.push(elem);
+                    }
+                }
+                if total > keep {
+                    items.push(RespValue::SimpleString(format!(
+                        "<ARRAY TRUNCATED: 返回 {total} 项，已截断至前 {keep} 项，建议改用 SCAN/HSCAN/LRANGE 分页>"
+                    )));
+                }
+                Ok(RespValue::Array(items))
+            }
+            other => Err(CoreError::ParseError(format!(
+                "Unsupported RESP type byte '{}' in reply '{header}'",
+                char::from(other)
+            ))),
         }
-        Ok(line)
-    }
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -656,6 +693,7 @@ impl DbBackend for RedisBackend {
             conn.select_db(db_idx).await?;
 
             let mut keys: Vec<String> = Vec::new();
+            let mut seen_keys: HashSet<String> = HashSet::new();
             let mut cursor = "0".to_string();
             for _ in 0..SCAN_MAX_ROUNDS {
                 let reply = conn
@@ -675,7 +713,7 @@ impl DbBackend for RedisBackend {
                 if let Some(RespValue::Array(batch_keys)) = parts.get(1) {
                     for k in batch_keys {
                         if let Some(text) = k.as_text() {
-                            if !keys.contains(&text) {
+                            if seen_keys.insert(text.clone()) {
                                 keys.push(text);
                             }
                         }
@@ -869,6 +907,7 @@ impl DbBackend for RedisBackend {
         redis_retry!(self, conn, {
             conn.select_db(db_idx).await?;
             let mut keys: Vec<String> = Vec::new();
+            let mut seen_keys: HashSet<String> = HashSet::new();
             let mut cursor = "0".to_string();
             for _ in 0..SCAN_MAX_ROUNDS {
                 let reply = conn
@@ -890,7 +929,7 @@ impl DbBackend for RedisBackend {
                 if let Some(RespValue::Array(batch_keys)) = parts.get(1) {
                     for k in batch_keys {
                         if let Some(text) = k.as_text() {
-                            if !keys.contains(&text) {
+                            if seen_keys.insert(text.clone()) {
                                 keys.push(text);
                             }
                         }
@@ -1530,4 +1569,46 @@ fn format_resp_table(
     m.insert("command".to_string(), JsonValue::String(label));
     m.insert("result".to_string(), resp.to_json_value());
     (cols, vec![m])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncWriteExt, BufReader};
+
+    #[tokio::test]
+    async fn test_resp_oversized_bulk_streams_without_oom_and_keeps_sync() {
+        let oversized_len = MAX_RESP_BULK_BYTES + 128;
+        let (mut writer, reader) = tokio::io::duplex(64 * 1024);
+        tokio::spawn(async move {
+            let header = format!("${oversized_len}\r\n");
+            writer.write_all(header.as_bytes()).await.unwrap();
+            let block = vec![b'x'; 64 * 1024];
+            let mut left = oversized_len;
+            while left > 0 {
+                let n = left.min(block.len());
+                writer.write_all(&block[..n]).await.unwrap();
+                left -= n;
+            }
+            writer.write_all(b"\r\n+PONG\r\n").await.unwrap();
+        });
+
+        let mut buf = BufReader::new(reader);
+        let first = read_resp_value(&mut buf, 0).await.unwrap();
+        match first {
+            RespValue::SimpleString(msg) => assert!(msg.contains("<BIG VALUE")),
+            other => panic!("expected big-value notice, got {other:?}"),
+        }
+        let second = read_resp_value(&mut buf, 0).await.unwrap();
+        assert_eq!(second, RespValue::SimpleString("PONG".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_resp_line_limit_rejects_unbounded_header() {
+        let mut payload = vec![b'A'; MAX_RESP_LINE_BYTES + 64];
+        payload.extend_from_slice(b"\r\n");
+        let mut cursor = BufReader::new(std::io::Cursor::new(payload));
+        let err = read_resp_value(&mut cursor, 0).await.unwrap_err();
+        assert!(err.to_string().contains("exceeded safety cap"));
+    }
 }

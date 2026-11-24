@@ -127,6 +127,8 @@ const liveTemplates = useLiveTemplates();
 const hostEl = ref<HTMLDivElement | null>(null);
 let view: EditorView | null = null;
 let syncingFromProp = false;
+let lastEmittedDoc = props.modelValue;
+let schemaReconfigureTimer: number | null = null;
 
 const langCompartment = new Compartment();
 const themeCompartment = new Compartment();
@@ -579,7 +581,11 @@ function pacerSqlCompletionSource(context: CompletionContext): CompletionResult 
   const schema = props.schemaMap ?? {};
   const tableNames = Object.keys(schema);
   const sel = context.state.selection.main;
-  const docText = context.state.doc.toString();
+  const winStart = Math.max(0, context.pos - 4096);
+  const winEnd = Math.min(context.state.doc.length, context.pos + 1024);
+  const docWindow = context.state.sliceDoc(winStart, winEnd);
+  const relPos = context.pos - winStart;
+  const relSelFrom = Math.max(0, Math.min(docWindow.length, sel.from - winStart));
 
   // 1. Active placeholder selected from Live Template (`table` / `column`)
   if (!sel.empty) {
@@ -593,7 +599,7 @@ function pacerSqlCompletionSource(context: CompletionContext): CompletionResult 
       };
     }
     if (COLUMN_PLACEHOLDER_RE.test(placeholder)) {
-      const { tables } = extractReferencedTablesInStatement(docText, sel.from);
+      const { tables } = extractReferencedTablesInStatement(docWindow, relSelFrom);
       const colOpts = buildColumnCompletionsForTables(schema, tables, 95);
       if (colOpts.length > 0) {
         return {
@@ -616,7 +622,7 @@ function pacerSqlCompletionSource(context: CompletionContext): CompletionResult 
     if (inner) {
       const targetAliasOrTable = inner[1];
       const typedCol = inner[2] ?? '';
-      const { aliases } = extractReferencedTablesInStatement(docText, context.pos);
+      const { aliases } = extractReferencedTablesInStatement(docWindow, relPos);
       const resolvedTable = aliases[targetAliasOrTable.toLowerCase()] ?? targetAliasOrTable;
       const colOpts = buildColumnCompletionsForTables(schema, [resolvedTable], 90);
       if (colOpts.length > 0) {
@@ -697,7 +703,7 @@ function pacerSqlCompletionSource(context: CompletionContext): CompletionResult 
     }
   }
 
-  const { tables } = extractReferencedTablesInStatement(docText, context.pos);
+  const { tables } = extractReferencedTablesInStatement(docWindow, relPos);
   if (tables.length > 0) {
     options.push(...buildColumnCompletionsForTables(schema, tables, 55));
   }
@@ -820,7 +826,9 @@ onMounted(() => {
       wrapCompartment.of(buildWrapExtension()),
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !syncingFromProp) {
-          emit('update:modelValue', update.state.doc.toString());
+          const nextText = update.state.doc.toString();
+          lastEmittedDoc = nextText;
+          emit('update:modelValue', nextText);
         }
         if (update.docChanged || update.selectionSet) {
           emitCursorTelemetry(update.state);
@@ -829,6 +837,7 @@ onMounted(() => {
     ],
   });
 
+  lastEmittedDoc = props.modelValue;
   view = new EditorView({
     state,
     parent: hostEl.value,
@@ -840,7 +849,9 @@ watch(
   () => props.modelValue,
   (next) => {
     if (!view) return;
+    if (next === lastEmittedDoc) return;
     const current = view.state.doc.toString();
+    lastEmittedDoc = next;
     if (next !== current) {
       syncingFromProp = true;
       view.dispatch({
@@ -855,26 +866,30 @@ watch(
 watch(
   [() => props.fileKind, () => props.engineKey, () => props.schemaMap],
   () => {
-    if (!view) return;
-    view.dispatch({
-      effects: [
-        langCompartment.reconfigure(buildLanguageExtension()),
-        lensCompartment.reconfigure(buildMarkdownLensExtension()),
-      ],
-    });
-    if (view.hasFocus && !view.state.selection.main.empty) {
-      const selected = view.state.sliceDoc(
-        view.state.selection.main.from,
-        view.state.selection.main.to,
-      ).trim();
-      if (TABLE_PLACEHOLDER_RE.test(selected) || COLUMN_PLACEHOLDER_RE.test(selected)) {
-        window.setTimeout(() => {
-          if (view) startCompletion(view);
-        }, 0);
-      }
+    if (schemaReconfigureTimer !== null) {
+      window.clearTimeout(schemaReconfigureTimer);
     }
+    schemaReconfigureTimer = window.setTimeout(() => {
+      schemaReconfigureTimer = null;
+      if (!view) return;
+      view.dispatch({
+        effects: [
+          langCompartment.reconfigure(buildLanguageExtension()),
+          lensCompartment.reconfigure(buildMarkdownLensExtension()),
+        ],
+      });
+      if (view.hasFocus && !view.state.selection.main.empty) {
+        const selected = view.state
+          .sliceDoc(view.state.selection.main.from, view.state.selection.main.to)
+          .trim();
+        if (TABLE_PLACEHOLDER_RE.test(selected) || COLUMN_PLACEHOLDER_RE.test(selected)) {
+          window.setTimeout(() => {
+            if (view) startCompletion(view);
+          }, 0);
+        }
+      }
+    }, 150);
   },
-  { deep: true },
 );
 
 watch(
@@ -982,6 +997,10 @@ function expandTemplate(tpl: SqlLiveTemplate) {
 defineExpose({ jumpToLine, insertText, focus, replaceSelection, expandTemplate });
 
 onBeforeUnmount(() => {
+  if (schemaReconfigureTimer !== null) {
+    window.clearTimeout(schemaReconfigureTimer);
+    schemaReconfigureTimer = null;
+  }
   view?.destroy();
   view = null;
 });

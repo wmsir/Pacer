@@ -49,25 +49,42 @@ pub fn quote_qualified_table(db: &str, table: &str, engine: &DbEngineType) -> St
     }
 }
 
-/// Formats a JSON cell value as a dialect-safe SQL literal.
-pub fn format_sql_value(val: &Value) -> String {
-    match val {
-        Value::Null => "NULL".to_string(),
-        Value::Bool(b) => {
-            if *b {
-                "TRUE".to_string()
-            } else {
-                "FALSE".to_string()
-            }
-        }
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => quote_sql_string(s),
-        Value::Array(_) | Value::Object(_) => quote_sql_string(&val.to_string()),
+/// Builds a dialect-appropriate `SELECT *` query bounded by `limit` rows.
+pub fn build_limited_select_sql(
+    db: &str,
+    table: &str,
+    engine: &DbEngineType,
+    limit: u32,
+) -> String {
+    let qualified = quote_qualified_table(db, table, engine);
+    match engine {
+        DbEngineType::SqlServer => format!("SELECT TOP {limit} * FROM {qualified}"),
+        DbEngineType::Oracle => format!("SELECT * FROM {qualified} FETCH FIRST {limit} ROWS ONLY"),
+        _ => format!("SELECT * FROM {qualified} LIMIT {limit}"),
     }
 }
 
-fn quote_sql_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+/// Formats a JSON cell value as a dialect-safe SQL literal.
+pub fn format_sql_value(val: &Value) -> String {
+    let mut out = String::new();
+    push_sql_value(&mut out, val);
+    out
+}
+
+fn push_sql_value(out: &mut String, val: &Value) {
+    use std::fmt::Write as _;
+    match val {
+        Value::Null => out.push_str("NULL"),
+        Value::Bool(b) => out.push_str(if *b { "TRUE" } else { "FALSE" }),
+        Value::Number(n) => {
+            let _ = write!(out, "{n}");
+        }
+        Value::String(s) => push_quoted_sql_string(out, s),
+        Value::Array(_) | Value::Object(_) => push_quoted_sql_string(out, &val.to_string()),
+    }
+}
+
+fn push_quoted_sql_string(out: &mut String, s: &str) {
     out.push('\'');
     for ch in s.chars() {
         match ch {
@@ -80,7 +97,6 @@ fn quote_sql_string(s: &str) -> String {
         }
     }
     out.push('\'');
-    out
 }
 
 /// Builds the top header comment banner for an exported `.sql` dump file.
@@ -130,6 +146,86 @@ pub fn build_sql_dump_footer(engine: &DbEngineType) -> &'static str {
     }
 }
 
+/// Writes one table's comment banner and `CREATE` DDL directly to `writer`.
+pub fn write_sql_dump_table_header<W: std::io::Write>(
+    writer: &mut W,
+    table: &str,
+    ddl: &str,
+) -> std::io::Result<()> {
+    writeln!(writer, "-- ----------------------------")?;
+    writeln!(writer, "-- Table structure for {table}")?;
+    writeln!(writer, "-- ----------------------------")?;
+
+    let clean_ddl = ddl.trim();
+    if !clean_ddl.is_empty() {
+        writer.write_all(clean_ddl.as_bytes())?;
+        if !clean_ddl.ends_with(';') && !clean_ddl.starts_with("--") {
+            writer.write_all(b";")?;
+        }
+        writer.write_all(b"\n\n")?;
+    }
+    Ok(())
+}
+
+/// Streams a batch of rows as `INSERT INTO` statements directly into `writer` without buffering
+/// the entire table in memory.
+pub fn write_sql_dump_insert_batch<W: std::io::Write>(
+    writer: &mut W,
+    db: &str,
+    table: &str,
+    columns: &[String],
+    rows: &[BTreeMap<String, Value>],
+    opts: SqlDumpFormatOptions<'_>,
+    include_banner: bool,
+) -> std::io::Result<usize> {
+    if !opts.include_data || columns.is_empty() || rows.is_empty() {
+        return Ok(0);
+    }
+
+    if include_banner {
+        writeln!(writer, "-- ----------------------------")?;
+        writeln!(writer, "-- Records of {table}")?;
+        writeln!(writer, "-- ----------------------------")?;
+    }
+
+    let qualified = quote_qualified_table(db, table, opts.engine);
+    let cols_joined: String = columns
+        .iter()
+        .map(|c| quote_sql_ident(c, opts.engine))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let batch_size = opts.batch_size.max(1);
+    let mut written = 0usize;
+    let mut line_buf = String::with_capacity(256);
+
+    for chunk in rows.chunks(batch_size) {
+        writeln!(writer, "INSERT INTO {qualified} ({cols_joined}) VALUES")?;
+        for (idx, row) in chunk.iter().enumerate() {
+            line_buf.clear();
+            line_buf.push_str("  (");
+            for (c_idx, col) in columns.iter().enumerate() {
+                if c_idx > 0 {
+                    line_buf.push_str(", ");
+                }
+                match row.get(col) {
+                    Some(val) => push_sql_value(&mut line_buf, val),
+                    None => line_buf.push_str("NULL"),
+                }
+            }
+            if idx + 1 == chunk.len() {
+                line_buf.push_str(");\n");
+            } else {
+                line_buf.push_str("),\n");
+            }
+            writer.write_all(line_buf.as_bytes())?;
+            written += 1;
+        }
+        writer.write_all(b"\n")?;
+    }
+
+    Ok(written)
+}
+
 /// Formats one table's `CREATE` DDL and optional batched `INSERT INTO` rows.
 pub fn format_sql_dump_table(
     db: &str,
@@ -139,50 +235,16 @@ pub fn format_sql_dump_table(
     rows: &[BTreeMap<String, Value>],
     opts: SqlDumpFormatOptions<'_>,
 ) -> String {
-    let mut out = String::new();
-    out.push_str("-- ----------------------------\n");
-    out.push_str(&format!("-- Table structure for {table}\n"));
-    out.push_str("-- ----------------------------\n");
-
-    let clean_ddl = ddl.trim();
-    if !clean_ddl.is_empty() {
-        out.push_str(clean_ddl);
-        if !clean_ddl.ends_with(';') && !clean_ddl.starts_with("--") {
-            out.push(';');
-        }
-        out.push_str("\n\n");
+    use std::io::Write as _;
+    let mut buf = Vec::with_capacity(512 + rows.len() * 64);
+    let _ = write_sql_dump_table_header(&mut buf, table, ddl);
+    if opts.include_data && !columns.is_empty() && !rows.is_empty() {
+        let _ = writeln!(&mut buf, "-- ----------------------------");
+        let _ = writeln!(&mut buf, "-- Records of {table} ({} rows)", rows.len());
+        let _ = writeln!(&mut buf, "-- ----------------------------");
+        let _ = write_sql_dump_insert_batch(&mut buf, db, table, columns, rows, opts, false);
     }
-
-    if !opts.include_data || columns.is_empty() || rows.is_empty() {
-        return out;
-    }
-
-    out.push_str("-- ----------------------------\n");
-    out.push_str(&format!("-- Records of {table} ({} rows)\n", rows.len()));
-    out.push_str("-- ----------------------------\n");
-
-    let qualified = quote_qualified_table(db, table, opts.engine);
-    let col_list: Vec<String> = columns
-        .iter()
-        .map(|c| quote_sql_ident(c, opts.engine))
-        .collect();
-    let cols_joined = col_list.join(", ");
-    let batch_size = opts.batch_size.max(1);
-
-    for chunk in rows.chunks(batch_size) {
-        out.push_str(&format!("INSERT INTO {qualified} ({cols_joined}) VALUES\n"));
-        for (idx, row) in chunk.iter().enumerate() {
-            let vals: Vec<String> = columns
-                .iter()
-                .map(|c| row.get(c).map(format_sql_value).unwrap_or_else(|| "NULL".to_string()))
-                .collect();
-            let sep = if idx + 1 == chunk.len() { ";" } else { "," };
-            out.push_str(&format!("  ({}){sep}\n", vals.join(", ")));
-        }
-        out.push('\n');
-    }
-
-    out
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 #[cfg(test)]
@@ -288,5 +350,54 @@ mod tests {
         );
         assert!(dump.contains("INSERT INTO \"public\".\"orders\" (\"id\") VALUES"));
         assert!(dump.contains("  (99);"));
+    }
+
+    #[test]
+    fn test_streaming_sql_dump_batches_and_dialects() {
+        assert_eq!(
+            build_limited_select_sql("shop", "orders", &DbEngineType::MySql, 500),
+            "SELECT * FROM `shop`.`orders` LIMIT 500"
+        );
+        assert_eq!(
+            build_limited_select_sql("dbo", "orders", &DbEngineType::SqlServer, 500),
+            "SELECT TOP 500 * FROM [dbo].[orders]"
+        );
+
+        let cols = vec!["id".to_string(), "note".to_string()];
+        let mut r1 = BTreeMap::new();
+        r1.insert("id".to_string(), json!(1));
+        r1.insert("note".to_string(), json!("one"));
+        let mut r2 = BTreeMap::new();
+        r2.insert("id".to_string(), json!(2));
+        r2.insert("note".to_string(), json!("two"));
+
+        let mut sink = Vec::new();
+        write_sql_dump_table_header(&mut sink, "orders", "CREATE TABLE `orders` (`id` INT);").unwrap();
+        let n1 = write_sql_dump_insert_batch(
+            &mut sink,
+            "shop",
+            "orders",
+            &cols,
+            &[r1],
+            SqlDumpFormatOptions::new(&DbEngineType::MySql, true),
+            true,
+        )
+        .unwrap();
+        let n2 = write_sql_dump_insert_batch(
+            &mut sink,
+            "shop",
+            "orders",
+            &cols,
+            &[r2],
+            SqlDumpFormatOptions::new(&DbEngineType::MySql, true),
+            false,
+        )
+        .unwrap();
+        assert_eq!(n1 + n2, 2);
+        let text = String::from_utf8(sink).unwrap();
+        assert_eq!(text.matches("-- Records of orders").count(), 1);
+        assert_eq!(text.matches("INSERT INTO `shop`.`orders`").count(), 2);
+        assert!(text.contains("(1, 'one');"));
+        assert!(text.contains("(2, 'two');"));
     }
 }

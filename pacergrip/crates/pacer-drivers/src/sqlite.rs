@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::str::FromStr;
+use std::sync::Mutex as StdMutex;
 use std::time::Instant;
 
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use serde_json::Value as JsonValue;
 use sqlx::pool::PoolConnection;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
@@ -30,12 +32,31 @@ struct SqliteTxSession {
     pending_statements: u32,
 }
 
+struct SqliteTxRunGuard<'a> {
+    state: &'a StdMutex<SqliteTxSession>,
+    restore_in_tx: bool,
+    disarmed: bool,
+}
+
+impl<'a> Drop for SqliteTxRunGuard<'a> {
+    fn drop(&mut self) {
+        if !self.disarmed && self.restore_in_tx {
+            if let Ok(mut g) = self.state.lock() {
+                g.in_transaction = false;
+                g.pending_statements = 0;
+                g.conn = None;
+            }
+        }
+    }
+}
+
 /// Native SQLite backend powered by `sqlx`.
 pub struct SqliteBackend {
     pool: SqlitePool,
     db_path: String,
     read_only: bool,
-    tx: Mutex<SqliteTxSession>,
+    tx: StdMutex<SqliteTxSession>,
+    tx_op: Mutex<()>,
 }
 
 impl SqliteBackend {
@@ -90,12 +111,13 @@ impl SqliteBackend {
             pool,
             db_path,
             read_only: config.read_only,
-            tx: Mutex::new(SqliteTxSession {
+            tx: StdMutex::new(SqliteTxSession {
                 manual_mode,
                 conn: None,
                 in_transaction: false,
                 pending_statements: 0,
             }),
+            tx_op: Mutex::new(()),
         })
     }
 }
@@ -350,7 +372,7 @@ impl DbBackend for SqliteBackend {
         .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
 
         let mut hits = Vec::new();
-        for row in rows {
+        for row in &rows {
             if hits.len() >= 150 {
                 break;
             }
@@ -371,27 +393,79 @@ impl DbBackend for SqliteBackend {
                     comment: None,
                 });
             }
-            let pragma = format!("PRAGMA table_info(\"{}\")", table_name.replace('"', "\"\""));
-            if let Ok(col_rows) = sqlx::query(&pragma).fetch_all(&self.pool).await {
-                for cr in col_rows {
-                    if hits.len() >= 150 {
-                        break;
-                    }
-                    let col_name: String = cr.try_get("name").unwrap_or_default();
-                    let col_type: String = cr
-                        .try_get::<String, _>("type")
-                        .ok()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or_else(|| "ANY".to_string());
-                    if col_name.to_ascii_lowercase().contains(&needle) {
+        }
+
+        if hits.len() < 150 {
+            let remaining = (150 - hits.len()) as i64;
+            let like_pat = format!("%{}%", needle.replace('%', "\\%").replace('_', "\\_"));
+            let fast_col_query = sqlx::query(
+                "SELECT m.name AS tbl, p.name AS col, p.type AS col_type \
+                 FROM sqlite_master m \
+                 JOIN pragma_table_info(m.name) p \
+                 WHERE m.type IN ('table', 'view') \
+                   AND m.name NOT LIKE 'sqlite_%' \
+                   AND lower(p.name) LIKE ? ESCAPE '\\' \
+                 LIMIT ?",
+            )
+            .bind(&like_pat)
+            .bind(remaining)
+            .fetch_all(&self.pool)
+            .await;
+
+            match fast_col_query {
+                Ok(col_rows) => {
+                    for cr in col_rows {
+                        if hits.len() >= 150 {
+                            break;
+                        }
+                        let table_name: String = cr.try_get("tbl").unwrap_or_default();
+                        let col_name: String = cr.try_get("col").unwrap_or_default();
+                        let col_type: String = cr
+                            .try_get::<String, _>("col_type")
+                            .ok()
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "ANY".to_string());
                         hits.push(ObjectSearchHit {
                             kind: "column".to_string(),
                             database: db_label.clone(),
-                            table_name: table_name.clone(),
+                            table_name,
                             column_name: Some(col_name),
                             data_type: Some(col_type),
                             comment: None,
                         });
+                    }
+                }
+                Err(_) => {
+                    for row in rows {
+                        if hits.len() >= 150 {
+                            break;
+                        }
+                        let table_name: String = row.try_get("name").unwrap_or_default();
+                        let pragma =
+                            format!("PRAGMA table_info(\"{}\")", table_name.replace('"', "\"\""));
+                        if let Ok(col_rows) = sqlx::query(&pragma).fetch_all(&self.pool).await {
+                            for cr in col_rows {
+                                if hits.len() >= 150 {
+                                    break;
+                                }
+                                let col_name: String = cr.try_get("name").unwrap_or_default();
+                                let col_type: String = cr
+                                    .try_get::<String, _>("type")
+                                    .ok()
+                                    .filter(|s| !s.is_empty())
+                                    .unwrap_or_else(|| "ANY".to_string());
+                                if col_name.to_ascii_lowercase().contains(&needle) {
+                                    hits.push(ObjectSearchHit {
+                                        kind: "column".to_string(),
+                                        database: db_label.clone(),
+                                        table_name: table_name.clone(),
+                                        column_name: Some(col_name),
+                                        data_type: Some(col_type),
+                                        comment: None,
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -428,19 +502,18 @@ impl DbBackend for SqliteBackend {
 
         let db_label = req.database.clone().unwrap_or_else(|| "main".to_string());
         let stmt_kind = classify_tx_statement(&req.sql);
-        let mut tx_guard = self.tx.lock().await;
+        let (manual_mode, in_tx_snapshot) = {
+            let g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.manual_mode, g.in_transaction)
+        };
 
-        if !tx_guard.manual_mode
-            && !tx_guard.in_transaction
-            && matches!(stmt_kind, TxStatementKind::Other)
-        {
-            drop(tx_guard);
+        if !manual_mode && !in_tx_snapshot && matches!(stmt_kind, TxStatementKind::Other) {
             let mut conn = self
                 .pool
                 .acquire()
                 .await
                 .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-            return exec_sqlite_on_conn(
+            let (summary, stopped_early) = exec_sqlite_on_conn(
                 &mut conn,
                 &req.sql,
                 &db_label,
@@ -449,28 +522,42 @@ impl DbBackend for SqliteBackend {
                 &tx,
                 started,
             )
-            .await;
+            .await?;
+            if stopped_early {
+                let _ = conn.close().await;
+            }
+            return Ok(summary);
         }
 
-        if tx_guard.conn.is_none() {
-            let conn = self
-                .pool
-                .acquire()
-                .await
-                .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-            tx_guard.conn = Some(conn);
+        let _tx_op_guard = self.tx_op.lock().await;
+        let (mut manual_mode, mut in_tx, mut conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.manual_mode, g.in_transaction, g.conn.take())
+        };
+        if conn_opt.is_none() {
+            conn_opt = Some(
+                self.pool
+                    .acquire()
+                    .await
+                    .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?,
+            );
         }
+        let mut conn = conn_opt.ok_or_else(|| {
+            CoreError::Transport("Missing SQLite session connection".to_string())
+        })?;
 
         match stmt_kind {
             TxStatementKind::Begin => {
-                if !tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("BEGIN")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
-                    tx_guard.in_transaction = true;
-                    tx_guard.pending_statements = 0;
+                if !in_tx {
+                    conn.execute("BEGIN")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    in_tx = true;
+                }
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = in_tx;
+                    g.pending_statements = 0;
+                    g.conn = Some(conn);
                 }
                 send_empty_dml_chunk(&tx).await;
                 return Ok(QuerySummary {
@@ -487,16 +574,16 @@ impl DbBackend for SqliteBackend {
                 });
             }
             TxStatementKind::Commit => {
-                if tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("COMMIT")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
+                if in_tx {
+                    conn.execute("COMMIT")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
                 }
-                tx_guard.in_transaction = false;
-                tx_guard.pending_statements = 0;
-                tx_guard.conn = None;
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = false;
+                    g.pending_statements = 0;
+                    g.conn = None;
+                }
                 send_empty_dml_chunk(&tx).await;
                 return Ok(QuerySummary {
                     success: true,
@@ -512,16 +599,16 @@ impl DbBackend for SqliteBackend {
                 });
             }
             TxStatementKind::Rollback => {
-                if tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("ROLLBACK")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
+                if in_tx {
+                    conn.execute("ROLLBACK")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
                 }
-                tx_guard.in_transaction = false;
-                tx_guard.pending_statements = 0;
-                tx_guard.conn = None;
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = false;
+                    g.pending_statements = 0;
+                    g.conn = None;
+                }
                 send_empty_dml_chunk(&tx).await;
                 return Ok(QuerySummary {
                     success: true,
@@ -537,20 +624,22 @@ impl DbBackend for SqliteBackend {
                 });
             }
             TxStatementKind::Other => {
-                if !tx_guard.in_transaction && tx_guard.manual_mode && !is_read_only {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("BEGIN")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                if !in_tx && manual_mode && !is_read_only {
+                    conn.execute("BEGIN")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    in_tx = true;
+                    if let Ok(mut g) = self.tx.lock() {
+                        g.in_transaction = true;
                     }
-                    tx_guard.in_transaction = true;
                 }
-                let conn = tx_guard
-                    .conn
-                    .as_deref_mut()
-                    .ok_or_else(|| CoreError::Transport("Missing SQLite session connection".to_string()))?;
-                let summary = exec_sqlite_on_conn(
-                    conn,
+                let mut run_guard = SqliteTxRunGuard {
+                    state: &self.tx,
+                    restore_in_tx: in_tx,
+                    disarmed: false,
+                };
+                let (summary, stopped_early) = exec_sqlite_on_conn(
+                    &mut conn,
                     &req.sql,
                     &db_label,
                     req.limit,
@@ -559,10 +648,20 @@ impl DbBackend for SqliteBackend {
                     started,
                 )
                 .await?;
-                if tx_guard.in_transaction && !is_read_only {
-                    tx_guard.pending_statements = tx_guard.pending_statements.saturating_add(1);
-                } else if !tx_guard.in_transaction && !tx_guard.manual_mode {
-                    tx_guard.conn = None;
+                run_guard.disarmed = true;
+                if let Ok(mut g) = self.tx.lock() {
+                    manual_mode = g.manual_mode;
+                    g.in_transaction = in_tx;
+                    if in_tx && !is_read_only {
+                        g.pending_statements = g.pending_statements.saturating_add(1);
+                    }
+                    if in_tx || manual_mode {
+                        g.conn = Some(conn);
+                        return Ok(summary);
+                    }
+                }
+                if stopped_early {
+                    let _ = conn.close().await;
                 }
                 return Ok(summary);
             }
@@ -602,7 +701,7 @@ impl DbBackend for SqliteBackend {
     }
 
     async fn transaction_status(&self) -> CoreResult<TransactionStatus> {
-        let g = self.tx.lock().await;
+        let g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -612,16 +711,26 @@ impl DbBackend for SqliteBackend {
     }
 
     async fn set_manual_transaction(&self, enabled: bool) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if !enabled && g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            g.manual_mode = enabled;
+            if !enabled {
+                (g.in_transaction, g.conn.take())
+            } else {
+                (false, None)
+            }
+        };
+        if let Some(mut conn) = conn_opt {
+            if in_tx {
                 let _ = conn.execute("ROLLBACK").await;
             }
+        }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        if !enabled {
             g.in_transaction = false;
             g.pending_statements = 0;
-            g.conn = None;
         }
-        g.manual_mode = enabled;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -631,17 +740,21 @@ impl DbBackend for SqliteBackend {
     }
 
     async fn commit_transaction(&self) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.in_transaction, g.conn.take())
+        };
+        if in_tx {
+            if let Some(mut conn) = conn_opt {
                 conn.execute("COMMIT")
                     .await
                     .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
             }
-            g.in_transaction = false;
-            g.pending_statements = 0;
-            g.conn = None;
         }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        g.in_transaction = false;
+        g.pending_statements = 0;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -651,17 +764,21 @@ impl DbBackend for SqliteBackend {
     }
 
     async fn rollback_transaction(&self) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.in_transaction, g.conn.take())
+        };
+        if in_tx {
+            if let Some(mut conn) = conn_opt {
                 conn.execute("ROLLBACK")
                     .await
                     .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
             }
-            g.in_transaction = false;
-            g.pending_statements = 0;
-            g.conn = None;
         }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        g.in_transaction = false;
+        g.pending_statements = 0;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -695,68 +812,120 @@ async fn exec_sqlite_on_conn(
     is_read_only: bool,
     tx: &mpsc::Sender<QueryChunk>,
     started: Instant,
-) -> CoreResult<QuerySummary> {
+) -> CoreResult<(QuerySummary, bool)> {
     if !is_read_only {
         let result = conn
             .execute(sql)
             .await
             .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
         send_empty_dml_chunk(tx).await;
-        return Ok(QuerySummary {
+        return Ok((
+            QuerySummary {
+                success: true,
+                database: db_label.to_string(),
+                total_rows: 0,
+                affected_rows: Some(result.rows_affected()),
+                is_dml_or_ddl: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+                route_node: Some("DIRECT".to_string()),
+                route_description: Some("SQLite native direct execution".to_string()),
+                masked_columns: BTreeMap::new(),
+                error_message: None,
+            },
+            false,
+        ));
+    }
+
+    let max_rows = limit.map(|l| l as usize).unwrap_or(usize::MAX);
+    let mut columns: Option<Vec<String>> = None;
+    let mut chunk_size = STREAM_CHUNK_SIZE;
+    let mut batch: Vec<BTreeMap<String, JsonValue>> = Vec::new();
+    let mut batch_index: usize = 0;
+    let mut total_rows: usize = 0;
+    let mut stopped_early = false;
+    let mut receiver_closed = false;
+
+    {
+        let mut stream = conn.fetch(sql);
+        while let Some(row) = stream
+            .try_next()
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?
+        {
+            if total_rows >= max_rows {
+                stopped_early = true;
+                break;
+            }
+            let cols = columns.get_or_insert_with(|| {
+                let c: Vec<String> = row.columns().iter().map(|col| col.name().to_string()).collect();
+                chunk_size = adaptive_chunk_size(c.len());
+                c
+            });
+            batch.push(sqlite_row_to_map(&row, cols));
+            total_rows += 1;
+
+            if batch.len() >= chunk_size && total_rows < max_rows {
+                let send_rows = std::mem::take(&mut batch);
+                let chunk = QueryChunk {
+                    columns: if batch_index == 0 {
+                        cols.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    rows: send_rows,
+                    batch_index,
+                    is_last: false,
+                    masked_columns: BTreeMap::new(),
+                };
+                batch_index += 1;
+                if tx.send(chunk).await.is_err() {
+                    receiver_closed = true;
+                    stopped_early = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    let final_cols = match columns {
+        Some(c) => c,
+        None => match conn.describe(sql).await {
+            Ok(desc) => desc.columns().iter().map(|c| c.name().to_string()).collect(),
+            Err(_) => Vec::new(),
+        },
+    };
+
+    if !receiver_closed {
+        let _ = tx
+            .send(QueryChunk {
+                columns: if batch_index == 0 {
+                    final_cols
+                } else {
+                    Vec::new()
+                },
+                rows: batch,
+                batch_index,
+                is_last: true,
+                masked_columns: BTreeMap::new(),
+            })
+            .await;
+    }
+
+    Ok((
+        QuerySummary {
             success: true,
             database: db_label.to_string(),
-            total_rows: 0,
-            affected_rows: Some(result.rows_affected()),
-            is_dml_or_ddl: true,
+            total_rows,
+            affected_rows: None,
+            is_dml_or_ddl: false,
             duration_ms: started.elapsed().as_millis() as u64,
             route_node: Some("DIRECT".to_string()),
             route_description: Some("SQLite native direct execution".to_string()),
             masked_columns: BTreeMap::new(),
             error_message: None,
-        });
-    }
-
-    let rows = conn
-        .fetch_all(sql)
-        .await
-        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-
-    let max_rows = limit.map(|l| l as usize).unwrap_or(usize::MAX);
-    let limited_rows: Vec<&SqliteRow> = rows.iter().take(max_rows).collect();
-
-    let columns: Vec<String> = if let Some(first) = rows.first() {
-        first.columns().iter().map(|c| c.name().to_string()).collect()
-    } else {
-        match conn.describe(sql).await {
-            Ok(desc) => desc
-                .columns()
-                .iter()
-                .map(|c| c.name().to_string())
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    };
-
-    let mut converted = Vec::with_capacity(limited_rows.len());
-    for row in &limited_rows {
-        converted.push(sqlite_row_to_map(row, &columns));
-    }
-
-    let total_rows = converted.len();
-    stream_chunks(&columns, converted, tx).await;
-
-    Ok(QuerySummary {
-        success: true,
-        database: db_label.to_string(),
-        total_rows,
-        affected_rows: None,
-        is_dml_or_ddl: false,
-        duration_ms: started.elapsed().as_millis() as u64,
-        route_node: Some("DIRECT".to_string()),
-        route_description: Some("SQLite native direct execution".to_string()),
-        masked_columns: BTreeMap::new(),
-        error_message: None,
-    })
+        },
+        stopped_early,
+    ))
 }
 
 fn sqlite_row_to_map(row: &SqliteRow, columns: &[String]) -> BTreeMap<String, JsonValue> {
@@ -822,7 +991,7 @@ pub(crate) fn adaptive_chunk_size(col_count: usize) -> usize {
 
 pub(crate) async fn stream_chunks(
     columns: &[String],
-    rows: Vec<BTreeMap<String, JsonValue>>,
+    mut rows: Vec<BTreeMap<String, JsonValue>>,
     tx: &mpsc::Sender<QueryChunk>,
 ) {
     if rows.is_empty() {
@@ -839,16 +1008,23 @@ pub(crate) async fn stream_chunks(
     }
 
     let chunk_size = adaptive_chunk_size(columns.len());
-    let total_batches = rows.len().div_ceil(chunk_size);
-    for (batch_index, slice) in rows.chunks(chunk_size).enumerate() {
-        let is_last = batch_index + 1 == total_batches;
+    let mut batch_index: usize = 0;
+    while !rows.is_empty() {
+        let take = rows.len().min(chunk_size);
+        let slice: Vec<_> = rows.drain(..take).collect();
+        let is_last = rows.is_empty();
         let chunk = QueryChunk {
-            columns: columns.to_vec(),
-            rows: slice.to_vec(),
+            columns: if batch_index == 0 {
+                columns.to_vec()
+            } else {
+                Vec::new()
+            },
+            rows: slice,
             batch_index,
             is_last,
             masked_columns: BTreeMap::new(),
         };
+        batch_index += 1;
         if tx.send(chunk).await.is_err() {
             break;
         }

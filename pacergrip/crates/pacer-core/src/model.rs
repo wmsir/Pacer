@@ -519,12 +519,14 @@ pub struct ColumnMeta {
 }
 
 /// Request payload for backend query execution.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueryReq {
     pub database: Option<String>,
     pub sql: String,
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub query_id: Option<String>,
 }
 
 /// Streamed batch of query rows sent via `mpsc` / Tauri `Channel`.

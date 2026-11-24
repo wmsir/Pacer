@@ -234,7 +234,7 @@ pub async fn open_ssh_tunnel(
         ))
     })?;
 
-    let handle = SshTunnelHandle {
+    let mut handle = SshTunnelHandle {
         child: Mutex::new(Some(child)),
         local_port,
         askpass_path,
@@ -243,6 +243,26 @@ pub async fn open_ssh_tunnel(
     let deadline = Instant::now() + Duration::from_secs(9);
     loop {
         if TcpStream::connect(("127.0.0.1", local_port)).await.is_ok() {
+            if let Some(p) = handle.askpass_path.take() {
+                let _ = std::fs::remove_file(p);
+            }
+            if let Ok(mut guard) = handle.child.lock() {
+                if let Some(ref mut proc) = *guard {
+                    if let Some(mut stderr) = proc.stderr.take() {
+                        let _ = std::thread::Builder::new()
+                            .name("pacer-ssh-stderr".to_string())
+                            .spawn(move || {
+                                use std::io::Read;
+                                let mut buf = [0u8; 4096];
+                                while let Ok(n) = stderr.read(&mut buf) {
+                                    if n == 0 {
+                                        break;
+                                    }
+                                }
+                            });
+                    }
+                }
+            }
             return Ok(handle);
         }
 

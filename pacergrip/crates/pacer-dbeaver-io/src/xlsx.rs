@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::io::{Cursor, Write};
+use std::fs::File;
+use std::io::{BufWriter, Cursor, Seek, Write};
 use std::path::Path;
 
 use serde_json::Value;
@@ -90,48 +91,13 @@ pub fn build_xlsx_bytes(
     columns: &[String],
     rows: &[BTreeMap<String, Value>],
 ) -> CoreResult<Vec<u8>> {
-    let safe_sheet = sanitize_sheet_name(sheet_name);
-    let workbook_xml = format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-  <sheets>
-    <sheet name="{}" sheetId="1" r:id="rId1"/>
-  </sheets>
-</workbook>"#,
-        xml_escape_attr(&safe_sheet)
-    );
-
-    let sheet_xml = build_worksheet_xml(columns, rows);
-
     let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut zw = ZipWriter::new(&mut cursor);
-        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
-
-        let parts: [(&str, &[u8]); 6] = [
-            ("[Content_Types].xml", CONTENT_TYPES_XML.as_bytes()),
-            ("_rels/.rels", ROOT_RELS_XML.as_bytes()),
-            ("xl/workbook.xml", workbook_xml.as_bytes()),
-            ("xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML.as_bytes()),
-            ("xl/styles.xml", STYLES_XML.as_bytes()),
-            ("xl/worksheets/sheet1.xml", sheet_xml.as_bytes()),
-        ];
-
-        for (name, data) in parts {
-            zw.start_file(name, opts)
-                .map_err(|e| CoreError::ExecutionFailed(format!("创建 Excel ZIP 条目 {name} 失败: {e}")))?;
-            zw.write_all(data)
-                .map_err(|e| CoreError::ExecutionFailed(format!("写入 Excel 条目 {name} 失败: {e}")))?;
-        }
-
-        zw.finish()
-            .map_err(|e| CoreError::ExecutionFailed(format!("完成 Excel 工作簿打包失败: {e}")))?;
-    }
-
+    write_xlsx_to_writer(&mut cursor, sheet_name, columns, rows)?;
     Ok(cursor.into_inner())
 }
 
-/// Writes tabular data to an `.xlsx` file on disk and returns the exported data row count.
+/// Streams tabular data directly into an `.xlsx` file on disk via a buffered ZIP writer
+/// without materializing the full worksheet XML in memory, returning exported row count.
 pub fn write_xlsx_file(
     path: &Path,
     sheet_name: &str,
@@ -141,9 +107,57 @@ pub fn write_xlsx_file(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let bytes = build_xlsx_bytes(sheet_name, columns, rows)?;
-    std::fs::write(path, bytes)?;
+    let file = File::create(path)?;
+    let mut writer = BufWriter::with_capacity(64 * 1024, file);
+    write_xlsx_to_writer(&mut writer, sheet_name, columns, rows)?;
+    writer.flush()?;
     Ok(rows.len())
+}
+
+fn write_xlsx_to_writer<W: Write + Seek>(
+    dest: W,
+    sheet_name: &str,
+    columns: &[String],
+    rows: &[BTreeMap<String, Value>],
+) -> CoreResult<()> {
+    let safe_sheet = sanitize_sheet_name(sheet_name);
+    let mut escaped_sheet_attr = String::with_capacity(safe_sheet.len());
+    push_xml_attr_escaped(&mut escaped_sheet_attr, &safe_sheet);
+    let workbook_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="{escaped_sheet_attr}" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+    );
+
+    let mut zw = ZipWriter::new(dest);
+    let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    let static_parts: [(&str, &[u8]); 5] = [
+        ("[Content_Types].xml", CONTENT_TYPES_XML.as_bytes()),
+        ("_rels/.rels", ROOT_RELS_XML.as_bytes()),
+        ("xl/workbook.xml", workbook_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML.as_bytes()),
+        ("xl/styles.xml", STYLES_XML.as_bytes()),
+    ];
+
+    for (name, data) in static_parts {
+        zw.start_file(name, opts)
+            .map_err(|e| CoreError::ExecutionFailed(format!("创建 Excel ZIP 条目 {name} 失败: {e}")))?;
+        zw.write_all(data)
+            .map_err(|e| CoreError::ExecutionFailed(format!("写入 Excel 条目 {name} 失败: {e}")))?;
+    }
+
+    zw.start_file("xl/worksheets/sheet1.xml", opts)
+        .map_err(|e| CoreError::ExecutionFailed(format!("创建 Excel 工作表条目失败: {e}")))?;
+    write_worksheet_xml_to(&mut zw, columns, rows)
+        .map_err(|e| CoreError::ExecutionFailed(format!("流式写入 Excel 工作表失败: {e}")))?;
+
+    zw.finish()
+        .map_err(|e| CoreError::ExecutionFailed(format!("完成 Excel 工作簿打包失败: {e}")))?;
+    Ok(())
 }
 
 fn sanitize_sheet_name(raw: &str) -> String {
@@ -180,7 +194,11 @@ pub fn col_index_to_excel_letters(mut index: usize) -> String {
     rev.into_iter().rev().collect()
 }
 
-fn build_worksheet_xml(columns: &[String], rows: &[BTreeMap<String, Value>]) -> String {
+fn write_worksheet_xml_to<W: Write>(
+    writer: &mut W,
+    columns: &[String],
+    rows: &[BTreeMap<String, Value>],
+) -> std::io::Result<()> {
     let col_letters: Vec<String> = (0..columns.len())
         .map(col_index_to_excel_letters)
         .collect();
@@ -194,8 +212,7 @@ fn build_worksheet_xml(columns: &[String], rows: &[BTreeMap<String, Value>]) -> 
     for row in rows.iter().take(500) {
         for (c_idx, col) in columns.iter().enumerate() {
             if let Some(val) = row.get(col) {
-                let s = value_preview_str(val);
-                let w = (display_width(&s) + 3) as f64;
+                let w = (value_preview_width(val) + 3) as f64;
                 if w > widths[c_idx] {
                     widths[c_idx] = w;
                 }
@@ -203,9 +220,8 @@ fn build_worksheet_xml(columns: &[String], rows: &[BTreeMap<String, Value>]) -> 
         }
     }
 
-    let mut out = String::with_capacity(2048 + rows.len() * columns.len().max(1) * 40);
-    out.push_str(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    writer.write_all(
+        br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetViews>
     <sheetView workbookViewId="0">
@@ -213,81 +229,87 @@ fn build_worksheet_xml(columns: &[String], rows: &[BTreeMap<String, Value>]) -> 
     </sheetView>
   </sheetViews>
 "#,
-    );
+    )?;
 
+    let mut buf = String::with_capacity(columns.len().max(1) * 96 + 128);
     if !columns.is_empty() {
-        out.push_str("  <cols>\n");
+        buf.push_str("  <cols>\n");
         for (idx, w) in widths.iter().enumerate() {
             let clamped = w.clamp(10.0, 48.0);
             let one_based = idx + 1;
             use std::fmt::Write as _;
             let _ = writeln!(
-                out,
+                buf,
                 r#"    <col min="{one_based}" max="{one_based}" width="{clamped:.1}" customWidth="1"/>"#
             );
         }
-        out.push_str("  </cols>\n");
+        buf.push_str("  </cols>\n");
+        writer.write_all(buf.as_bytes())?;
     }
 
-    out.push_str("  <sheetData>\n");
+    writer.write_all(b"  <sheetData>\n")?;
 
     if !columns.is_empty() {
-        out.push_str(r#"    <row r="1" ht="20" customHeight="1">"#);
+        buf.clear();
+        buf.push_str(r#"    <row r="1" ht="20" customHeight="1">"#);
         for (c_idx, col_name) in columns.iter().enumerate() {
-            let cell_ref = format!("{}1", col_letters[c_idx]);
-            append_inline_str_cell(&mut out, &cell_ref, "1", col_name);
+            append_inline_str_cell(&mut buf, &col_letters[c_idx], 1, "1", col_name);
         }
-        out.push_str("</row>\n");
+        buf.push_str("</row>\n");
+        writer.write_all(buf.as_bytes())?;
 
         for (r_idx, row) in rows.iter().enumerate() {
             let excel_row = r_idx + 2;
+            buf.clear();
             use std::fmt::Write as _;
-            let _ = write!(out, r#"    <row r="{excel_row}">"#);
+            let _ = write!(buf, r#"    <row r="{excel_row}">"#);
             for (c_idx, col_name) in columns.iter().enumerate() {
                 if let Some(val) = row.get(col_name) {
                     if !val.is_null() {
-                        let cell_ref = format!("{}{}", col_letters[c_idx], excel_row);
-                        encode_xlsx_cell(&mut out, &cell_ref, val);
+                        encode_xlsx_cell(&mut buf, &col_letters[c_idx], excel_row, val);
                     }
                 }
             }
-            out.push_str("</row>\n");
+            buf.push_str("</row>\n");
+            writer.write_all(buf.as_bytes())?;
         }
     }
 
-    out.push_str("  </sheetData>\n</worksheet>");
-    out
+    writer.write_all(b"  </sheetData>\n</worksheet>")?;
+    Ok(())
 }
 
-fn encode_xlsx_cell(out: &mut String, cell_ref: &str, val: &Value) {
+fn encode_xlsx_cell(out: &mut String, col_letter: &str, excel_row: usize, val: &Value) {
+    use std::fmt::Write as _;
     match val {
         Value::Null => {}
         Value::Bool(b) => {
-            use std::fmt::Write as _;
             let _ = write!(
                 out,
-                r#"<c r="{cell_ref}" t="b"><v>{}</v></c>"#,
+                r#"<c r="{col_letter}{excel_row}" t="b"><v>{}</v></c>"#,
                 if *b { '1' } else { '0' }
             );
         }
         Value::Number(n) => {
             let text = n.to_string();
             if is_long_or_scientific_number(&text) {
-                append_inline_str_cell(out, cell_ref, "2", &text);
+                append_inline_str_cell(out, col_letter, excel_row, "2", &text);
             } else {
-                use std::fmt::Write as _;
-                let _ = write!(out, r#"<c r="{cell_ref}" t="n"><v>{text}</v></c>"#);
+                let _ = write!(
+                    out,
+                    r#"<c r="{col_letter}{excel_row}" t="n"><v>{text}</v></c>"#
+                );
             }
         }
         Value::String(s) => {
             // All string values (including 19-digit BIGINT strings, phone numbers,
             // zero-padded IDs) are explicitly styled with Text format (s="2") so Excel
             // never reformats them into scientific notation or strips leading zeroes.
-            append_inline_str_cell(out, cell_ref, "2", s);
+            append_inline_str_cell(out, col_letter, excel_row, "2", s);
         }
         Value::Array(_) | Value::Object(_) => {
             let json_str = serde_json::to_string(val).unwrap_or_default();
-            append_inline_str_cell(out, cell_ref, "2", &json_str);
+            append_inline_str_cell(out, col_letter, excel_row, "2", &json_str);
         }
     }
 }
@@ -304,64 +326,71 @@ fn is_long_or_scientific_number(num_str: &str) -> bool {
     digit_count >= 11
 }
 
-fn append_inline_str_cell(out: &mut String, cell_ref: &str, style_idx: &str, raw_text: &str) {
-    let cleaned = sanitize_xml10_text(raw_text);
-    let preserve = cleaned.starts_with(char::is_whitespace) || cleaned.ends_with(char::is_whitespace);
-    let space_attr = if preserve { r#" xml:space="preserve""# } else { "" };
-    let escaped = xml_escape_text(&cleaned);
+fn valid_xml10_char(c: char) -> char {
+    let code = c as u32;
+    let valid = code == 0x9
+        || code == 0xA
+        || code == 0xD
+        || (0x20..=0xD7FF).contains(&code)
+        || (0xE000..=0xFFFD).contains(&code)
+        || (0x10000..=0x10FFFF).contains(&code);
+    if valid {
+        c
+    } else {
+        ' '
+    }
+}
+
+fn append_inline_str_cell(
+    out: &mut String,
+    col_letter: &str,
+    excel_row: usize,
+    style_idx: &str,
+    raw_text: &str,
+) {
+    let mut first_char: Option<char> = None;
+    let mut last_char: Option<char> = None;
+    for raw_c in raw_text.chars() {
+        let vc = valid_xml10_char(raw_c);
+        if first_char.is_none() {
+            first_char = Some(vc);
+        }
+        last_char = Some(vc);
+    }
+    let preserve = first_char.is_some_and(char::is_whitespace)
+        || last_char.is_some_and(char::is_whitespace);
+    let space_attr = if preserve {
+        r#" xml:space="preserve""#
+    } else {
+        ""
+    };
     use std::fmt::Write as _;
     let _ = write!(
         out,
-        r#"<c r="{cell_ref}" s="{style_idx}" t="inlineStr"><is><t{space_attr}>{escaped}</t></is></c>"#
+        r#"<c r="{col_letter}{excel_row}" s="{style_idx}" t="inlineStr"><is><t{space_attr}>"#
     );
-}
-
-fn sanitize_xml10_text(raw: &str) -> String {
-    raw.chars()
-        .map(|c| {
-            let code = c as u32;
-            let valid = code == 0x9
-                || code == 0xA
-                || code == 0xD
-                || (0x20..=0xD7FF).contains(&code)
-                || (0xE000..=0xFFFD).contains(&code)
-                || (0x10000..=0x10FFFF).contains(&code);
-            if valid {
-                c
-            } else {
-                ' '
-            }
-        })
-        .collect()
-}
-
-fn xml_escape_text(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        match ch {
+    for raw_c in raw_text.chars() {
+        match valid_xml10_char(raw_c) {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
-            _ => out.push(ch),
+            ch => out.push(ch),
         }
     }
-    out
+    out.push_str("</t></is></c>");
 }
 
-fn xml_escape_attr(text: &str) -> String {
-    let cleaned = sanitize_xml10_text(text);
-    let mut out = String::with_capacity(cleaned.len());
-    for ch in cleaned.chars() {
-        match ch {
+fn push_xml_attr_escaped(out: &mut String, text: &str) {
+    for raw_c in text.chars() {
+        match valid_xml10_char(raw_c) {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
             '"' => out.push_str("&quot;"),
             '\'' => out.push_str("&apos;"),
-            _ => out.push(ch),
+            ch => out.push(ch),
         }
     }
-    out
 }
 
 fn display_width(text: &str) -> usize {
@@ -373,13 +402,17 @@ fn display_width(text: &str) -> usize {
     width
 }
 
-fn value_preview_str(val: &Value) -> String {
+fn value_preview_width(val: &Value) -> usize {
     match val {
-        Value::Null => String::new(),
-        Value::Bool(b) => b.to_string(),
-        Value::Number(n) => n.to_string(),
-        Value::String(s) => s.clone(),
-        Value::Array(_) | Value::Object(_) => serde_json::to_string(val).unwrap_or_default(),
+        Value::Null => 0,
+        Value::Bool(true) => 4,
+        Value::Bool(false) => 5,
+        Value::Number(n) => n.to_string().len().min(64),
+        Value::String(s) => display_width(s),
+        Value::Array(_) | Value::Object(_) => {
+            let s = serde_json::to_string(val).unwrap_or_default();
+            display_width(&s)
+        }
     }
 }
 
@@ -477,5 +510,42 @@ mod tests {
             .read_to_string(&mut wb_xml)
             .unwrap();
         assert!(wb_xml.contains(r#"name="UsersDataExport1""#));
+    }
+
+    #[test]
+    fn test_write_xlsx_file_streams_to_disk_and_preserves_long_integers() {
+        let tmp = std::env::temp_dir().join(format!(
+            "pacergrip_xlsx_stream_{}.xlsx",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+
+        let cols = vec!["id".to_string(), "snowflake".to_string()];
+        let mut rows = Vec::with_capacity(1200);
+        for i in 1..=1200 {
+            let mut r = BTreeMap::new();
+            r.insert("id".to_string(), json!(i));
+            r.insert(
+                "snowflake".to_string(),
+                json!(1_892_345_678_901_230_000i64 + i as i64),
+            );
+            rows.push(r);
+        }
+
+        let written = write_xlsx_file(&tmp, "Orders", &cols, &rows).unwrap();
+        assert_eq!(written, 1200);
+
+        let file = File::open(&tmp).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        let mut sheet_xml = String::new();
+        archive
+            .by_name("xl/worksheets/sheet1.xml")
+            .unwrap()
+            .read_to_string(&mut sheet_xml)
+            .unwrap();
+        assert!(sheet_xml.contains(
+            r#"<c r="B1201" s="2" t="inlineStr"><is><t>1892345678901231200</t></is></c>"#
+        ));
+        let _ = std::fs::remove_file(&tmp);
     }
 }

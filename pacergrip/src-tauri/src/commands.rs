@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex as StdMutex, RwLock};
+use std::time::Instant;
 
 use aes::Aes128;
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
@@ -21,10 +22,11 @@ use pacer_core::{
     WorkspaceProject,
 };
 use pacer_dbeaver_io::{
-    build_jdbc_url, build_sql_dump_footer, build_sql_dump_header, discover_local_dbeaver_files,
-    export_to_dbeaver_dbp_bytes, export_to_dbeaver_folder, export_to_dbeaver_json_with_folders,
-    format_sql_dump_table, import_dbeaver_from_path, parse_connection_url, parse_dbeaver_text,
-    quote_qualified_table, write_xlsx_file, ImportedDbeaverConnection, SqlDumpFormatOptions,
+    build_jdbc_url, build_limited_select_sql, build_sql_dump_footer, build_sql_dump_header,
+    discover_local_dbeaver_files, export_to_dbeaver_dbp_bytes, export_to_dbeaver_folder,
+    export_to_dbeaver_json_with_folders, import_dbeaver_from_path, parse_connection_url,
+    parse_dbeaver_text, write_sql_dump_insert_batch, write_sql_dump_table_header, write_xlsx_file,
+    ImportedDbeaverConnection, SqlDumpFormatOptions,
 };
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
 use pacer_sql_ast::{
@@ -48,6 +50,41 @@ const LOCAL_VAULT_KEY: [u8; 16] = [
 type Aes128CbcEnc = cbc::Encryptor<Aes128>;
 type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
+#[derive(Clone)]
+pub struct CachedBackend {
+    pub backend: Arc<dyn DbBackend>,
+    pub last_used: Arc<StdMutex<Instant>>,
+    pub idle_evict_secs: u64,
+}
+
+impl CachedBackend {
+    fn new(backend: Arc<dyn DbBackend>, idle_evict_secs: u64) -> Self {
+        Self {
+            backend,
+            last_used: Arc::new(StdMutex::new(Instant::now())),
+            idle_evict_secs,
+        }
+    }
+
+    pub fn touch(&self) {
+        if let Ok(mut guard) = self.last_used.lock() {
+            *guard = Instant::now();
+        }
+    }
+
+    fn idle_secs(&self) -> u64 {
+        self.last_used
+            .lock()
+            .map(|g| g.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+}
+
+pub struct RunningQueryHandle {
+    pub cancel_tx: oneshot::Sender<()>,
+    pub backend: Arc<dyn DbBackend>,
+}
+
 pub struct AppState {
     pub projects: RwLock<Vec<WorkspaceProject>>,
     pub connections: RwLock<Vec<ConnectionProfile>>,
@@ -55,8 +92,8 @@ pub struct AppState {
     pub passwords: RwLock<HashMap<String, String>>,
     /// Subset of passwords persisted to disk (`Save: Forever`).
     pub persisted_passwords: RwLock<HashMap<String, String>>,
-    pub active_backends: AsyncRwLock<HashMap<String, Arc<dyn DbBackend>>>,
-    pub running_queries: AsyncRwLock<HashMap<String, oneshot::Sender<()>>>,
+    pub active_backends: AsyncRwLock<HashMap<String, CachedBackend>>,
+    pub running_queries: AsyncRwLock<HashMap<String, RunningQueryHandle>>,
     pub history: RwLock<Vec<QueryHistoryEntry>>,
     pub extensions: ExtensionRegistry,
     pub storage_dir: PathBuf,
@@ -303,7 +340,8 @@ impl AppState {
             }
             self.active_backends.write().await.remove(profile_id);
         } else if let Some(cached) = self.active_backends.read().await.get(profile_id).cloned() {
-            return Ok((profile, cached));
+            cached.touch();
+            return Ok((profile, Arc::clone(&cached.backend)));
         }
 
         let stored_pwd = self
@@ -340,15 +378,51 @@ impl AppState {
             stored_pwd.as_deref()
         };
 
+        let idle_evict_secs = direct
+            .options
+            .as_ref()
+            .filter(|o| o.auto_disconnect_enabled)
+            .map(|o| u64::from(o.auto_disconnect_sec.unwrap_or(300).clamp(30, 86_400)))
+            .unwrap_or(1800);
+
         let backend = connect_direct(&direct, effective_pwd)
             .await
             .map_err(map_err)?;
-        self.active_backends
-            .write()
-            .await
-            .insert(profile_id.to_string(), Arc::clone(&backend));
+        self.active_backends.write().await.insert(
+            profile_id.to_string(),
+            CachedBackend::new(Arc::clone(&backend), idle_evict_secs),
+        );
 
         Ok((profile, backend))
+    }
+
+    pub async fn evict_idle_backends(&self) -> Vec<String> {
+        let mut evicted_ids = Vec::new();
+        let mut evicted_backends = Vec::new();
+        {
+            let mut guard = self.active_backends.write().await;
+            let stale_keys: Vec<String> = guard
+                .iter()
+                .filter_map(|(id, entry)| {
+                    if Arc::strong_count(&entry.backend) > 1 {
+                        entry.touch();
+                        None
+                    } else if entry.idle_secs() >= entry.idle_evict_secs {
+                        Some(id.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for key in stale_keys {
+                if let Some(removed) = guard.remove(&key) {
+                    evicted_ids.push(key);
+                    evicted_backends.push(removed);
+                }
+            }
+        }
+        drop(evicted_backends);
+        evicted_ids
     }
 
     fn push_history(&self, entry: QueryHistoryEntry) {
@@ -976,6 +1050,15 @@ pub async fn test_connection_cmd(
 }
 
 #[tauri::command]
+pub async fn disconnect_connection_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<bool, String> {
+    let removed = state.active_backends.write().await.remove(&profile_id);
+    Ok(removed.is_some())
+}
+
+#[tauri::command]
 pub async fn create_demo_sqlite_connection(
     state: State<'_, AppState>,
     project_id: Option<String>,
@@ -1268,13 +1351,17 @@ pub fn export_connections_xlsx_cmd(
 }
 
 #[tauri::command]
-pub fn export_rows_xlsx_cmd(
+pub async fn export_rows_xlsx_cmd(
     path: String,
     sheet_name: String,
     columns: Vec<String>,
     rows: Vec<BTreeMap<String, serde_json::Value>>,
 ) -> Result<usize, String> {
-    write_xlsx_file(Path::new(&path), &sheet_name, &columns, &rows).map_err(map_err)
+    tokio::task::spawn_blocking(move || {
+        write_xlsx_file(Path::new(&path), &sheet_name, &columns, &rows).map_err(map_err)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1364,7 +1451,13 @@ pub async fn execute_sql_cmd(
 
     let cancel_rx_opt = if let Some(ref qid) = query_id {
         let (ctx, crx) = oneshot::channel::<()>();
-        state.running_queries.write().await.insert(qid.clone(), ctx);
+        state.running_queries.write().await.insert(
+            qid.clone(),
+            RunningQueryHandle {
+                cancel_tx: ctx,
+                backend: Arc::clone(&backend),
+            },
+        );
         Some(crx)
     } else {
         None
@@ -1374,6 +1467,7 @@ pub async fn execute_sql_cmd(
         database: db_name.clone(),
         sql: sql.clone(),
         limit,
+        query_id: query_id.clone(),
     };
     let exec_result = match cancel_rx_opt {
         Some(cancel_rx) => {
@@ -1473,8 +1567,10 @@ pub async fn explain_sql_cmd(
 }
 
 #[tauri::command]
-pub fn analyze_sql_cmd(sql: String, db_type: DbEngineType) -> ScriptAnalysis {
-    analyze_sql(&sql, &db_type)
+pub async fn analyze_sql_cmd(sql: String, db_type: DbEngineType) -> Result<ScriptAnalysis, String> {
+    tokio::task::spawn_blocking(move || analyze_sql(&sql, &db_type))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1510,9 +1606,15 @@ pub async fn cancel_query_cmd(
     state: State<'_, AppState>,
     query_id: String,
 ) -> Result<bool, String> {
-    let sender = state.running_queries.write().await.remove(&query_id);
-    if let Some(tx) = sender {
-        Ok(tx.send(()).is_ok())
+    let entry = state.running_queries.write().await.remove(&query_id);
+    if let Some(handle) = entry {
+        let killed_remote = handle
+            .backend
+            .cancel_running_query(&query_id)
+            .await
+            .unwrap_or(false);
+        let signaled_local = handle.cancel_tx.send(()).is_ok();
+        Ok(killed_remote || signaled_local)
     } else {
         Ok(false)
     }
@@ -1580,42 +1682,68 @@ pub async fn rollback_transaction_cmd(
 }
 
 #[tauri::command]
-pub fn format_sql_cmd(sql: String) -> String {
-    format_sql(&sql)
+pub async fn format_sql_cmd(sql: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || format_sql(&sql))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn extract_statement_at_cursor_cmd(sql: String, cursor_offset: usize) -> Option<String> {
-    extract_statement_at_cursor(&sql, cursor_offset)
+pub async fn extract_statement_at_cursor_cmd(
+    sql: String,
+    cursor_offset: usize,
+) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || extract_statement_at_cursor(&sql, cursor_offset))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn extract_markdown_sql_blocks_cmd(content: String) -> Vec<MarkdownSqlBlock> {
-    extract_markdown_sql_blocks(&content)
+pub async fn extract_markdown_sql_blocks_cmd(
+    content: String,
+) -> Result<Vec<MarkdownSqlBlock>, String> {
+    tokio::task::spawn_blocking(move || extract_markdown_sql_blocks(&content))
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn open_text_file_cmd(
+pub async fn open_text_file_cmd(
     path: String,
     encoding_override: Option<String>,
 ) -> Result<OpenedFileDto, String> {
-    open_text_file(Path::new(&path), encoding_override.as_deref()).map_err(map_err)
+    tokio::task::spawn_blocking(move || {
+        open_text_file(Path::new(&path), encoding_override.as_deref()).map_err(map_err)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn save_text_file_cmd(
+pub async fn save_text_file_cmd(
     path: String,
     content: String,
     encoding: String,
     line_ending: String,
     with_bom: bool,
 ) -> Result<FileStatsDto, String> {
-    save_text_file(Path::new(&path), &content, &encoding, &line_ending, with_bom).map_err(map_err)
+    tokio::task::spawn_blocking(move || {
+        save_text_file(Path::new(&path), &content, &encoding, &line_ending, with_bom)
+            .map_err(map_err)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-pub fn list_workspace_files_cmd(dir_path: String) -> Result<Vec<WorkspaceFileEntry>, String> {
-    list_workspace_files(Path::new(&dir_path)).map_err(map_err)
+pub async fn list_workspace_files_cmd(
+    dir_path: String,
+) -> Result<Vec<WorkspaceFileEntry>, String> {
+    tokio::task::spawn_blocking(move || {
+        list_workspace_files(Path::new(&dir_path)).map_err(map_err)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1767,17 +1895,24 @@ pub fn get_workspace_info_cmd(state: State<'_, AppState>) -> WorkspaceInfoDto {
 }
 
 #[tauri::command]
-pub fn save_console_scratch_cmd(
+pub async fn save_console_scratch_cmd(
     state: State<'_, AppState>,
     file_name: String,
     content: String,
 ) -> Result<String, String> {
+    if content.len() > 2 * 1024 * 1024 {
+        return Ok(String::new());
+    }
     let consoles_dir = state.storage_dir.join("consoles");
-    std::fs::create_dir_all(&consoles_dir).map_err(|e| e.to_string())?;
-    let safe_name = sanitize_console_filename(&file_name);
-    let target = consoles_dir.join(safe_name);
-    std::fs::write(&target, content.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(normalize_display_path(&target))
+    tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&consoles_dir).map_err(|e| e.to_string())?;
+        let safe_name = sanitize_console_filename(&file_name);
+        let target = consoles_dir.join(safe_name);
+        std::fs::write(&target, content.as_bytes()).map_err(|e| e.to_string())?;
+        Ok(normalize_display_path(&target))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn scan_plugins_dir(plugins_dir: &Path) -> Vec<LocalPluginManifest> {
@@ -1899,6 +2034,21 @@ pub async fn search_objects_cmd(
         .map_err(map_err)
 }
 
+enum DumpWriteMsg {
+    Header {
+        table_name: String,
+        ddl: String,
+    },
+    DataBatch {
+        table_name: String,
+        columns: Vec<String>,
+        rows: Vec<BTreeMap<String, serde_json::Value>>,
+        include_banner: bool,
+    },
+    Comment(String),
+    Footer,
+}
+
 #[tauri::command]
 pub async fn export_sql_dump_cmd(
     state: State<'_, AppState>,
@@ -1933,13 +2083,82 @@ pub async fn export_sql_dump_cmd(
 
     let row_cap = req.max_rows_per_table.unwrap_or(20_000).clamp(1, 200_000);
     let generated_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let mut output = build_sql_dump_header(
+    let header_str = build_sql_dump_header(
         &req.db_name,
         &profile.db_type,
         req.include_data,
         target_tables.len(),
         &generated_at,
     );
+    let footer_str = build_sql_dump_footer(&profile.db_type);
+
+    let out_path = PathBuf::from(&req.path);
+    let db_name_writer = req.db_name.clone();
+    let engine_writer = profile.db_type.clone();
+    let (dump_tx, mut dump_rx) = mpsc::channel::<DumpWriteMsg>(8);
+
+    let writer_handle = tokio::task::spawn_blocking(move || -> Result<(), String> {
+        use std::io::Write as _;
+        if let Some(parent) = out_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("创建 SQL 转储目录失败: {e}"))?;
+            }
+        }
+        let file = std::fs::File::create(&out_path)
+            .map_err(|e| format!("创建 SQL 转储文件失败: {e}"))?;
+        let mut writer = std::io::BufWriter::with_capacity(64 * 1024, file);
+        writer
+            .write_all(header_str.as_bytes())
+            .map_err(|e| format!("写入 SQL 转储头部失败: {e}"))?;
+
+        let mut active_cols: Vec<String> = Vec::new();
+        while let Some(msg) = dump_rx.blocking_recv() {
+            match msg {
+                DumpWriteMsg::Header { table_name, ddl } => {
+                    active_cols.clear();
+                    write_sql_dump_table_header(&mut writer, &table_name, &ddl)
+                        .map_err(|e| format!("写入表结构失败: {e}"))?;
+                }
+                DumpWriteMsg::DataBatch {
+                    table_name,
+                    columns,
+                    rows,
+                    include_banner,
+                } => {
+                    if !columns.is_empty() {
+                        active_cols = columns;
+                    }
+                    if !active_cols.is_empty() && !rows.is_empty() {
+                        write_sql_dump_insert_batch(
+                            &mut writer,
+                            &db_name_writer,
+                            &table_name,
+                            &active_cols,
+                            &rows,
+                            SqlDumpFormatOptions::new(&engine_writer, true),
+                            include_banner,
+                        )
+                        .map_err(|e| format!("写入表数据批次失败: {e}"))?;
+                    }
+                }
+                DumpWriteMsg::Comment(line) => {
+                    writer
+                        .write_all(line.as_bytes())
+                        .map_err(|e| format!("写入转储注释失败: {e}"))?;
+                }
+                DumpWriteMsg::Footer => {
+                    writer
+                        .write_all(footer_str.as_bytes())
+                        .map_err(|e| format!("写入 SQL 转储尾部失败: {e}"))?;
+                }
+            }
+        }
+        writer
+            .flush()
+            .map_err(|e| format!("刷新 SQL 转储文件失败: {e}"))?;
+        Ok(())
+    });
 
     let mut total_rows: usize = 0;
     let mut truncated_tables = Vec::new();
@@ -1949,28 +2168,57 @@ pub async fn export_sql_dump_cmd(
             Ok(d) => d,
             Err(e) => format!("-- Failed to fetch DDL for {}: {e}", tbl.name),
         };
+        if dump_tx
+            .send(DumpWriteMsg::Header {
+                table_name: tbl.name.clone(),
+                ddl,
+            })
+            .await
+            .is_err()
+        {
+            break;
+        }
+
         let is_view = tbl
             .table_type
             .as_deref()
             .is_some_and(|tt| tt.to_ascii_uppercase().contains("VIEW"));
 
-        let mut cols: Vec<String> = Vec::new();
-        let mut rows: Vec<BTreeMap<String, serde_json::Value>> = Vec::new();
-
         if req.include_data && !is_view {
-            let qualified = quote_qualified_table(&req.db_name, &tbl.name, &profile.db_type);
-            let select_sql = format!("SELECT * FROM {qualified}");
-            let (tx, mut rx) = mpsc::channel::<QueryChunk>(32);
-            let collector = tokio::spawn(async move {
-                let mut collected_cols: Vec<String> = Vec::new();
-                let mut collected_rows: Vec<BTreeMap<String, serde_json::Value>> = Vec::new();
+            let select_sql =
+                build_limited_select_sql(&req.db_name, &tbl.name, &profile.db_type, row_cap);
+            let (tx, mut rx) = mpsc::channel::<QueryChunk>(4);
+            let table_name_fwd = tbl.name.clone();
+            let dump_tx_fwd = dump_tx.clone();
+            let forwarder = tokio::spawn(async move {
+                let mut wrote_banner = false;
+                let mut table_rows = 0usize;
                 while let Some(chunk) = rx.recv().await {
-                    if collected_cols.is_empty() && !chunk.columns.is_empty() {
-                        collected_cols = chunk.columns;
+                    let chunk_len = chunk.rows.len();
+                    if chunk.columns.is_empty() && chunk_len == 0 {
+                        continue;
                     }
-                    collected_rows.extend(chunk.rows);
+                    let include_banner = if chunk_len > 0 && !wrote_banner {
+                        wrote_banner = true;
+                        true
+                    } else {
+                        false
+                    };
+                    table_rows += chunk_len;
+                    if dump_tx_fwd
+                        .send(DumpWriteMsg::DataBatch {
+                            table_name: table_name_fwd.clone(),
+                            columns: chunk.columns,
+                            rows: chunk.rows,
+                            include_banner,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
-                (collected_cols, collected_rows)
+                table_rows
             });
 
             let exec_res = backend
@@ -1979,42 +2227,35 @@ pub async fn export_sql_dump_cmd(
                         database: Some(req.db_name.clone()),
                         sql: select_sql,
                         limit: Some(row_cap),
+                        query_id: None,
                     },
                     tx,
                 )
                 .await;
 
-            if let Ok((c, r)) = collector.await {
-                if exec_res.is_ok() {
-                    if r.len() >= row_cap as usize {
-                        truncated_tables.push(tbl.name.clone());
-                    }
-                    total_rows += r.len();
-                    cols = c;
-                    rows = r;
-                } else if let Err(err) = exec_res {
-                    output.push_str(&format!(
+            let table_rows = forwarder.await.unwrap_or(0);
+            if exec_res.is_ok() {
+                if table_rows >= row_cap as usize {
+                    truncated_tables.push(tbl.name.clone());
+                }
+                total_rows += table_rows;
+            } else if let Err(err) = exec_res {
+                let _ = dump_tx
+                    .send(DumpWriteMsg::Comment(format!(
                         "-- Warning: Failed to export rows for {}: {err}\n",
                         tbl.name
-                    ));
-                }
+                    )))
+                    .await;
             }
         }
-
-        let section = format_sql_dump_table(
-            &req.db_name,
-            &tbl.name,
-            &ddl,
-            &cols,
-            &rows,
-            SqlDumpFormatOptions::new(&profile.db_type, req.include_data && !is_view),
-        );
-        output.push_str(&section);
     }
 
-    output.push_str(build_sql_dump_footer(&profile.db_type));
-    std::fs::write(&req.path, output.as_bytes())
-        .map_err(|e| format!("写入 SQL 转储文件失败: {e}"))?;
+    let _ = dump_tx.send(DumpWriteMsg::Footer).await;
+    drop(dump_tx);
+
+    writer_handle
+        .await
+        .map_err(|e| format!("等待 SQL 转储写入线程失败: {e}"))??;
 
     Ok(SqlDumpResultDto {
         path: req.path,

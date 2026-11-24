@@ -139,6 +139,22 @@ const { t } = useI18n();
 
 // ==================== Grid State ====================
 const filterText = ref('');
+const debouncedFilterText = ref('');
+let filterDebounceTimer: number | null = null;
+watch(filterText, (next) => {
+  if (filterDebounceTimer !== null) {
+    window.clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = null;
+  }
+  if (!next.trim()) {
+    debouncedFilterText.value = '';
+    return;
+  }
+  filterDebounceTimer = window.setTimeout(() => {
+    filterDebounceTimer = null;
+    debouncedFilterText.value = filterText.value;
+  }, 160);
+});
 const serverWhereInput = ref('');
 const serverOrderByInput = ref('');
 const sortCol = ref<string | null>(null);
@@ -201,7 +217,25 @@ function clearDraft(tabId: string) {
   editingCell.value = null;
 }
 
-defineExpose({ clearDraft });
+function pruneTabState(validTabIds: string[]) {
+  const valid = new Set(validTabIds);
+  for (const key of Object.keys(draftsByTab)) {
+    if (!valid.has(key)) delete draftsByTab[key];
+  }
+  for (const key of Object.keys(hiddenColsByTab)) {
+    if (!valid.has(key)) delete hiddenColsByTab[key];
+  }
+  for (const key of Object.keys(pinnedColsByTab)) {
+    if (!valid.has(key)) delete pinnedColsByTab[key];
+  }
+  for (const key of Object.keys(colWidths)) {
+    if (!validTabIds.some((id) => key.startsWith(`${id}:`))) {
+      delete colWidths[key];
+    }
+  }
+}
+
+defineExpose({ clearDraft, pruneTabState });
 
 const currentResult = computed(
   () =>
@@ -404,7 +438,7 @@ const displayedRows = computed<IndexedRow[]>(() => {
   const res = currentResult.value;
   if (!res) return [];
   const draft = activeDraft.value;
-  const q = filterText.value.trim().toLowerCase();
+  const q = debouncedFilterText.value.trim().toLowerCase();
 
   let list: IndexedRow[] = res.rows.map((orig, idx) => {
     const mods = draft?.modified[idx];
@@ -1065,15 +1099,19 @@ const activeStatsColumn = computed(() => {
   return res.columns[0];
 });
 
+const COLUMN_STATS_SAMPLE_LIMIT = 10_000;
+
 const columnStats = computed(() => {
   const col = activeStatsColumn.value;
   if (!col) return null;
   const rows = displayedRows.value;
+  const sampled = rows.length > COLUMN_STATS_SAMPLE_LIMIT;
+  const scanLimit = sampled ? COLUMN_STATS_SAMPLE_LIMIT : rows.length;
   let nonNull = 0;
   const distinctSet = new Set<string>();
   const nums: number[] = [];
-  for (const item of rows) {
-    const val = item.row[col];
+  for (let i = 0; i < scanLimit; i++) {
+    const val = rows[i].row[col];
     if (val === null || val === undefined) continue;
     nonNull += 1;
     const strVal = typeof val === 'object' ? JSON.stringify(val) : String(val);
@@ -1103,6 +1141,7 @@ const columnStats = computed(() => {
   return {
     column: col,
     total: rows.length,
+    sampled,
     nonNull,
     distinct: distinctSet.size,
     isNumeric: allNumeric,
@@ -1470,6 +1509,10 @@ watch(gridScrollRef, (el, prev) => {
 });
 
 onBeforeUnmount(() => {
+  if (filterDebounceTimer !== null) {
+    window.clearTimeout(filterDebounceTimer);
+    filterDebounceTimer = null;
+  }
   if (scrollRafId !== null) {
     window.cancelAnimationFrame(scrollRafId);
     scrollRafId = null;
@@ -1479,7 +1522,18 @@ onBeforeUnmount(() => {
 });
 
 watch(
-  () => [props.activeResultTabId, filterText.value],
+  () => props.activeResultTabId,
+  () => {
+    if (filterDebounceTimer !== null) {
+      window.clearTimeout(filterDebounceTimer);
+      filterDebounceTimer = null;
+    }
+    debouncedFilterText.value = filterText.value;
+  },
+);
+
+watch(
+  () => [props.activeResultTabId, debouncedFilterText.value],
   () => {
     scrollTop.value = 0;
     scrollLeft.value = 0;
@@ -3000,6 +3054,7 @@ function exportQuickChartSvg() {
               <template v-if="columnStats">
                 <span>
                   列统计 <strong style="color: var(--text-primary); font-family: var(--font-mono)">{{ columnStats.column }}</strong>
+                  <span v-if="columnStats.sampled" style="opacity: 0.72; margin-left: 4px">(抽样 10,000 行)</span>
                 </span>
                 <span>行: <strong>{{ columnStats.total }}</strong></span>
                 <span>非空: <strong>{{ columnStats.nonNull }}</strong></span>

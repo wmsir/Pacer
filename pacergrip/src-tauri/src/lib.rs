@@ -226,6 +226,16 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(workspace_dir.join(sub));
             }
             app.manage(AppState::new(workspace_dir, is_portable));
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    let st = handle.state::<AppState>();
+                    let _ = st.evict_idle_backends().await;
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -241,6 +251,7 @@ pub fn run() {
             commands::save_connection,
             commands::delete_connection,
             commands::test_connection_cmd,
+            commands::disconnect_connection_cmd,
             commands::test_connection_draft_cmd,
             commands::create_demo_sqlite_connection,
             commands::discover_dbeaver_cmd,

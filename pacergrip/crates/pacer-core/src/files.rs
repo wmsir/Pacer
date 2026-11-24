@@ -5,6 +5,19 @@ use encoding_rs::{Encoding, GB18030, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 
 use crate::{CoreError, CoreResult, FileStatsDto, OpenedFileDto, WorkspaceFileEntry};
 
+pub const MAX_EDITOR_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Ensures a file is small enough to edit safely in the browser WebView editor.
+pub fn validate_editor_file_size(byte_size: u64) -> CoreResult<()> {
+    if byte_size > MAX_EDITOR_FILE_BYTES {
+        let mb = byte_size as f64 / (1024.0 * 1024.0);
+        return Err(CoreError::InvalidConfig(format!(
+            "文件体积过大 ({mb:.1} MB，编辑器安全上限 16 MB)，直接载入可能导致内存飙升。若是大型 SQL 脚本，请改用「运行本地 SQL 文件」流式执行。"
+        )));
+    }
+    Ok(())
+}
+
 /// Opens a local text/SQL/Markdown file, auto-detecting BOM/encoding, line endings, and line stats.
 pub fn open_text_file(
     path: &Path,
@@ -17,12 +30,21 @@ pub fn open_text_file(
         )));
     }
 
+    let meta_len = std::fs::metadata(path)?.len();
+    validate_editor_file_size(meta_len)?;
+
     let raw_bytes = std::fs::read(path)?;
     let byte_size = raw_bytes.len() as u64;
+    validate_editor_file_size(byte_size)?;
 
     let (decoded, encoding_label, has_bom) = decode_bytes(&raw_bytes, encoding_override)?;
+    drop(raw_bytes);
     let line_ending = detect_line_ending(&decoded);
-    let normalized = decoded.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = if decoded.contains('\r') {
+        decoded.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        decoded
+    };
 
     let line_count = if normalized.is_empty() {
         1
@@ -67,20 +89,22 @@ pub fn save_text_file(
         }
     }
 
-    let normalized_lf = content.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized_lf = if content.contains('\r') {
+        content.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        content.to_string()
+    };
     let effective_eol = if line_ending.eq_ignore_ascii_case("CRLF") {
         "CRLF"
     } else {
         "LF"
     };
-    let final_text = if effective_eol == "CRLF" {
-        normalized_lf.replace('\n', "\r\n")
+    let (encoded_bytes, normalized_enc, effective_bom) = if effective_eol == "CRLF" {
+        let final_text = normalized_lf.replace('\n', "\r\n");
+        encode_text(&final_text, encoding, with_bom)
     } else {
-        normalized_lf.clone()
+        encode_text(&normalized_lf, encoding, with_bom)
     };
-
-    let (encoded_bytes, normalized_enc, effective_bom) =
-        encode_text(&final_text, encoding, with_bom);
 
     std::fs::write(path, &encoded_bytes)?;
 
@@ -367,5 +391,12 @@ mod tests {
         assert_eq!(entries.len(), 3);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_validate_editor_file_size_blocks_oversized_files() {
+        assert!(validate_editor_file_size(1024).is_ok());
+        assert!(validate_editor_file_size(MAX_EDITOR_FILE_BYTES).is_ok());
+        assert!(validate_editor_file_size(MAX_EDITOR_FILE_BYTES + 1).is_err());
     }
 }

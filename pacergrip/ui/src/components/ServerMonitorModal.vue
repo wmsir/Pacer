@@ -28,12 +28,22 @@ const redisSlowRows = ref<Array<Record<string, unknown>>>([]);
 const activeRedisTab = ref<'clients' | 'slowlog'>('clients');
 
 let timerHandle: number | null = null;
+let refreshInFlight = false;
 
 function stopTimer() {
   if (timerHandle !== null) {
-    window.clearInterval(timerHandle);
+    window.clearTimeout(timerHandle);
     timerHandle = null;
   }
+}
+
+function scheduleNextPoll() {
+  stopTimer();
+  if (!props.visible || !autoRefresh.value) return;
+  timerHandle = window.setTimeout(() => {
+    timerHandle = null;
+    void refreshMonitor(true);
+  }, 5000);
 }
 
 onBeforeUnmount(stopTimer);
@@ -87,8 +97,11 @@ function formatUptime(secRaw: unknown): string {
 }
 
 async function refreshMonitor(silent = false) {
+  if (refreshInFlight) return;
   const prof = props.profile;
   if (!prof || !props.visible) return;
+  refreshInFlight = true;
+  stopTimer();
   if (!silent) loading.value = true;
   errorMsg.value = '';
   try {
@@ -201,7 +214,11 @@ async function refreshMonitor(silent = false) {
   } catch (err) {
     errorMsg.value = String(err);
   } finally {
+    refreshInFlight = false;
     loading.value = false;
+    if (props.visible && autoRefresh.value) {
+      scheduleNextPoll();
+    }
   }
 }
 
@@ -248,9 +265,7 @@ watch(
   ([vis, auto]) => {
     stopTimer();
     if (vis && auto) {
-      timerHandle = window.setInterval(() => {
-        void refreshMonitor(true);
-      }, 5000);
+      scheduleNextPoll();
     }
   },
 );

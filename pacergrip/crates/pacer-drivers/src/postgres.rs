@@ -1,7 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use serde_json::Value as JsonValue;
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow, PgSslMode};
@@ -15,7 +17,7 @@ use pacer_core::{
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
-use crate::sqlite::stream_chunks;
+use crate::sqlite::adaptive_chunk_size;
 use crate::ssh_tunnel::{open_ssh_tunnel, SshTunnelHandle};
 use crate::{
     build_connection_init_stmts, classify_tx_statement, resolve_pool_limits, TxStatementKind,
@@ -28,13 +30,48 @@ struct PgTxSession {
     pending_statements: u32,
 }
 
+struct PgTxRunGuard<'a> {
+    state: &'a StdMutex<PgTxSession>,
+    restore_in_tx: bool,
+    disarmed: bool,
+}
+
+impl<'a> Drop for PgTxRunGuard<'a> {
+    fn drop(&mut self) {
+        if !self.disarmed && self.restore_in_tx {
+            if let Ok(mut g) = self.state.lock() {
+                g.in_transaction = false;
+                g.pending_statements = 0;
+                g.conn = None;
+            }
+        }
+    }
+}
+
+struct RunningPgPidGuard<'a> {
+    map: &'a StdMutex<HashMap<String, i32>>,
+    query_id: Option<String>,
+}
+
+impl<'a> Drop for RunningPgPidGuard<'a> {
+    fn drop(&mut self) {
+        if let Some(ref qid) = self.query_id {
+            if let Ok(mut guard) = self.map.lock() {
+                guard.remove(qid);
+            }
+        }
+    }
+}
+
 /// Native PostgreSQL / openGauss / KingbaseES backend powered by `sqlx`.
 pub struct PostgresBackend {
     pool: PgPool,
     read_only: bool,
     engine_label: String,
     engine_type: pacer_core::DbEngineType,
-    tx: Mutex<PgTxSession>,
+    tx: StdMutex<PgTxSession>,
+    tx_op: Mutex<()>,
+    running_pids: StdMutex<HashMap<String, i32>>,
     _ssh_tunnel: Option<SshTunnelHandle>,
 }
 
@@ -128,12 +165,14 @@ impl PostgresBackend {
             read_only: config.read_only,
             engine_label: config.db_type.as_pacer_db_type().to_string(),
             engine_type: config.db_type.clone(),
-            tx: Mutex::new(PgTxSession {
+            tx: StdMutex::new(PgTxSession {
                 manual_mode,
                 conn: None,
                 in_transaction: false,
                 pending_statements: 0,
             }),
+            tx_op: Mutex::new(()),
+            running_pids: StdMutex::new(HashMap::new()),
             _ssh_tunnel: ssh_tunnel,
         })
     }
@@ -605,13 +644,12 @@ impl DbBackend for PostgresBackend {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "public".to_string());
         let stmt_kind = classify_tx_statement(&req.sql);
-        let mut tx_guard = self.tx.lock().await;
+        let (manual_mode, in_tx_snapshot) = {
+            let g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.manual_mode, g.in_transaction)
+        };
 
-        if !tx_guard.manual_mode
-            && !tx_guard.in_transaction
-            && matches!(stmt_kind, TxStatementKind::Other)
-        {
-            drop(tx_guard);
+        if !manual_mode && !in_tx_snapshot && matches!(stmt_kind, TxStatementKind::Other) {
             let mut conn = self
                 .pool
                 .acquire()
@@ -619,7 +657,17 @@ impl DbBackend for PostgresBackend {
                 .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
             let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
             let _ = conn.execute(set_path.as_str()).await;
-            return exec_pg_on_conn(
+            let registered_qid = register_pg_running_pid(
+                &mut conn,
+                &self.running_pids,
+                req.query_id.as_deref(),
+            )
+            .await;
+            let _pid_guard = RunningPgPidGuard {
+                map: &self.running_pids,
+                query_id: registered_qid,
+            };
+            let (summary, stopped_early) = exec_pg_on_conn(
                 &mut conn,
                 &req.sql,
                 &schema,
@@ -629,35 +677,47 @@ impl DbBackend for PostgresBackend {
                 &tx,
                 started,
             )
-            .await;
-        }
-
-        if tx_guard.conn.is_none() {
-            let conn = self
-                .pool
-                .acquire()
-                .await
-                .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-            tx_guard.conn = Some(conn);
-        }
-
-        if !tx_guard.in_transaction {
-            if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
-                let _ = conn.execute(set_path.as_str()).await;
+            .await?;
+            if stopped_early {
+                let _ = conn.close().await;
             }
+            return Ok(summary);
+        }
+
+        let _tx_op_guard = self.tx_op.lock().await;
+        let (mut manual_mode, mut in_tx, mut conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.manual_mode, g.in_transaction, g.conn.take())
+        };
+        if conn_opt.is_none() {
+            conn_opt = Some(
+                self.pool
+                    .acquire()
+                    .await
+                    .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?,
+            );
+        }
+        let mut conn = conn_opt.ok_or_else(|| {
+            CoreError::Transport("Missing PostgreSQL session connection".to_string())
+        })?;
+
+        if !in_tx {
+            let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
+            let _ = conn.execute(set_path.as_str()).await;
         }
 
         match stmt_kind {
             TxStatementKind::Begin => {
-                if !tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("BEGIN")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
-                    tx_guard.in_transaction = true;
-                    tx_guard.pending_statements = 0;
+                if !in_tx {
+                    conn.execute("BEGIN")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    in_tx = true;
+                }
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = in_tx;
+                    g.pending_statements = 0;
+                    g.conn = Some(conn);
                 }
                 send_pg_empty_chunk(&tx).await;
                 return Ok(QuerySummary {
@@ -674,16 +734,16 @@ impl DbBackend for PostgresBackend {
                 });
             }
             TxStatementKind::Commit => {
-                if tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("COMMIT")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
+                if in_tx {
+                    conn.execute("COMMIT")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
                 }
-                tx_guard.in_transaction = false;
-                tx_guard.pending_statements = 0;
-                tx_guard.conn = None;
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = false;
+                    g.pending_statements = 0;
+                    g.conn = None;
+                }
                 send_pg_empty_chunk(&tx).await;
                 return Ok(QuerySummary {
                     success: true,
@@ -699,16 +759,16 @@ impl DbBackend for PostgresBackend {
                 });
             }
             TxStatementKind::Rollback => {
-                if tx_guard.in_transaction {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("ROLLBACK")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-                    }
+                if in_tx {
+                    conn.execute("ROLLBACK")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
                 }
-                tx_guard.in_transaction = false;
-                tx_guard.pending_statements = 0;
-                tx_guard.conn = None;
+                if let Ok(mut g) = self.tx.lock() {
+                    g.in_transaction = false;
+                    g.pending_statements = 0;
+                    g.conn = None;
+                }
                 send_pg_empty_chunk(&tx).await;
                 return Ok(QuerySummary {
                     success: true,
@@ -724,20 +784,32 @@ impl DbBackend for PostgresBackend {
                 });
             }
             TxStatementKind::Other => {
-                if !tx_guard.in_transaction && tx_guard.manual_mode && !is_read_only {
-                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
-                        conn.execute("BEGIN")
-                            .await
-                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                if !in_tx && manual_mode && !is_read_only {
+                    conn.execute("BEGIN")
+                        .await
+                        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    in_tx = true;
+                    if let Ok(mut g) = self.tx.lock() {
+                        g.in_transaction = true;
                     }
-                    tx_guard.in_transaction = true;
                 }
-                let conn = tx_guard
-                    .conn
-                    .as_deref_mut()
-                    .ok_or_else(|| CoreError::Transport("Missing PostgreSQL session connection".to_string()))?;
-                let summary = exec_pg_on_conn(
-                    conn,
+                let registered_qid = register_pg_running_pid(
+                    &mut conn,
+                    &self.running_pids,
+                    req.query_id.as_deref(),
+                )
+                .await;
+                let _pid_guard = RunningPgPidGuard {
+                    map: &self.running_pids,
+                    query_id: registered_qid,
+                };
+                let mut run_guard = PgTxRunGuard {
+                    state: &self.tx,
+                    restore_in_tx: in_tx,
+                    disarmed: false,
+                };
+                let (summary, stopped_early) = exec_pg_on_conn(
+                    &mut conn,
                     &req.sql,
                     &schema,
                     req.limit,
@@ -747,14 +819,47 @@ impl DbBackend for PostgresBackend {
                     started,
                 )
                 .await?;
-                if tx_guard.in_transaction && !is_read_only {
-                    tx_guard.pending_statements = tx_guard.pending_statements.saturating_add(1);
-                } else if !tx_guard.in_transaction && !tx_guard.manual_mode {
-                    tx_guard.conn = None;
+                run_guard.disarmed = true;
+                if let Ok(mut g) = self.tx.lock() {
+                    manual_mode = g.manual_mode;
+                    g.in_transaction = in_tx;
+                    if in_tx && !is_read_only {
+                        g.pending_statements = g.pending_statements.saturating_add(1);
+                    }
+                    if in_tx || manual_mode {
+                        g.conn = Some(conn);
+                        return Ok(summary);
+                    }
+                }
+                if stopped_early {
+                    let _ = conn.close().await;
                 }
                 return Ok(summary);
             }
         }
+    }
+
+    async fn cancel_running_query(&self, query_id: &str) -> CoreResult<bool> {
+        let target_pid = {
+            let guard = self
+                .running_pids
+                .lock()
+                .map_err(|e| CoreError::Transport(e.to_string()))?;
+            guard.get(query_id).copied()
+        };
+        let Some(pid) = target_pid else {
+            return Ok(false);
+        };
+        let mut cancel_conn = tokio::time::timeout(Duration::from_secs(3), self.pool.acquire())
+            .await
+            .map_err(|_| CoreError::Transport("Timed out acquiring PostgreSQL cancel connection".to_string()))?
+            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+        let cancelled: Option<bool> = sqlx::query_scalar("SELECT pg_cancel_backend($1)")
+            .bind(pid)
+            .fetch_one(&mut *cancel_conn)
+            .await
+            .ok();
+        Ok(cancelled.unwrap_or(false))
     }
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
@@ -795,7 +900,7 @@ impl DbBackend for PostgresBackend {
     }
 
     async fn transaction_status(&self) -> CoreResult<TransactionStatus> {
-        let g = self.tx.lock().await;
+        let g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -805,16 +910,26 @@ impl DbBackend for PostgresBackend {
     }
 
     async fn set_manual_transaction(&self, enabled: bool) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if !enabled && g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            g.manual_mode = enabled;
+            if !enabled {
+                (g.in_transaction, g.conn.take())
+            } else {
+                (false, None)
+            }
+        };
+        if let Some(mut conn) = conn_opt {
+            if in_tx {
                 let _ = conn.execute("ROLLBACK").await;
             }
+        }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        if !enabled {
             g.in_transaction = false;
             g.pending_statements = 0;
-            g.conn = None;
         }
-        g.manual_mode = enabled;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -824,17 +939,21 @@ impl DbBackend for PostgresBackend {
     }
 
     async fn commit_transaction(&self) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.in_transaction, g.conn.take())
+        };
+        if in_tx {
+            if let Some(mut conn) = conn_opt {
                 conn.execute("COMMIT")
                     .await
                     .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
             }
-            g.in_transaction = false;
-            g.pending_statements = 0;
-            g.conn = None;
         }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        g.in_transaction = false;
+        g.pending_statements = 0;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -844,17 +963,21 @@ impl DbBackend for PostgresBackend {
     }
 
     async fn rollback_transaction(&self) -> CoreResult<TransactionStatus> {
-        let mut g = self.tx.lock().await;
-        if g.in_transaction {
-            if let Some(conn) = g.conn.as_deref_mut() {
+        let _op = self.tx_op.lock().await;
+        let (in_tx, conn_opt) = {
+            let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+            (g.in_transaction, g.conn.take())
+        };
+        if in_tx {
+            if let Some(mut conn) = conn_opt {
                 conn.execute("ROLLBACK")
                     .await
                     .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
             }
-            g.in_transaction = false;
-            g.pending_statements = 0;
-            g.conn = None;
         }
+        let mut g = self.tx.lock().map_err(|e| CoreError::Transport(e.to_string()))?;
+        g.in_transaction = false;
+        g.pending_statements = 0;
         Ok(TransactionStatus {
             supported: true,
             manual_mode: g.manual_mode,
@@ -865,6 +988,29 @@ impl DbBackend for PostgresBackend {
 
     fn capabilities(&self) -> CapabilityFlags {
         CapabilityFlags::direct_full(self.read_only)
+    }
+}
+
+async fn register_pg_running_pid(
+    conn: &mut PgConnection,
+    map: &StdMutex<HashMap<String, i32>>,
+    query_id: Option<&str>,
+) -> Option<String> {
+    let qid = query_id?.trim();
+    if qid.is_empty() {
+        return None;
+    }
+    let pid: Option<i32> = sqlx::query_scalar("SELECT pg_backend_pid()")
+        .fetch_one(&mut *conn)
+        .await
+        .ok();
+    if let Some(id) = pid {
+        if let Ok(mut guard) = map.lock() {
+            guard.insert(qid.to_string(), id);
+        }
+        Some(qid.to_string())
+    } else {
+        None
     }
 }
 
@@ -890,64 +1036,120 @@ async fn exec_pg_on_conn(
     engine_label: &str,
     tx: &mpsc::Sender<QueryChunk>,
     started: Instant,
-) -> CoreResult<QuerySummary> {
+) -> CoreResult<(QuerySummary, bool)> {
     if !is_read_only {
         let res = conn
             .execute(sql)
             .await
             .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
         send_pg_empty_chunk(tx).await;
-        return Ok(QuerySummary {
+        return Ok((
+            QuerySummary {
+                success: true,
+                database: schema.to_string(),
+                total_rows: 0,
+                affected_rows: Some(res.rows_affected()),
+                is_dml_or_ddl: true,
+                duration_ms: started.elapsed().as_millis() as u64,
+                route_node: Some("DIRECT".to_string()),
+                route_description: Some(format!("{engine_label} native direct execution")),
+                masked_columns: BTreeMap::new(),
+                error_message: None,
+            },
+            false,
+        ));
+    }
+
+    let max_rows = limit.map(|l| l as usize).unwrap_or(usize::MAX);
+    let mut columns: Option<Vec<String>> = None;
+    let mut chunk_size: usize = 500;
+    let mut batch: Vec<BTreeMap<String, JsonValue>> = Vec::new();
+    let mut batch_index: usize = 0;
+    let mut total_rows: usize = 0;
+    let mut stopped_early = false;
+    let mut receiver_closed = false;
+
+    {
+        let mut stream = conn.fetch(sql);
+        while let Some(row) = stream
+            .try_next()
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?
+        {
+            if total_rows >= max_rows {
+                stopped_early = true;
+                break;
+            }
+            let cols = columns.get_or_insert_with(|| {
+                let c: Vec<String> = row.columns().iter().map(|col| col.name().to_string()).collect();
+                chunk_size = adaptive_chunk_size(c.len());
+                c
+            });
+            batch.push(pg_row_to_map(&row, cols));
+            total_rows += 1;
+
+            if batch.len() >= chunk_size && total_rows < max_rows {
+                let send_rows = std::mem::take(&mut batch);
+                let chunk = QueryChunk {
+                    columns: if batch_index == 0 {
+                        cols.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    rows: send_rows,
+                    batch_index,
+                    is_last: false,
+                    masked_columns: BTreeMap::new(),
+                };
+                batch_index += 1;
+                if tx.send(chunk).await.is_err() {
+                    receiver_closed = true;
+                    stopped_early = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    let final_cols = match columns {
+        Some(c) => c,
+        None => match conn.describe(sql).await {
+            Ok(desc) => desc.columns().iter().map(|c| c.name().to_string()).collect(),
+            Err(_) => Vec::new(),
+        },
+    };
+
+    if !receiver_closed {
+        let _ = tx
+            .send(QueryChunk {
+                columns: if batch_index == 0 {
+                    final_cols
+                } else {
+                    Vec::new()
+                },
+                rows: batch,
+                batch_index,
+                is_last: true,
+                masked_columns: BTreeMap::new(),
+            })
+            .await;
+    }
+
+    Ok((
+        QuerySummary {
             success: true,
             database: schema.to_string(),
-            total_rows: 0,
-            affected_rows: Some(res.rows_affected()),
-            is_dml_or_ddl: true,
+            total_rows,
+            affected_rows: None,
+            is_dml_or_ddl: false,
             duration_ms: started.elapsed().as_millis() as u64,
             route_node: Some("DIRECT".to_string()),
             route_description: Some(format!("{engine_label} native direct execution")),
             masked_columns: BTreeMap::new(),
             error_message: None,
-        });
-    }
-
-    let rows = conn
-        .fetch_all(sql)
-        .await
-        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-
-    let max_rows = limit.map(|l| l as usize).unwrap_or(usize::MAX);
-    let limited: Vec<&PgRow> = rows.iter().take(max_rows).collect();
-    let columns: Vec<String> = if let Some(first) = rows.first() {
-        first.columns().iter().map(|c| c.name().to_string()).collect()
-    } else {
-        match conn.describe(sql).await {
-            Ok(desc) => desc
-                .columns()
-                .iter()
-                .map(|c| c.name().to_string())
-                .collect(),
-            Err(_) => Vec::new(),
-        }
-    };
-
-    let mapped: Vec<BTreeMap<String, JsonValue>> =
-        limited.iter().map(|r| pg_row_to_map(r, &columns)).collect();
-    let total_rows = mapped.len();
-    stream_chunks(&columns, mapped, tx).await;
-
-    Ok(QuerySummary {
-        success: true,
-        database: schema.to_string(),
-        total_rows,
-        affected_rows: None,
-        is_dml_or_ddl: false,
-        duration_ms: started.elapsed().as_millis() as u64,
-        route_node: Some("DIRECT".to_string()),
-        route_description: Some(format!("{engine_label} native direct execution")),
-        masked_columns: BTreeMap::new(),
-        error_message: None,
-    })
+        },
+        stopped_early,
+    ))
 }
 
 fn pg_row_to_map(row: &PgRow, columns: &[String]) -> BTreeMap<String, JsonValue> {

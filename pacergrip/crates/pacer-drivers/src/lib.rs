@@ -261,6 +261,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "UPDATE customers SET tier = 'GOLD' WHERE country = 'CN';".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx,
             )
@@ -280,6 +281,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "DELETE FROM customers WHERE id = 1;".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx2,
             )
@@ -309,6 +311,7 @@ mod tests {
                     sql: "CREATE TABLE items_big (id INTEGER, score REAL, note TEXT, raw_bin BLOB);"
                         .to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ddl,
             )
@@ -324,6 +327,7 @@ mod tests {
                     database: None,
                     sql: insert_sql.to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ins,
             )
@@ -338,6 +342,7 @@ mod tests {
                     database: None,
                     sql: "SELECT id, score, note, raw_bin FROM items_big ORDER BY id;".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx,
             )
@@ -446,6 +451,7 @@ mod tests {
                     database: None,
                     sql: "CREATE TABLE empty_activities (id INTEGER PRIMARY KEY, title TEXT, status TEXT, created_at TEXT);".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ddl,
             )
@@ -459,6 +465,7 @@ mod tests {
                     database: None,
                     sql: "SELECT * FROM empty_activities LIMIT 100;".to_string(),
                     limit: Some(100),
+                    query_id: None,
                 },
                 tx,
             )
@@ -487,6 +494,7 @@ mod tests {
                     sql: "SELECT id AS activity_id, title FROM empty_activities WHERE id > 999;"
                         .to_string(),
                     limit: Some(100),
+                    query_id: None,
                 },
                 tx2,
             )
@@ -527,6 +535,7 @@ mod tests {
                     database: None,
                     sql: "SELECT * FROM pragma_foreign_keys;".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx,
             )
@@ -744,6 +753,7 @@ mod tests {
                     database: Some("db0".to_string()),
                     sql: "HGETALL user:1001".to_string(),
                     limit: Some(100),
+                    query_id: None,
                 },
                 tx_h,
             )
@@ -762,6 +772,7 @@ mod tests {
                     database: Some("db0".to_string()),
                     sql: "ZRANGE rank:scores 0 99 WITHSCORES".to_string(),
                     limit: Some(100),
+                    query_id: None,
                 },
                 tx_z,
             )
@@ -788,6 +799,7 @@ mod tests {
                     database: Some("db0".to_string()),
                     sql: "GET greeting".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ro_ok,
             )
@@ -801,6 +813,7 @@ mod tests {
                     database: Some("db0".to_string()),
                     sql: "SET greeting blocked".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ro_err,
             )
@@ -912,6 +925,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "CREATE TRIGGER trg_customers_touch AFTER UPDATE ON customers BEGIN SELECT 1; END;".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_trig,
             )
@@ -933,6 +947,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Temp Tx User', 'temp@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ins,
             )
@@ -951,6 +966,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
                     limit: Some(10),
+                    query_id: None,
                 },
                 tx_sel1,
             )
@@ -970,6 +986,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
                     limit: Some(10),
+                    query_id: None,
                 },
                 tx_sel2,
             )
@@ -985,6 +1002,7 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Committed User', 'committed@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
                     limit: None,
+                    query_id: None,
                 },
                 tx_ins2,
             )
@@ -1000,12 +1018,126 @@ mod tests {
                     database: Some("main".to_string()),
                     sql: "SELECT * FROM customers WHERE email = 'committed@tx.local';".to_string(),
                     limit: Some(10),
+                    query_id: None,
                 },
                 tx_sel3,
             )
             .await
             .unwrap();
         assert_eq!(sum3.total_rows, 1);
+
+        drop(backend);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_streaming_limit_and_exact_chunk_boundary() {
+        let tmp = std::env::temp_dir().join(format!(
+            "pacergrip_stream_exact_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        create_demo_sqlite_db(&tmp).await.unwrap();
+
+        let backend = connect_direct(&sqlite_config(&tmp, false), None)
+            .await
+            .unwrap();
+
+        let (tx_ddl, _) = mpsc::channel(4);
+        backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "CREATE TABLE items_exact (id INTEGER PRIMARY KEY, label TEXT);"
+                        .to_string(),
+                    limit: None,
+                    query_id: None,
+                },
+                tx_ddl,
+            )
+            .await
+            .unwrap();
+
+        let (tx_ins, _) = mpsc::channel(4);
+        let ins_sum = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "WITH RECURSIVE cnt(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM cnt WHERE x < 500) \
+                          INSERT INTO items_exact SELECT x, 'item-' || x FROM cnt;"
+                        .to_string(),
+                    limit: None,
+                    query_id: None,
+                },
+                tx_ins,
+            )
+            .await
+            .unwrap();
+        assert_eq!(ins_sum.affected_rows, Some(500));
+
+        // 1. Exact 500-row boundary
+        let (tx_exact, mut rx_exact) = mpsc::channel(8);
+        let sum_exact = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT id, label FROM items_exact ORDER BY id;".to_string(),
+                    limit: None,
+                    query_id: None,
+                },
+                tx_exact,
+            )
+            .await
+            .unwrap();
+        assert!(sum_exact.success);
+        assert_eq!(sum_exact.total_rows, 500);
+        let mut exact_chunks = Vec::new();
+        while let Some(c) = rx_exact.recv().await {
+            exact_chunks.push(c);
+        }
+        let exact_rows: usize = exact_chunks.iter().map(|c| c.rows.len()).sum();
+        assert_eq!(exact_rows, 500);
+        assert_eq!(exact_chunks[0].columns, vec!["id", "label"]);
+        assert!(exact_chunks.last().is_some_and(|c| c.is_last));
+
+        // 2. Early limit truncation stops stream cleanly and leaves backend healthy
+        let (tx_lim, mut rx_lim) = mpsc::channel(8);
+        let sum_lim = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT id, label FROM items_exact ORDER BY id;".to_string(),
+                    limit: Some(120),
+                    query_id: Some("test-lim-q1".to_string()),
+                },
+                tx_lim,
+            )
+            .await
+            .unwrap();
+        assert!(sum_lim.success);
+        assert_eq!(sum_lim.total_rows, 120);
+        let mut lim_rows = 0usize;
+        while let Some(c) = rx_lim.recv().await {
+            lim_rows += c.rows.len();
+        }
+        assert_eq!(lim_rows, 120);
+
+        let (tx_after, mut rx_after) = mpsc::channel(4);
+        let sum_after = backend
+            .execute_query(
+                QueryReq {
+                    database: None,
+                    sql: "SELECT COUNT(*) AS cnt FROM items_exact;".to_string(),
+                    limit: None,
+                    query_id: None,
+                },
+                tx_after,
+            )
+            .await
+            .unwrap();
+        assert_eq!(sum_after.total_rows, 1);
+        let chunk_after = rx_after.recv().await.unwrap();
+        assert_eq!(chunk_after.rows[0]["cnt"], serde_json::json!(500));
 
         drop(backend);
         let _ = std::fs::remove_file(&tmp);

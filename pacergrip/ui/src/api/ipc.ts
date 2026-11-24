@@ -734,6 +734,11 @@ export async function cancelQuery(queryId: string): Promise<boolean> {
   return invoke('cancel_query_cmd', { queryId });
 }
 
+export async function disconnectConnection(profileId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return invoke('disconnect_connection_cmd', { profileId });
+}
+
 export async function getTransactionStatus(profileId: string): Promise<TransactionStatus> {
   if (!isTauriRuntime()) {
     return { supported: false, manualMode: false, inTransaction: false, pendingStatements: 0 };
