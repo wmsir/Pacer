@@ -1218,6 +1218,8 @@ fn extract_dbeaver_ssh(cfg: &Map<String, Value>) -> Option<SshTunnelConfig> {
         key_file,
         local_port: None,
         enabled,
+        password: None,
+        passphrase: None,
     })
 }
 

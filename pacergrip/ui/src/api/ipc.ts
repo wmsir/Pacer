@@ -26,6 +26,8 @@ export interface SshTunnelConfig {
   keyFile?: string | null;
   localPort?: number | null;
   enabled: boolean;
+  password?: string | null;
+  passphrase?: string | null;
 }
 
 export interface SslConfig {
@@ -195,6 +197,30 @@ export interface IndexMeta {
   unique: boolean;
   columns: string[];
   indexType?: string | null;
+}
+
+export interface ForeignKeyMeta {
+  name: string;
+  columnName: string;
+  referencedTable: string;
+  referencedColumn: string;
+  onDelete?: string | null;
+  onUpdate?: string | null;
+}
+
+export interface RoutineMeta {
+  name: string;
+  kind: string;
+  returnType?: string | null;
+  definition?: string | null;
+  comment?: string | null;
+}
+
+export interface TransactionStatus {
+  supported: boolean;
+  manualMode: boolean;
+  inTransaction: boolean;
+  pendingStatements: number;
 }
 
 export interface QueryChunk {
@@ -481,6 +507,23 @@ export async function pickSqlScriptFile(): Promise<string | null> {
   return typeof res === 'string' ? res : null;
 }
 
+export async function pickSaveDocPath(
+  defaultPath: string,
+  format: 'md' | 'html',
+): Promise<string | null> {
+  assertTauri();
+  const res = await dialogSave({
+    defaultPath,
+    filters: [
+      format === 'html'
+        ? { name: 'HTML 数据字典 (.html)', extensions: ['html', 'htm'] }
+        : { name: 'Markdown 数据字典 (.md)', extensions: ['md'] },
+      { name: '所有文件', extensions: ['*'] },
+    ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
 export async function listProjects(): Promise<WorkspaceProject[]> {
   assertTauri();
   return invoke('list_projects_cmd');
@@ -669,6 +712,53 @@ export async function listIndexes(
   return invoke('list_indexes_cmd', { profileId, dbName, tableName });
 }
 
+export async function listForeignKeys(
+  profileId: string,
+  dbName: string,
+  tableName: string,
+): Promise<ForeignKeyMeta[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('list_foreign_keys_cmd', { profileId, dbName, tableName });
+}
+
+export async function listRoutines(
+  profileId: string,
+  dbName: string,
+): Promise<RoutineMeta[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('list_routines_cmd', { profileId, dbName });
+}
+
+export async function cancelQuery(queryId: string): Promise<boolean> {
+  if (!isTauriRuntime()) return false;
+  return invoke('cancel_query_cmd', { queryId });
+}
+
+export async function getTransactionStatus(profileId: string): Promise<TransactionStatus> {
+  if (!isTauriRuntime()) {
+    return { supported: false, manualMode: false, inTransaction: false, pendingStatements: 0 };
+  }
+  return invoke('get_transaction_status_cmd', { profileId });
+}
+
+export async function setTransactionMode(
+  profileId: string,
+  manual: boolean,
+): Promise<TransactionStatus> {
+  assertTauri();
+  return invoke('set_transaction_mode_cmd', { profileId, manual });
+}
+
+export async function commitTransaction(profileId: string): Promise<TransactionStatus> {
+  assertTauri();
+  return invoke('commit_transaction_cmd', { profileId });
+}
+
+export async function rollbackTransaction(profileId: string): Promise<TransactionStatus> {
+  assertTauri();
+  return invoke('rollback_transaction_cmd', { profileId });
+}
+
 export async function getTableDdl(
   profileId: string,
   dbName: string,
@@ -684,6 +774,7 @@ export async function executeSql(
   sql: string,
   limit: number | null,
   onData: (chunk: QueryChunk) => void,
+  queryId?: string,
 ): Promise<QuerySummary> {
   assertTauri();
   const onChunk = new Channel<QueryChunk>();
@@ -708,6 +799,7 @@ export async function executeSql(
     dbName,
     sql,
     limit,
+    queryId: queryId ?? null,
     onChunk,
   });
 

@@ -187,6 +187,10 @@ pub struct SshTunnelConfig {
     #[serde(default)]
     pub local_port: Option<u16>,
     pub enabled: bool,
+    #[serde(default, skip_serializing)]
+    pub password: Option<String>,
+    #[serde(default, skip_serializing)]
+    pub passphrase: Option<String>,
 }
 
 /// TLS/SSL transport configuration.
@@ -673,4 +677,37 @@ pub struct ObjectSearchHit {
     pub column_name: Option<String>,
     pub data_type: Option<String>,
     pub comment: Option<String>,
+}
+
+/// Foreign key relationship metadata for table navigation & ER diagrams.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForeignKeyMeta {
+    pub name: String,
+    pub column_name: String,
+    pub referenced_table: String,
+    pub referenced_column: String,
+    pub on_delete: Option<String>,
+    pub on_update: Option<String>,
+}
+
+/// Stored procedure, function, or trigger metadata in a SQL database/schema.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineMeta {
+    pub name: String,
+    pub kind: String,
+    pub return_type: Option<String>,
+    pub definition: Option<String>,
+    pub comment: Option<String>,
+}
+
+/// Live ACID transaction session status for a database backend.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionStatus {
+    pub supported: bool,
+    pub manual_mode: bool,
+    pub in_transaction: bool,
+    pub pending_statements: u32,
 }

@@ -294,6 +294,8 @@ const connForm = reactive<{
   sshUser: string;
   sshAuthType: 'PASSWORD' | 'KEY_PAIR' | 'AGENT';
   sshKeyFile: string;
+  sshPassword: string;
+  sshPassphrase: string;
   sshLocalPort: string;
   // SSL
   sslEnabled: boolean;
@@ -347,6 +349,8 @@ const connForm = reactive<{
   sshUser: '',
   sshAuthType: 'PASSWORD',
   sshKeyFile: '',
+  sshPassword: '',
+  sshPassphrase: '',
   sshLocalPort: '',
   sslEnabled: false,
   sslMode: 'preferred',
@@ -663,6 +667,8 @@ function buildDraftPayload(): ConnectionDraft {
           authType: connForm.sshAuthType,
           keyFile: connForm.sshKeyFile.trim() || null,
           localPort: connForm.sshLocalPort.trim() ? Number(connForm.sshLocalPort) || null : null,
+          password: connForm.sshPassword.trim() ? connForm.sshPassword : null,
+          passphrase: connForm.sshPassphrase.trim() ? connForm.sshPassphrase : null,
         }
       : null;
 
@@ -1056,6 +1062,8 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
             ? 'KEY_PAIR'
             : 'PASSWORD';
       connForm.sshKeyFile = cfg.ssh?.keyFile ?? '';
+      connForm.sshPassword = '';
+      connForm.sshPassphrase = '';
       connForm.sshLocalPort = cfg.ssh?.localPort ? String(cfg.ssh.localPort) : '';
       // SSL
       connForm.sslEnabled = Boolean(cfg.ssl?.enabled);
@@ -1117,6 +1125,8 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
       connForm.sshUser = '';
       connForm.sshAuthType = 'PASSWORD';
       connForm.sshKeyFile = '';
+      connForm.sshPassword = '';
+      connForm.sshPassphrase = '';
       connForm.sshLocalPort = '';
       connForm.sslEnabled = false;
       connForm.sslMode = 'preferred';
@@ -2276,6 +2286,18 @@ function runImportLiveTemplates() {
               </div>
             </div>
 
+            <div v-if="connForm.sshAuthType === 'PASSWORD'" class="conn-row">
+              <label class="conn-row-label">SSH 密码:</label>
+              <input
+                v-model="connForm.sshPassword"
+                type="password"
+                autocomplete="new-password"
+                class="field"
+                :disabled="!connForm.sshEnabled"
+                :placeholder="connForm.id && connForm.sshEnabled ? '留空沿用 Vault 中已保存的 SSH 密码' : '输入 SSH 登录密码（加密存 Vault）'"
+              />
+            </div>
+
             <div v-if="connForm.sshAuthType === 'KEY_PAIR'" class="conn-row">
               <label class="conn-row-label">私钥文件:</label>
               <div class="conn-file-input-wrap">
@@ -2295,6 +2317,18 @@ function runImportLiveTemplates() {
                   <IdeIcon name="folder-open" :size="13" />
                 </button>
               </div>
+            </div>
+
+            <div v-if="connForm.sshAuthType === 'KEY_PAIR'" class="conn-row">
+              <label class="conn-row-label">私钥口令:</label>
+              <input
+                v-model="connForm.sshPassphrase"
+                type="password"
+                autocomplete="new-password"
+                class="field"
+                :disabled="!connForm.sshEnabled"
+                :placeholder="connForm.id && connForm.sshEnabled ? '无口令或沿用 Vault 中已保存口令请留空' : '私钥解密 Passphrase（可选，加密存 Vault）'"
+              />
             </div>
 
             <div class="conn-row">

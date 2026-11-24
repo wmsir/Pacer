@@ -3,19 +3,30 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::Value as JsonValue;
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions, PgRow, PgSslMode};
-use sqlx::{Column, Executor, Row, TypeInfo, ValueRef};
-use tokio::sync::mpsc;
+use sqlx::{Column, Executor, PgConnection, Postgres, Row, TypeInfo, ValueRef};
+use tokio::sync::{mpsc, Mutex};
 
 use pacer_core::{
     CapabilityFlags, ColumnMeta, CoreError, CoreResult, DatabaseMeta, DbBackend, DirectConfig,
-    ExplainResult, IndexMeta, ObjectSearchHit, PingMetrics, QueryChunk, QueryReq, QuerySummary,
-    TableMeta,
+    ExplainResult, ForeignKeyMeta, IndexMeta, ObjectSearchHit, PingMetrics, QueryChunk, QueryReq,
+    QuerySummary, RoutineMeta, TableMeta, TransactionStatus,
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
 use crate::sqlite::stream_chunks;
-use crate::{build_connection_init_stmts, resolve_pool_limits};
+use crate::ssh_tunnel::{open_ssh_tunnel, SshTunnelHandle};
+use crate::{
+    build_connection_init_stmts, classify_tx_statement, resolve_pool_limits, TxStatementKind,
+};
+
+struct PgTxSession {
+    manual_mode: bool,
+    conn: Option<PoolConnection<Postgres>>,
+    in_transaction: bool,
+    pending_statements: u32,
+}
 
 /// Native PostgreSQL / openGauss / KingbaseES backend powered by `sqlx`.
 pub struct PostgresBackend {
@@ -23,6 +34,8 @@ pub struct PostgresBackend {
     read_only: bool,
     engine_label: String,
     engine_type: pacer_core::DbEngineType,
+    tx: Mutex<PgTxSession>,
+    _ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 impl PostgresBackend {
@@ -37,9 +50,18 @@ impl PostgresBackend {
             .or_else(|| config.db_type.default_port())
             .unwrap_or(5432);
 
+        let ssh_tunnel = match config.ssh.as_ref().filter(|s| s.enabled) {
+            Some(ssh_cfg) => Some(open_ssh_tunnel(ssh_cfg, host, port).await?),
+            None => None,
+        };
+        let (connect_host, connect_port) = match &ssh_tunnel {
+            Some(t) => ("127.0.0.1", t.local_port()),
+            None => (host, port),
+        };
+
         let mut opts = PgConnectOptions::new()
-            .host(host)
-            .port(port)
+            .host(connect_host)
+            .port(connect_port)
             .username(config.username.as_deref().unwrap_or("postgres"));
 
         if let Some(ssl_mode) = resolve_pg_ssl_mode(config) {
@@ -95,11 +117,24 @@ impl PostgresBackend {
             .await
             .map_err(|e| CoreError::Transport(format!("PostgreSQL connection failed: {e}")))?;
 
+        let manual_mode = config
+            .options
+            .as_ref()
+            .and_then(|o| o.transaction_control.as_deref())
+            .is_some_and(|m| m.eq_ignore_ascii_case("manual"));
+
         Ok(Self {
             pool,
             read_only: config.read_only,
             engine_label: config.db_type.as_pacer_db_type().to_string(),
             engine_type: config.db_type.clone(),
+            tx: Mutex::new(PgTxSession {
+                manual_mode,
+                conn: None,
+                in_transaction: false,
+                pending_statements: 0,
+            }),
+            _ssh_tunnel: ssh_tunnel,
         })
     }
 }
@@ -296,6 +331,139 @@ impl DbBackend for PostgresBackend {
             .collect())
     }
 
+    async fn list_foreign_keys(
+        &self,
+        db: &str,
+        table: &str,
+    ) -> CoreResult<Vec<ForeignKeyMeta>> {
+        let schema = if db.is_empty() { "public" } else { db };
+        let rows = sqlx::query(
+            "SELECT tc.constraint_name::text AS fk_name, \
+                    kcu.column_name::text AS col_name, \
+                    ccu.table_name::text AS ref_table, \
+                    ccu.column_name::text AS ref_col, \
+                    rc.delete_rule::text AS on_delete, \
+                    rc.update_rule::text AS on_update \
+             FROM information_schema.table_constraints tc \
+             JOIN information_schema.key_column_usage kcu \
+               ON tc.constraint_name = kcu.constraint_name \
+              AND tc.table_schema = kcu.table_schema \
+             JOIN information_schema.constraint_column_usage ccu \
+               ON ccu.constraint_name = tc.constraint_name \
+              AND ccu.constraint_schema = tc.constraint_schema \
+             LEFT JOIN information_schema.referential_constraints rc \
+               ON tc.constraint_name = rc.constraint_name \
+              AND tc.constraint_schema = rc.constraint_schema \
+             WHERE tc.constraint_type = 'FOREIGN KEY' \
+               AND tc.table_schema = $1 \
+               AND tc.table_name = $2 \
+             ORDER BY tc.constraint_name, kcu.ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let name: String = row.try_get("fk_name").unwrap_or_default();
+            let column_name: String = row.try_get("col_name").unwrap_or_default();
+            let referenced_table: String = row.try_get("ref_table").unwrap_or_default();
+            let referenced_column: String = row.try_get("ref_col").unwrap_or_default();
+            if column_name.is_empty() || referenced_table.is_empty() {
+                continue;
+            }
+            out.push(ForeignKeyMeta {
+                name,
+                column_name,
+                referenced_table,
+                referenced_column,
+                on_delete: row.try_get::<Option<String>, _>("on_delete").ok().flatten(),
+                on_update: row.try_get::<Option<String>, _>("on_update").ok().flatten(),
+            });
+        }
+        Ok(out)
+    }
+
+    async fn list_routines(&self, db: &str) -> CoreResult<Vec<RoutineMeta>> {
+        let schema = if db.is_empty() { "public" } else { db };
+        let mut out = Vec::new();
+        if let Ok(rows) = sqlx::query(
+            "SELECT routine_name::text AS r_name, \
+                    routine_type::text AS r_type, \
+                    data_type::text AS r_ret, \
+                    routine_definition::text AS r_def \
+             FROM information_schema.routines \
+             WHERE routine_schema = $1 \
+             ORDER BY routine_type, routine_name \
+             LIMIT 200",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        {
+            for row in rows {
+                let name: String = row.try_get("r_name").unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let kind = row
+                    .try_get::<Option<String>, _>("r_type")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "FUNCTION".to_string())
+                    .to_ascii_uppercase();
+                out.push(RoutineMeta {
+                    name,
+                    kind,
+                    return_type: row.try_get::<Option<String>, _>("r_ret").ok().flatten(),
+                    definition: row.try_get::<Option<String>, _>("r_def").ok().flatten(),
+                    comment: None,
+                });
+            }
+        }
+
+        if let Ok(rows) = sqlx::query(
+            "SELECT trigger_name::text AS t_name, \
+                    action_timing::text AS t_timing, \
+                    event_manipulation::text AS t_event, \
+                    event_object_table::text AS t_table, \
+                    action_statement::text AS t_stmt \
+             FROM information_schema.triggers \
+             WHERE trigger_schema = $1 \
+             ORDER BY trigger_name \
+             LIMIT 200",
+        )
+        .bind(schema)
+        .fetch_all(&self.pool)
+        .await
+        {
+            for row in rows {
+                let name: String = row.try_get("t_name").unwrap_or_default();
+                if name.is_empty() {
+                    continue;
+                }
+                let timing: String = row.try_get("t_timing").unwrap_or_default();
+                let event: String = row.try_get("t_event").unwrap_or_default();
+                let tbl: String = row.try_get("t_table").unwrap_or_default();
+                let comment = format!("{timing} {event} ON {tbl}").trim().to_string();
+                out.push(RoutineMeta {
+                    name,
+                    kind: "TRIGGER".to_string(),
+                    return_type: None,
+                    definition: row.try_get::<Option<String>, _>("t_stmt").ok().flatten(),
+                    comment: if comment.is_empty() {
+                        None
+                    } else {
+                        Some(comment)
+                    },
+                });
+            }
+        }
+        Ok(out)
+    }
+
     async fn search_objects(&self, db: &str, query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
         let needle = query.trim();
         if needle.is_empty() {
@@ -431,85 +599,162 @@ impl DbBackend for PostgresBackend {
             ));
         }
 
-        let mut conn = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-
         let schema = req
             .database
             .clone()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "public".to_string());
-        let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
-        let _ = conn.execute(set_path.as_str()).await;
+        let stmt_kind = classify_tx_statement(&req.sql);
+        let mut tx_guard = self.tx.lock().await;
 
-        if !is_read_only {
-            let res = conn
-                .execute(req.sql.as_str())
+        if !tx_guard.manual_mode
+            && !tx_guard.in_transaction
+            && matches!(stmt_kind, TxStatementKind::Other)
+        {
+            drop(tx_guard);
+            let mut conn = self
+                .pool
+                .acquire()
                 .await
                 .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
-            let _ = tx
-                .send(QueryChunk {
-                    columns: Vec::new(),
-                    rows: Vec::new(),
-                    batch_index: 0,
-                    is_last: true,
-                    masked_columns: BTreeMap::new(),
-                })
-                .await;
-            return Ok(QuerySummary {
-                success: true,
-                database: schema,
-                total_rows: 0,
-                affected_rows: Some(res.rows_affected()),
-                is_dml_or_ddl: true,
-                duration_ms: started.elapsed().as_millis() as u64,
-                route_node: Some("DIRECT".to_string()),
-                route_description: Some(format!("{} native direct execution", self.engine_label)),
-                masked_columns: BTreeMap::new(),
-                error_message: None,
-            });
+            let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
+            let _ = conn.execute(set_path.as_str()).await;
+            return exec_pg_on_conn(
+                &mut conn,
+                &req.sql,
+                &schema,
+                req.limit,
+                is_read_only,
+                &self.engine_label,
+                &tx,
+                started,
+            )
+            .await;
         }
 
-        let rows = conn
-            .fetch_all(req.sql.as_str())
-            .await
-            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+        if tx_guard.conn.is_none() {
+            let conn = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+            tx_guard.conn = Some(conn);
+        }
 
-        let max_rows = req.limit.map(|l| l as usize).unwrap_or(usize::MAX);
-        let limited: Vec<&PgRow> = rows.iter().take(max_rows).collect();
-        let columns: Vec<String> = if let Some(first) = rows.first() {
-            first.columns().iter().map(|c| c.name().to_string()).collect()
-        } else {
-            match conn.describe(req.sql.as_str()).await {
-                Ok(desc) => desc
-                    .columns()
-                    .iter()
-                    .map(|c| c.name().to_string())
-                    .collect(),
-                Err(_) => Vec::new(),
+        if !tx_guard.in_transaction {
+            if let Some(conn) = tx_guard.conn.as_deref_mut() {
+                let set_path = format!("SET search_path TO \"{}\", public", schema.replace('"', "\"\""));
+                let _ = conn.execute(set_path.as_str()).await;
             }
-        };
+        }
 
-        let mapped: Vec<BTreeMap<String, JsonValue>> =
-            limited.iter().map(|r| pg_row_to_map(r, &columns)).collect();
-        let total_rows = mapped.len();
-        stream_chunks(&columns, mapped, &tx).await;
-
-        Ok(QuerySummary {
-            success: true,
-            database: schema,
-            total_rows,
-            affected_rows: None,
-            is_dml_or_ddl: false,
-            duration_ms: started.elapsed().as_millis() as u64,
-            route_node: Some("DIRECT".to_string()),
-            route_description: Some(format!("{} native direct execution", self.engine_label)),
-            masked_columns: BTreeMap::new(),
-            error_message: None,
-        })
+        match stmt_kind {
+            TxStatementKind::Begin => {
+                if !tx_guard.in_transaction {
+                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
+                        conn.execute("BEGIN")
+                            .await
+                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    }
+                    tx_guard.in_transaction = true;
+                    tx_guard.pending_statements = 0;
+                }
+                send_pg_empty_chunk(&tx).await;
+                return Ok(QuerySummary {
+                    success: true,
+                    database: schema,
+                    total_rows: 0,
+                    affected_rows: Some(0),
+                    is_dml_or_ddl: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    route_node: Some("DIRECT".to_string()),
+                    route_description: Some(format!("{} manual transaction started", self.engine_label)),
+                    masked_columns: BTreeMap::new(),
+                    error_message: None,
+                });
+            }
+            TxStatementKind::Commit => {
+                if tx_guard.in_transaction {
+                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
+                        conn.execute("COMMIT")
+                            .await
+                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    }
+                }
+                tx_guard.in_transaction = false;
+                tx_guard.pending_statements = 0;
+                tx_guard.conn = None;
+                send_pg_empty_chunk(&tx).await;
+                return Ok(QuerySummary {
+                    success: true,
+                    database: schema,
+                    total_rows: 0,
+                    affected_rows: Some(0),
+                    is_dml_or_ddl: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    route_node: Some("DIRECT".to_string()),
+                    route_description: Some(format!("{} transaction committed", self.engine_label)),
+                    masked_columns: BTreeMap::new(),
+                    error_message: None,
+                });
+            }
+            TxStatementKind::Rollback => {
+                if tx_guard.in_transaction {
+                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
+                        conn.execute("ROLLBACK")
+                            .await
+                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    }
+                }
+                tx_guard.in_transaction = false;
+                tx_guard.pending_statements = 0;
+                tx_guard.conn = None;
+                send_pg_empty_chunk(&tx).await;
+                return Ok(QuerySummary {
+                    success: true,
+                    database: schema,
+                    total_rows: 0,
+                    affected_rows: Some(0),
+                    is_dml_or_ddl: true,
+                    duration_ms: started.elapsed().as_millis() as u64,
+                    route_node: Some("DIRECT".to_string()),
+                    route_description: Some(format!("{} transaction rolled back", self.engine_label)),
+                    masked_columns: BTreeMap::new(),
+                    error_message: None,
+                });
+            }
+            TxStatementKind::Other => {
+                if !tx_guard.in_transaction && tx_guard.manual_mode && !is_read_only {
+                    if let Some(conn) = tx_guard.conn.as_deref_mut() {
+                        conn.execute("BEGIN")
+                            .await
+                            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+                    }
+                    tx_guard.in_transaction = true;
+                }
+                let conn = tx_guard
+                    .conn
+                    .as_deref_mut()
+                    .ok_or_else(|| CoreError::Transport("Missing PostgreSQL session connection".to_string()))?;
+                let summary = exec_pg_on_conn(
+                    conn,
+                    &req.sql,
+                    &schema,
+                    req.limit,
+                    is_read_only,
+                    &self.engine_label,
+                    &tx,
+                    started,
+                )
+                .await?;
+                if tx_guard.in_transaction && !is_read_only {
+                    tx_guard.pending_statements = tx_guard.pending_statements.saturating_add(1);
+                } else if !tx_guard.in_transaction && !tx_guard.manual_mode {
+                    tx_guard.conn = None;
+                }
+                return Ok(summary);
+            }
+        }
     }
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
@@ -549,9 +794,160 @@ impl DbBackend for PostgresBackend {
         })
     }
 
+    async fn transaction_status(&self) -> CoreResult<TransactionStatus> {
+        let g = self.tx.lock().await;
+        Ok(TransactionStatus {
+            supported: true,
+            manual_mode: g.manual_mode,
+            in_transaction: g.in_transaction,
+            pending_statements: g.pending_statements,
+        })
+    }
+
+    async fn set_manual_transaction(&self, enabled: bool) -> CoreResult<TransactionStatus> {
+        let mut g = self.tx.lock().await;
+        if !enabled && g.in_transaction {
+            if let Some(conn) = g.conn.as_deref_mut() {
+                let _ = conn.execute("ROLLBACK").await;
+            }
+            g.in_transaction = false;
+            g.pending_statements = 0;
+            g.conn = None;
+        }
+        g.manual_mode = enabled;
+        Ok(TransactionStatus {
+            supported: true,
+            manual_mode: g.manual_mode,
+            in_transaction: g.in_transaction,
+            pending_statements: g.pending_statements,
+        })
+    }
+
+    async fn commit_transaction(&self) -> CoreResult<TransactionStatus> {
+        let mut g = self.tx.lock().await;
+        if g.in_transaction {
+            if let Some(conn) = g.conn.as_deref_mut() {
+                conn.execute("COMMIT")
+                    .await
+                    .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+            }
+            g.in_transaction = false;
+            g.pending_statements = 0;
+            g.conn = None;
+        }
+        Ok(TransactionStatus {
+            supported: true,
+            manual_mode: g.manual_mode,
+            in_transaction: false,
+            pending_statements: 0,
+        })
+    }
+
+    async fn rollback_transaction(&self) -> CoreResult<TransactionStatus> {
+        let mut g = self.tx.lock().await;
+        if g.in_transaction {
+            if let Some(conn) = g.conn.as_deref_mut() {
+                conn.execute("ROLLBACK")
+                    .await
+                    .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+            }
+            g.in_transaction = false;
+            g.pending_statements = 0;
+            g.conn = None;
+        }
+        Ok(TransactionStatus {
+            supported: true,
+            manual_mode: g.manual_mode,
+            in_transaction: false,
+            pending_statements: 0,
+        })
+    }
+
     fn capabilities(&self) -> CapabilityFlags {
         CapabilityFlags::direct_full(self.read_only)
     }
+}
+
+async fn send_pg_empty_chunk(tx: &mpsc::Sender<QueryChunk>) {
+    let _ = tx
+        .send(QueryChunk {
+            columns: Vec::new(),
+            rows: Vec::new(),
+            batch_index: 0,
+            is_last: true,
+            masked_columns: BTreeMap::new(),
+        })
+        .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn exec_pg_on_conn(
+    conn: &mut PgConnection,
+    sql: &str,
+    schema: &str,
+    limit: Option<u32>,
+    is_read_only: bool,
+    engine_label: &str,
+    tx: &mpsc::Sender<QueryChunk>,
+    started: Instant,
+) -> CoreResult<QuerySummary> {
+    if !is_read_only {
+        let res = conn
+            .execute(sql)
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+        send_pg_empty_chunk(tx).await;
+        return Ok(QuerySummary {
+            success: true,
+            database: schema.to_string(),
+            total_rows: 0,
+            affected_rows: Some(res.rows_affected()),
+            is_dml_or_ddl: true,
+            duration_ms: started.elapsed().as_millis() as u64,
+            route_node: Some("DIRECT".to_string()),
+            route_description: Some(format!("{engine_label} native direct execution")),
+            masked_columns: BTreeMap::new(),
+            error_message: None,
+        });
+    }
+
+    let rows = conn
+        .fetch_all(sql)
+        .await
+        .map_err(|e| CoreError::ExecutionFailed(e.to_string()))?;
+
+    let max_rows = limit.map(|l| l as usize).unwrap_or(usize::MAX);
+    let limited: Vec<&PgRow> = rows.iter().take(max_rows).collect();
+    let columns: Vec<String> = if let Some(first) = rows.first() {
+        first.columns().iter().map(|c| c.name().to_string()).collect()
+    } else {
+        match conn.describe(sql).await {
+            Ok(desc) => desc
+                .columns()
+                .iter()
+                .map(|c| c.name().to_string())
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    };
+
+    let mapped: Vec<BTreeMap<String, JsonValue>> =
+        limited.iter().map(|r| pg_row_to_map(r, &columns)).collect();
+    let total_rows = mapped.len();
+    stream_chunks(&columns, mapped, tx).await;
+
+    Ok(QuerySummary {
+        success: true,
+        database: schema.to_string(),
+        total_rows,
+        affected_rows: None,
+        is_dml_or_ddl: false,
+        duration_ms: started.elapsed().as_millis() as u64,
+        route_node: Some("DIRECT".to_string()),
+        route_description: Some(format!("{engine_label} native direct execution")),
+        masked_columns: BTreeMap::new(),
+        error_message: None,
+    })
 }
 
 fn pg_row_to_map(row: &PgRow, columns: &[String]) -> BTreeMap<String, JsonValue> {

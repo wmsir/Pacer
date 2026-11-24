@@ -5,7 +5,9 @@ import type {
   ColumnMeta,
   ConnectionProfile,
   DatabaseMeta,
+  ForeignKeyMeta,
   IndexMeta,
+  RoutineMeta,
   TableMeta,
   WorkspaceProject,
 } from '../api/ipc';
@@ -36,6 +38,8 @@ const props = defineProps<{
   tablesByKey: Record<string, TableMeta[]>;
   columnsByKey: Record<string, ColumnMeta[]>;
   indexesByKey: Record<string, IndexMeta[]>;
+  foreignKeysByKey?: Record<string, ForeignKeyMeta[]>;
+  routinesByKey?: Record<string, RoutineMeta[]>;
   expandedProfiles: Record<string, boolean>;
   expandedDatabases: Record<string, boolean>;
   expandedTables: Record<string, boolean>;
@@ -89,6 +93,10 @@ const emit = defineEmits<{
   (e: 'open-alter-table', profile: ConnectionProfile, dbName: string, tableName: string): void;
   (e: 'open-er-diagram', profile: ConnectionProfile, dbName: string): void;
   (e: 'open-server-monitor', profile: ConnectionProfile): void;
+  (e: 'open-data-diff', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'open-data-transfer', profile: ConnectionProfile, dbName: string, tableName?: string): void;
+  (e: 'open-data-dict', profile: ConnectionProfile, dbName: string, tableName?: string): void;
+  (e: 'inspect-routine', profile: ConnectionProfile, dbName: string, routine: RoutineMeta): void;
   (e: 'dump-sql', profile: ConnectionProfile, dbName: string, tableNames: string[] | null, includeData: boolean): void;
   (e: 'run-sql-file', profile: ConnectionProfile, dbName: string): void;
   (e: 'open-redis-new-key', profile: ConnectionProfile, dbName: string): void;
@@ -118,8 +126,18 @@ function connStatusTitle(profile: ConnectionProfile): string {
 
 const { t } = useI18n();
 const search = ref('');
+const objectFilter = ref<'all' | 'table' | 'view'>('all');
+const expandedRoutinesGroup = ref<Record<string, boolean>>({});
 const selectedNodeKey = ref('');
 const favoritesCollapsed = ref(false);
+
+function toggleRoutinesGroup(key: string) {
+  expandedRoutinesGroup.value[key] = !expandedRoutinesGroup.value[key];
+}
+
+function isViewTable(tbl: TableMeta): boolean {
+  return (tbl.tableType ?? '').toUpperCase().includes('VIEW');
+}
 
 function isFavorited(profileId: string, dbName: string, tableName: string): boolean {
   return Boolean(
@@ -216,11 +234,17 @@ const visibleProjects = computed(() => {
 });
 
 function filterTables(profileId: string, dbName: string): TableMeta[] {
-  const list = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
+  const rawList = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
+  const typeFiltered =
+    objectFilter.value === 'all'
+      ? rawList
+      : objectFilter.value === 'view'
+        ? rawList.filter((tb) => isViewTable(tb))
+        : rawList.filter((tb) => !isViewTable(tb));
   const q = search.value.trim().toLowerCase();
-  if (!q) return list;
-  const matched = list.filter((tb) => tb.name.toLowerCase().includes(q));
-  return matched.length > 0 ? matched : list;
+  if (!q) return typeFiltered;
+  const matched = typeFiltered.filter((tb) => tb.name.toLowerCase().includes(q));
+  return matched.length > 0 ? matched : typeFiltered;
 }
 
 function openProjectContext(ev: MouseEvent, project: WorkspaceProject) {
@@ -327,6 +351,29 @@ function closeContext() {
         class="field"
         placeholder="搜索项目、数据源、库名或表名..."
       />
+      <div class="tree-obj-filter-row">
+        <button
+          class="tree-filter-chip"
+          :class="{ active: objectFilter === 'all' }"
+          @click="objectFilter = 'all'"
+        >
+          全部
+        </button>
+        <button
+          class="tree-filter-chip"
+          :class="{ active: objectFilter === 'table' }"
+          @click="objectFilter = 'table'"
+        >
+          表
+        </button>
+        <button
+          class="tree-filter-chip"
+          :class="{ active: objectFilter === 'view' }"
+          @click="objectFilter = 'view'"
+        >
+          视图
+        </button>
+      </div>
     </div>
 
     <div class="tw-body">
@@ -576,6 +623,12 @@ function closeContext() {
                       </span>
                       <IdeIcon :name="isRedisProfile(p) ? 'key' : 'table'" :size="13" />
                       <span class="tree-label">{{ tbl.name }}</span>
+                      <span
+                        v-if="!isRedisProfile(p) && isViewTable(tbl)"
+                        class="tree-view-badge"
+                      >
+                        VIEW
+                      </span>
                       <span class="tree-meta">
                         {{
                           isRedisProfile(p)
@@ -601,7 +654,7 @@ function closeContext() {
                       </span>
                     </div>
 
-                    <!-- Columns & Indexes -->
+                    <!-- Columns, Indexes & Foreign Keys -->
                     <div v-if="expandedTables[`${p.id}:${db.name}:${tbl.name}`]">
                       <div
                         v-for="col in columnsByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
@@ -626,6 +679,59 @@ function closeContext() {
                           {{ idx.name }}
                         </span>
                         <span class="tree-meta">{{ idx.columns.join(',') }}</span>
+                      </div>
+
+                      <div
+                        v-for="fk in foreignKeysByKey?.[`${p.id}:${db.name}:${tbl.name}`] ?? []"
+                        :key="`fk-${fk.name}-${fk.columnName}`"
+                        class="tree-row"
+                        style="padding-left: 66px"
+                        :title="`外键 ${fk.name}: ${fk.columnName} -> ${fk.referencedTable}.${fk.referencedColumn}`"
+                      >
+                        <span style="font-size: 11px; flex-shrink: 0">🔗</span>
+                        <span class="tree-label" style="color: var(--accent)">
+                          {{ fk.columnName }}
+                        </span>
+                        <span class="tree-meta">→ {{ fk.referencedTable }}.{{ fk.referencedColumn }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- Routines / Functions / Triggers Group -->
+                  <div
+                    v-if="
+                      !isRedisProfile(p) &&
+                      (routinesByKey?.[`${p.id}:${db.name}`]?.length ?? 0) > 0
+                    "
+                  >
+                    <div
+                      class="tree-row"
+                      style="padding-left: 48px"
+                      @click="toggleRoutinesGroup(`${p.id}:${db.name}`)"
+                    >
+                      <span class="tree-chevron">
+                        <IdeIcon
+                          :name="expandedRoutinesGroup[`${p.id}:${db.name}`] ? 'chevron-down' : 'chevron-right'"
+                          :size="11"
+                        />
+                      </span>
+                      <span style="font-size: 11px">⚙️</span>
+                      <span class="tree-label" style="color: var(--text-secondary)">
+                        过程 / 函数 / 触发器 ({{ routinesByKey?.[`${p.id}:${db.name}`]?.length ?? 0 }})
+                      </span>
+                    </div>
+                    <div v-if="expandedRoutinesGroup[`${p.id}:${db.name}`]">
+                      <div
+                        v-for="rt in routinesByKey?.[`${p.id}:${db.name}`] ?? []"
+                        :key="`rt-${rt.kind}-${rt.name}`"
+                        class="tree-row"
+                        style="padding-left: 66px"
+                        :title="`${rt.kind}: ${rt.name}${rt.comment ? ` — ${rt.comment}` : ''}`"
+                        @click="emit('inspect-routine', p, db.name, rt)"
+                      >
+                        <span class="tree-routine-tag">{{ rt.kind.slice(0, 4) }}</span>
+                        <span class="tree-label">{{ rt.name }}</span>
+                        <span class="tree-meta">{{ rt.returnType || '' }}</span>
                       </div>
                     </div>
                   </div>
@@ -737,6 +843,12 @@ function closeContext() {
           <button class="dropdown-item" @click="emit('open-er-diagram', ctxMenu.profile, ctxMenu.dbName)">
             <span>🗺️ 查看数据库 ER 关系图...</span>
           </button>
+          <button class="dropdown-item" @click="emit('open-data-dict', ctxMenu.profile, ctxMenu.dbName)">
+            <span>📘 生成并导出数据字典 (.md / .html)...</span>
+          </button>
+          <button class="dropdown-item" @click="emit('open-data-transfer', ctxMenu.profile, ctxMenu.dbName)">
+            <span>🚚 跨库数据迁移向导...</span>
+          </button>
           <div class="dropdown-sep" />
           <button class="dropdown-item" @click="emit('dump-sql', ctxMenu.profile, ctxMenu.dbName, null, false)">
             <span>💾 转储 SQL 文件（仅结构 .sql）...</span>
@@ -816,6 +928,24 @@ function closeContext() {
             @click="emit('open-schema-diff', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
             <span>⚖️ 表结构对比与同步...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('open-data-diff', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>🧬 数据内容对比与同步 SQL...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('open-data-transfer', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>🚚 迁移此表到其他库...</span>
+          </button>
+          <button
+            class="dropdown-item"
+            @click="emit('open-data-dict', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
+          >
+            <span>📘 导出此表数据字典...</span>
           </button>
           <button
             class="dropdown-item"

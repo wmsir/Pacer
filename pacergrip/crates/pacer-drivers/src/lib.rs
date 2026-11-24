@@ -2,6 +2,7 @@ pub mod mysql;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
+pub mod ssh_tunnel;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,6 +15,7 @@ pub use mysql::MySqlBackend;
 pub use postgres::PostgresBackend;
 pub use redis::RedisBackend;
 pub use sqlite::{create_demo_sqlite_db, SqliteBackend};
+pub use ssh_tunnel::SshTunnelHandle;
 
 pub(crate) const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
 
@@ -81,6 +83,68 @@ pub(crate) fn build_connection_init_stmts(
         }
     }
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TxStatementKind {
+    Begin,
+    Commit,
+    Rollback,
+    Other,
+}
+
+/// Strips leading `--` and `/* ... */` comments to inspect the opening transaction keyword.
+pub(crate) fn classify_tx_statement(sql: &str) -> TxStatementKind {
+    let mut s = sql.trim_start();
+    loop {
+        if let Some(rest) = s.strip_prefix("--") {
+            match rest.find('\n') {
+                Some(idx) => s = rest[idx + 1..].trim_start(),
+                None => return TxStatementKind::Other,
+            }
+        } else if let Some(rest) = s.strip_prefix("/*") {
+            match rest.find("*/") {
+                Some(idx) => s = rest[idx + 2..].trim_start(),
+                None => return TxStatementKind::Other,
+            }
+        } else {
+            break;
+        }
+    }
+
+    let cleaned = s.trim_end_matches(|c: char| c.is_whitespace() || c == ';');
+    let tokens: Vec<String> = cleaned
+        .split_whitespace()
+        .take(3)
+        .map(|t| t.to_ascii_uppercase())
+        .collect();
+    if tokens.is_empty() {
+        return TxStatementKind::Other;
+    }
+
+    match tokens[0].as_str() {
+        "BEGIN" => {
+            if tokens.len() == 1
+                || matches!(tokens[1].as_str(), "WORK" | "TRANSACTION" | "DEFERRED" | "IMMEDIATE" | "EXCLUSIVE")
+            {
+                TxStatementKind::Begin
+            } else {
+                TxStatementKind::Other
+            }
+        }
+        "START" if tokens.get(1).map(String::as_str) == Some("TRANSACTION") => {
+            TxStatementKind::Begin
+        }
+        "COMMIT" | "END" => TxStatementKind::Commit,
+        "ROLLBACK" => {
+            if tokens.get(1).map(String::as_str) == Some("TO") {
+                TxStatementKind::Other
+            } else {
+                TxStatementKind::Rollback
+            }
+        }
+        _ => TxStatementKind::Other,
+    }
 }
 
 /// Connects directly to a supported database engine using native Rust async drivers.
@@ -798,5 +862,152 @@ mod tests {
         assert_eq!(crate::sqlite::adaptive_chunk_size(10), 500);
         assert_eq!(crate::sqlite::adaptive_chunk_size(76), 78);
         assert_eq!(crate::sqlite::adaptive_chunk_size(300), 25);
+    }
+
+    #[test]
+    fn test_classify_tx_statement_with_comments() {
+        assert_eq!(classify_tx_statement("BEGIN;"), TxStatementKind::Begin);
+        assert_eq!(
+            classify_tx_statement("-- comment\nSTART TRANSACTION;"),
+            TxStatementKind::Begin
+        );
+        assert_eq!(classify_tx_statement("/* x */ COMMIT;"), TxStatementKind::Commit);
+        assert_eq!(classify_tx_statement("ROLLBACK;"), TxStatementKind::Rollback);
+        assert_eq!(
+            classify_tx_statement("ROLLBACK TO sp1;"),
+            TxStatementKind::Other
+        );
+        assert_eq!(
+            classify_tx_statement("SELECT 1;"),
+            TxStatementKind::Other
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_foreign_keys_routines_and_acid_transactions() {
+        let tmp = std::env::temp_dir().join(format!(
+            "pacergrip_acid_fk_{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+        create_demo_sqlite_db(&tmp).await.unwrap();
+
+        let backend = connect_direct(&sqlite_config(&tmp, false), None)
+            .await
+            .unwrap();
+
+        // 1. Foreign keys on `orders` -> `customers(id)`
+        let fks = backend.list_foreign_keys("main", "orders").await.unwrap();
+        assert!(fks.iter().any(|fk| {
+            fk.column_name == "customer_id"
+                && fk.referenced_table == "customers"
+                && fk.referenced_column == "id"
+        }));
+
+        // 2. Create a trigger and verify `list_routines`
+        let (tx_trig, _) = mpsc::channel(4);
+        backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "CREATE TRIGGER trg_customers_touch AFTER UPDATE ON customers BEGIN SELECT 1; END;".to_string(),
+                    limit: None,
+                },
+                tx_trig,
+            )
+            .await
+            .unwrap();
+        let routines = backend.list_routines("main").await.unwrap();
+        assert!(routines
+            .iter()
+            .any(|r| r.name == "trg_customers_touch" && r.kind == "TRIGGER"));
+
+        // 3. ACID manual transaction mode: insert -> visible -> rollback -> gone -> insert -> commit -> persists
+        let st = backend.set_manual_transaction(true).await.unwrap();
+        assert!(st.supported && st.manual_mode && !st.in_transaction);
+
+        let (tx_ins, _) = mpsc::channel(4);
+        backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Temp Tx User', 'temp@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
+                    limit: None,
+                },
+                tx_ins,
+            )
+            .await
+            .unwrap();
+
+        let st_mid = backend.transaction_status().await.unwrap();
+        assert!(st_mid.in_transaction);
+        assert_eq!(st_mid.pending_statements, 1);
+
+        // Visible inside the same transaction
+        let (tx_sel1, mut rx_sel1) = mpsc::channel(4);
+        let sum1 = backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
+                    limit: Some(10),
+                },
+                tx_sel1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(sum1.total_rows, 1);
+        let _ = rx_sel1.recv().await;
+
+        // Rollback removes it
+        let st_rb = backend.rollback_transaction().await.unwrap();
+        assert!(!st_rb.in_transaction && st_rb.pending_statements == 0);
+
+        let (tx_sel2, _rx_sel2) = mpsc::channel(4);
+        let sum2 = backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
+                    limit: Some(10),
+                },
+                tx_sel2,
+            )
+            .await
+            .unwrap();
+        assert_eq!(sum2.total_rows, 0);
+
+        // Re-insert and commit -> persists
+        let (tx_ins2, _) = mpsc::channel(4);
+        backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Committed User', 'committed@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
+                    limit: None,
+                },
+                tx_ins2,
+            )
+            .await
+            .unwrap();
+        let st_cm = backend.commit_transaction().await.unwrap();
+        assert!(!st_cm.in_transaction && st_cm.pending_statements == 0);
+
+        let (tx_sel3, _) = mpsc::channel(4);
+        let sum3 = backend
+            .execute_query(
+                QueryReq {
+                    database: Some("main".to_string()),
+                    sql: "SELECT * FROM customers WHERE email = 'committed@tx.local';".to_string(),
+                    limit: Some(10),
+                },
+                tx_sel3,
+            )
+            .await
+            .unwrap();
+        assert_eq!(sum3.total_rows, 1);
+
+        drop(backend);
+        let _ = std::fs::remove_file(&tmp);
     }
 }

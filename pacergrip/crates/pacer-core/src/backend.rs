@@ -3,8 +3,9 @@ use tokio::sync::mpsc;
 
 use crate::error::CoreResult;
 use crate::model::{
-    CapabilityFlags, ColumnMeta, DatabaseMeta, ExplainResult, IndexMeta, ObjectSearchHit,
-    PingMetrics, QueryChunk, QueryReq, QuerySummary, TableMeta,
+    CapabilityFlags, ColumnMeta, DatabaseMeta, ExplainResult, ForeignKeyMeta, IndexMeta,
+    ObjectSearchHit, PingMetrics, QueryChunk, QueryReq, QuerySummary, RoutineMeta, TableMeta,
+    TransactionStatus,
 };
 
 /// Unified database backend abstraction hiding direct socket drivers vs. Pacer governance proxy.
@@ -22,6 +23,18 @@ pub trait DbBackend: Send + Sync {
         Ok(Vec::new())
     }
 
+    async fn list_foreign_keys(
+        &self,
+        _db: &str,
+        _table: &str,
+    ) -> CoreResult<Vec<ForeignKeyMeta>> {
+        Ok(Vec::new())
+    }
+
+    async fn list_routines(&self, _db: &str) -> CoreResult<Vec<RoutineMeta>> {
+        Ok(Vec::new())
+    }
+
     async fn search_objects(&self, _db: &str, _query: &str) -> CoreResult<Vec<ObjectSearchHit>> {
         Ok(Vec::new())
     }
@@ -35,6 +48,22 @@ pub trait DbBackend: Send + Sync {
     ) -> CoreResult<QuerySummary>;
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult>;
+
+    async fn transaction_status(&self) -> CoreResult<TransactionStatus> {
+        Ok(TransactionStatus::default())
+    }
+
+    async fn set_manual_transaction(&self, _enabled: bool) -> CoreResult<TransactionStatus> {
+        Ok(TransactionStatus::default())
+    }
+
+    async fn commit_transaction(&self) -> CoreResult<TransactionStatus> {
+        Ok(TransactionStatus::default())
+    }
+
+    async fn rollback_transaction(&self) -> CoreResult<TransactionStatus> {
+        Ok(TransactionStatus::default())
+    }
 
     fn capabilities(&self) -> CapabilityFlags;
 }

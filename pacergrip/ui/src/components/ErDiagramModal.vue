@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import type { ColumnMeta, ConnectionProfile, TableMeta } from '../api/ipc';
+import type { ColumnMeta, ConnectionProfile, ForeignKeyMeta, TableMeta } from '../api/ipc';
 import IdeIcon from './IdeIcon.vue';
 import {
   downloadTextFile,
@@ -15,6 +15,7 @@ const props = defineProps<{
   dbName: string;
   tables: TableMeta[];
   columnsByKey: Record<string, ColumnMeta[]>;
+  foreignKeysByKey?: Record<string, ForeignKeyMeta[]>;
 }>();
 
 const emit = defineEmits<{
@@ -49,8 +50,9 @@ const baseGraph = computed(() => {
   const filteredTables = q
     ? props.tables.filter((t) => t.name.toLowerCase().includes(q))
     : props.tables;
-  return inferErRelationships(
-    filteredTables.slice(0, 48).map((tbl) => ({
+  const visibleList = filteredTables.slice(0, 48);
+  const graph = inferErRelationships(
+    visibleList.map((tbl) => ({
       tableName: tbl.name,
       comment: tbl.comment,
       estimatedRows: tbl.estimatedRows,
@@ -58,6 +60,38 @@ const baseGraph = computed(() => {
         props.columnsByKey[`${props.profile!.id}:${props.dbName}:${tbl.name}`] ?? [],
     })),
   );
+  const nodeNames = new Set(graph.nodes.map((n) => n.tableName.toLowerCase()));
+  const explicitEdges: ErEdge[] = [];
+  const seen = new Set<string>();
+  for (const tbl of visibleList) {
+    const fks =
+      props.foreignKeysByKey?.[`${props.profile!.id}:${props.dbName}:${tbl.name}`] ?? [];
+    for (const fk of fks) {
+      if (!nodeNames.has(fk.referencedTable.toLowerCase())) continue;
+      const sig = `${tbl.name.toLowerCase()}->${fk.columnName.toLowerCase()}->${fk.referencedTable.toLowerCase()}`;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      explicitEdges.push({
+        id: `fk:${tbl.name}:${fk.name}:${fk.columnName}`,
+        fromTable: tbl.name,
+        fromColumn: fk.columnName,
+        toTable: fk.referencedTable,
+        toColumn: fk.referencedColumn,
+        inferredReason: `外键约束 ${fk.name}`,
+      });
+    }
+  }
+  const mergedEdges = [
+    ...explicitEdges,
+    ...graph.edges.filter((e) => {
+      const sig = `${e.fromTable.toLowerCase()}->${e.fromColumn.toLowerCase()}->${e.toTable.toLowerCase()}`;
+      return !seen.has(sig);
+    }),
+  ];
+  return {
+    nodes: graph.nodes,
+    edges: mergedEdges,
+  };
 });
 
 const positionedNodes = computed(() =>

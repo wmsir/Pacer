@@ -8,16 +8,17 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
-use tokio::sync::{mpsc, RwLock as AsyncRwLock};
+use tokio::sync::{mpsc, oneshot, RwLock as AsyncRwLock};
 use uuid::Uuid;
 
 use pacer_core::{
     AuditEvent, CapabilityFlags, ColumnMeta, ConnectionFingerprint, ConnectionMode,
     ConnectionOptionsConfig, ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType,
     DbeaverDiscoveryItem, DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry,
-    FileStatsDto, IndexMeta, MarkdownSqlBlock, ObjectSearchHit, OpenedFileDto, PingMetrics,
-    PreExecuteDecision, QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary, SshTunnelConfig,
-    SslConfig, TableMeta, WorkspaceFileEntry, WorkspaceProject,
+    FileStatsDto, ForeignKeyMeta, IndexMeta, MarkdownSqlBlock, ObjectSearchHit, OpenedFileDto,
+    PingMetrics, PreExecuteDecision, QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary,
+    RoutineMeta, SshTunnelConfig, SslConfig, TableMeta, TransactionStatus, WorkspaceFileEntry,
+    WorkspaceProject,
 };
 use pacer_dbeaver_io::{
     build_jdbc_url, build_sql_dump_footer, build_sql_dump_header, discover_local_dbeaver_files,
@@ -55,6 +56,7 @@ pub struct AppState {
     /// Subset of passwords persisted to disk (`Save: Forever`).
     pub persisted_passwords: RwLock<HashMap<String, String>>,
     pub active_backends: AsyncRwLock<HashMap<String, Arc<dyn DbBackend>>>,
+    pub running_queries: AsyncRwLock<HashMap<String, oneshot::Sender<()>>>,
     pub history: RwLock<Vec<QueryHistoryEntry>>,
     pub extensions: ExtensionRegistry,
     pub storage_dir: PathBuf,
@@ -97,6 +99,7 @@ impl AppState {
             passwords: RwLock::new(persisted.clone()),
             persisted_passwords: RwLock::new(persisted),
             active_backends: AsyncRwLock::new(HashMap::new()),
+            running_queries: AsyncRwLock::new(HashMap::new()),
             history: RwLock::new(history),
             extensions: ExtensionRegistry::new(),
             storage_dir,
@@ -310,7 +313,7 @@ impl AppState {
             .get(profile_id)
             .cloned();
 
-        let direct = match &profile.mode {
+        let mut direct = match &profile.mode {
             ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } => d.clone(),
             ConnectionMode::PacerManaged { .. } => {
                 return Err(
@@ -319,6 +322,17 @@ impl AppState {
                 )
             }
         };
+
+        if let Some(ref mut ssh_cfg) = direct.ssh {
+            if let Ok(pwds) = self.passwords.read() {
+                if ssh_cfg.password.is_none() {
+                    ssh_cfg.password = pwds.get(&format!("ssh_pwd:{profile_id}")).cloned();
+                }
+                if ssh_cfg.passphrase.is_none() {
+                    ssh_cfg.passphrase = pwds.get(&format!("ssh_pass:{profile_id}")).cloned();
+                }
+            }
+        }
 
         let effective_pwd = if direct.auth_type.as_deref() == Some("noAuth") {
             None
@@ -764,6 +778,39 @@ pub async fn save_connection(
     };
     direct.has_saved_password = has_saved_password;
 
+    if let Some(ref ssh_cfg) = direct.ssh {
+        let mut pwd_guard = state.passwords.write().map_err(|e| e.to_string())?;
+        let mut vault_guard = state
+            .persisted_passwords
+            .write()
+            .map_err(|e| e.to_string())?;
+        let ssh_pwd_key = format!("ssh_pwd:{id}");
+        let ssh_pass_key = format!("ssh_pass:{id}");
+        if save_mode == "never" || !ssh_cfg.enabled {
+            pwd_guard.remove(&ssh_pwd_key);
+            pwd_guard.remove(&ssh_pass_key);
+            vault_guard.remove(&ssh_pwd_key);
+            vault_guard.remove(&ssh_pass_key);
+        } else {
+            if let Some(ref sp) = ssh_cfg.password {
+                if !sp.is_empty() {
+                    pwd_guard.insert(ssh_pwd_key.clone(), sp.clone());
+                    if save_mode == "forever" {
+                        vault_guard.insert(ssh_pwd_key, sp.clone());
+                    }
+                }
+            }
+            if let Some(ref kp) = ssh_cfg.passphrase {
+                if !kp.is_empty() {
+                    pwd_guard.insert(ssh_pass_key.clone(), kp.clone());
+                    if save_mode == "forever" {
+                        vault_guard.insert(ssh_pass_key, kp.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let fingerprint = ConnectionFingerprint {
         db_type: db_type.clone(),
         host: direct.host.clone(),
@@ -843,13 +890,23 @@ pub async fn test_connection_draft_cmd(
     draft: ConnectionDraft,
     password: Option<String>,
 ) -> Result<PingMetrics, String> {
-    let (_, direct, url_password) = resolve_direct_from_draft(&draft);
+    let (_, mut direct, url_password) = resolve_direct_from_draft(&draft);
     let effective_pwd = resolve_draft_password(
         &state,
         draft.id.as_deref(),
         direct.auth_type.as_deref(),
         password.or(url_password),
     )?;
+    if let (Some(ref mut ssh_cfg), Some(ref existing_id)) = (&mut direct.ssh, &draft.id) {
+        if let Ok(pwds) = state.passwords.read() {
+            if ssh_cfg.password.is_none() {
+                ssh_cfg.password = pwds.get(&format!("ssh_pwd:{existing_id}")).cloned();
+            }
+            if ssh_cfg.passphrase.is_none() {
+                ssh_cfg.passphrase = pwds.get(&format!("ssh_pass:{existing_id}")).cloned();
+            }
+        }
+    }
 
     let backend = connect_direct(&direct, effective_pwd.as_deref())
         .await
@@ -863,13 +920,23 @@ pub async fn list_databases_draft_cmd(
     draft: ConnectionDraft,
     password: Option<String>,
 ) -> Result<Vec<DatabaseMeta>, String> {
-    let (_, direct, url_password) = resolve_direct_from_draft(&draft);
+    let (_, mut direct, url_password) = resolve_direct_from_draft(&draft);
     let effective_pwd = resolve_draft_password(
         &state,
         draft.id.as_deref(),
         direct.auth_type.as_deref(),
         password.or(url_password),
     )?;
+    if let (Some(ref mut ssh_cfg), Some(ref existing_id)) = (&mut direct.ssh, &draft.id) {
+        if let Ok(pwds) = state.passwords.read() {
+            if ssh_cfg.password.is_none() {
+                ssh_cfg.password = pwds.get(&format!("ssh_pwd:{existing_id}")).cloned();
+            }
+            if ssh_cfg.passphrase.is_none() {
+                ssh_cfg.passphrase = pwds.get(&format!("ssh_pass:{existing_id}")).cloned();
+            }
+        }
+    }
 
     let backend = connect_direct(&direct, effective_pwd.as_deref())
         .await
@@ -1259,12 +1326,14 @@ pub async fn get_table_ddl_cmd(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_sql_cmd(
     state: State<'_, AppState>,
     profile_id: String,
     db_name: Option<String>,
     sql: String,
     limit: Option<u32>,
+    query_id: Option<String>,
     on_chunk: Channel<QueryChunk>,
 ) -> Result<QuerySummary, String> {
     let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
@@ -1293,16 +1362,34 @@ pub async fn execute_sql_cmd(
         }
     });
 
-    let exec_result = backend
-        .execute_query(
-            QueryReq {
-                database: db_name.clone(),
-                sql: sql.clone(),
-                limit,
-            },
-            tx,
-        )
-        .await;
+    let cancel_rx_opt = if let Some(ref qid) = query_id {
+        let (ctx, crx) = oneshot::channel::<()>();
+        state.running_queries.write().await.insert(qid.clone(), ctx);
+        Some(crx)
+    } else {
+        None
+    };
+
+    let req = QueryReq {
+        database: db_name.clone(),
+        sql: sql.clone(),
+        limit,
+    };
+    let exec_result = match cancel_rx_opt {
+        Some(cancel_rx) => {
+            tokio::select! {
+                res = backend.execute_query(req, tx) => res,
+                _ = cancel_rx => Err(CoreError::ExecutionFailed(
+                    "QUERY_CANCELLED: 用户已手动中止当前查询".to_string(),
+                )),
+            }
+        }
+        None => backend.execute_query(req, tx).await,
+    };
+
+    if let Some(ref qid) = query_id {
+        state.running_queries.write().await.remove(qid);
+    }
 
     let _ = forwarder.await;
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -1416,6 +1503,80 @@ pub async fn list_indexes_cmd(
         .list_indexes(&db_name, &table_name)
         .await
         .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn cancel_query_cmd(
+    state: State<'_, AppState>,
+    query_id: String,
+) -> Result<bool, String> {
+    let sender = state.running_queries.write().await.remove(&query_id);
+    if let Some(tx) = sender {
+        Ok(tx.send(()).is_ok())
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+pub async fn list_foreign_keys_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: String,
+    table_name: String,
+) -> Result<Vec<ForeignKeyMeta>, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend
+        .list_foreign_keys(&db_name, &table_name)
+        .await
+        .map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn list_routines_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: String,
+) -> Result<Vec<RoutineMeta>, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend.list_routines(&db_name).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn get_transaction_status_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<TransactionStatus, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend.transaction_status().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn set_transaction_mode_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    manual: bool,
+) -> Result<TransactionStatus, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend.set_manual_transaction(manual).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn commit_transaction_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<TransactionStatus, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend.commit_transaction().await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn rollback_transaction_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+) -> Result<TransactionStatus, String> {
+    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    backend.rollback_transaction().await.map_err(map_err)
 }
 
 #[tauri::command]

@@ -7,6 +7,7 @@ import {
   pickSaveXlsxPath,
   type ConnectionProfile,
   type EnvLevel,
+  type ForeignKeyMeta,
   type QueryHistoryEntry,
   type QuerySummary,
   type ScriptAnalysis,
@@ -14,6 +15,12 @@ import {
 } from '../api/ipc';
 import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
+import {
+  appendWhereCondition,
+  isExplainResult,
+  parseExplainPlanVisual,
+  type VisualExplainPlan,
+} from '../utils/commercialTools';
 import {
   buildChartDataFromRows,
   computeFixedVirtualRange,
@@ -48,9 +55,15 @@ export interface ResultTabItem {
   sourceTable: string | null;
   availableTables: string[];
   primaryKeys: string[];
+  foreignKeys?: ForeignKeyMeta[];
   columns: string[];
   rows: Record<string, unknown>[];
   summary: QuerySummary | null;
+  serverWhere?: string;
+  serverOrderBy?: string;
+  pageIndex?: number;
+  pageSize?: number;
+  totalRowCount?: number | null;
 }
 
 export interface ConsoleLogEntry {
@@ -111,6 +124,14 @@ const emit = defineEmits<{
   (e: 'run-console-sql', sql: string): void;
   (e: 'send-sql-to-editor', sql: string): void;
   (e: 'rerun-result', tab: ResultTabItem): void;
+  (
+    e: 'server-query-page',
+    tab: ResultTabItem,
+    opts: { where: string; orderBy: string; pageIndex: number; pageSize: number },
+  ): void;
+  (e: 'server-count-rows', tab: ResultTabItem): void;
+  (e: 'jump-foreign-key', tab: ResultTabItem, fk: ForeignKeyMeta, cellValue: unknown): void;
+  (e: 'open-data-diff', tab: ResultTabItem): void;
   (e: 'notify', message: string): void;
 }>();
 
@@ -118,9 +139,13 @@ const { t } = useI18n();
 
 // ==================== Grid State ====================
 const filterText = ref('');
+const serverWhereInput = ref('');
+const serverOrderByInput = ref('');
 const sortCol = ref<string | null>(null);
 const sortDir = ref<'asc' | 'desc'>('asc');
 const transposeMode = ref(false);
+const recordFieldFilter = ref('');
+const visualExplainMode = ref(false);
 const chartMode = ref(false);
 const chartType = ref<QuickChartType>('bar');
 const chartLabelCol = ref('');
@@ -131,6 +156,9 @@ const selectedRowOrigIdx = ref<number>(0);
 const selectedIsInserted = ref<boolean>(false);
 const selectedColName = ref<string>('');
 const valueViewerDraft = ref<string>('');
+const selectedRowIndices = ref<number[]>([]);
+const lastClickedDisplayIdx = ref<number | null>(null);
+const pinnedColsByTab = reactive<Record<string, string[]>>({});
 
 // Inline editing state
 const editingCell = ref<{
@@ -248,6 +276,85 @@ function showOnlyFirst10Columns() {
   const res = currentResult.value;
   if (!res) return;
   hiddenColsByTab[res.id] = res.columns.slice(10);
+}
+
+const currentPinnedCols = computed(() => {
+  const res = currentResult.value;
+  if (!res) return [];
+  const visSet = new Set(visibleColumns.value);
+  return (pinnedColsByTab[res.id] ?? []).filter((c) => visSet.has(c));
+});
+
+const pinnedColumnsSet = computed(() => new Set(currentPinnedCols.value));
+
+const scrollableColumns = computed(() =>
+  visibleColumns.value.filter((c) => !pinnedColumnsSet.value.has(c)),
+);
+
+const fkByColMap = computed(() => {
+  const map = new Map<string, ForeignKeyMeta>();
+  for (const fk of currentResult.value?.foreignKeys ?? []) {
+    if (!map.has(fk.columnName.toLowerCase())) {
+      map.set(fk.columnName.toLowerCase(), fk);
+    }
+  }
+  return map;
+});
+
+function getFkForCol(col: string): ForeignKeyMeta | undefined {
+  return fkByColMap.value.get(col.toLowerCase());
+}
+
+function togglePinColumn(col: string) {
+  const res = currentResult.value;
+  if (!res || !col) return;
+  const list = [...(pinnedColsByTab[res.id] ?? [])];
+  const idx = list.indexOf(col);
+  if (idx >= 0) {
+    list.splice(idx, 1);
+    emit('notify', `已取消固定列 [${col}]`);
+  } else {
+    list.push(col);
+    emit('notify', `已固定列 [${col}] 到左侧`);
+  }
+  pinnedColsByTab[res.id] = list;
+}
+
+function clearPinnedColumns() {
+  const res = currentResult.value;
+  if (!res) return;
+  delete pinnedColsByTab[res.id];
+}
+
+const isCurrentExplain = computed(() => {
+  const res = currentResult.value;
+  return Boolean(res && isExplainResult(res.columns, res.sql));
+});
+
+const visualExplainPlan = computed<VisualExplainPlan | null>(() => {
+  const res = currentResult.value;
+  if (!res || !isCurrentExplain.value) return null;
+  return parseExplainPlanVisual(res.columns, res.rows, res.engineKey);
+});
+
+const recordFormColumns = computed(() => {
+  const q = recordFieldFilter.value.trim().toLowerCase();
+  if (!q) return visibleColumns.value;
+  return visibleColumns.value.filter((c) => c.toLowerCase().includes(q));
+});
+
+const currentTransposeDisplayPos = computed(() => {
+  const pos = displayedRows.value.findIndex((r) => r.origIdx === selectedRowOrigIdx.value);
+  return pos >= 0 ? pos : 0;
+});
+
+function stepTransposeRow(delta: -1 | 1) {
+  const list = displayedRows.value;
+  if (list.length === 0) return;
+  const nextPos = Math.max(0, Math.min(list.length - 1, currentTransposeDisplayPos.value + delta));
+  const item = list[nextPos];
+  if (!item) return;
+  selectCell(false, item.origIdx, selectedColName.value || visibleColumns.value[0] || '');
 }
 
 function colStyle(col: string) {
@@ -506,6 +613,148 @@ function toggleDeleteSelectedRow() {
   }
 }
 
+const selectedRowSet = computed(() => new Set(selectedRowIndices.value));
+
+function onRowNumClick(ev: MouseEvent, origIdx: number, displayIdx: number) {
+  selectedIsInserted.value = false;
+  selectedRowOrigIdx.value = origIdx;
+  if (selectedColName.value) {
+    syncValueViewerDraft();
+  }
+  const rows = displayedRows.value;
+  if (ev.shiftKey && lastClickedDisplayIdx.value !== null) {
+    const start = Math.min(lastClickedDisplayIdx.value, displayIdx);
+    const end = Math.max(lastClickedDisplayIdx.value, displayIdx);
+    const merged = new Set(selectedRowIndices.value);
+    for (let i = start; i <= end; i += 1) {
+      if (rows[i]) merged.add(rows[i].origIdx);
+    }
+    selectedRowIndices.value = [...merged];
+  } else if (ev.ctrlKey || ev.metaKey) {
+    const idx = selectedRowIndices.value.indexOf(origIdx);
+    if (idx >= 0) {
+      selectedRowIndices.value = selectedRowIndices.value.filter((x) => x !== origIdx);
+    } else {
+      selectedRowIndices.value = [...selectedRowIndices.value, origIdx];
+    }
+    lastClickedDisplayIdx.value = displayIdx;
+  } else {
+    if (selectedRowIndices.value.length === 1 && selectedRowIndices.value[0] === origIdx) {
+      selectedRowIndices.value = [];
+    } else {
+      selectedRowIndices.value = [origIdx];
+    }
+    lastClickedDisplayIdx.value = displayIdx;
+  }
+}
+
+function toggleSelectAllDisplayedRows() {
+  if (displayedRows.value.length === 0) return;
+  if (selectedRowIndices.value.length === displayedRows.value.length) {
+    selectedRowIndices.value = [];
+  } else {
+    selectedRowIndices.value = displayedRows.value.map((r) => r.origIdx);
+  }
+}
+
+function duplicateRowsByIndices(indices: number[]) {
+  const res = currentResult.value;
+  if (!res) return;
+  if (res.readOnly) {
+    emit('notify', '当前数据源为只读模式，无法新增复制行');
+    return;
+  }
+  const unique = Array.from(new Set(indices)).filter((i) => i >= 0 && i < res.rows.length);
+  if (unique.length === 0) {
+    emit('notify', '请先选择要复制的数据行');
+    return;
+  }
+  const draft = ensureDraft(res.id);
+  for (const idx of unique) {
+    const src = res.rows[idx] ?? {};
+    const merged = draft.modified[idx] ? { ...src, ...draft.modified[idx] } : { ...src };
+    const clone: Record<string, unknown> = {};
+    for (const col of res.columns) {
+      clone[col] = merged[col] ?? null;
+    }
+    draft.inserted.push(clone);
+  }
+  const lastIdx = draft.inserted.length - 1;
+  selectedIsInserted.value = true;
+  selectedRowOrigIdx.value = lastIdx;
+  emit('notify', `已克隆 ${unique.length} 行为待新增记录，可在底部查看或提交`);
+}
+
+function markSelectedRowsDeleted() {
+  const res = currentResult.value;
+  if (!res || res.readOnly) {
+    emit('notify', '当前数据源为只读模式，无法标记删除');
+    return;
+  }
+  if (selectedRowIndices.value.length === 0) return;
+  const draft = ensureDraft(res.id);
+  const delSet = new Set(draft.deleted);
+  for (const idx of selectedRowIndices.value) {
+    delSet.add(idx);
+  }
+  draft.deleted = [...delSet];
+  emit('notify', `已将选中的 ${selectedRowIndices.value.length} 行标记为删除`);
+}
+
+function copySelectedRowsAsTsv() {
+  const res = currentResult.value;
+  if (!res || selectedRowIndices.value.length === 0) return;
+  const set = new Set(selectedRowIndices.value);
+  const rows = displayedRows.value.filter((r) => set.has(r.origIdx)).map((r) => r.row);
+  if (rows.length === 0) return;
+  void copyText(toTsv(visibleColumns.value, rows));
+}
+
+function copySelectedRowsAsInsert() {
+  const res = currentResult.value;
+  if (!res || selectedRowIndices.value.length === 0) return;
+  const set = new Set(selectedRowIndices.value);
+  const rows = displayedRows.value.filter((r) => set.has(r.origIdx)).map((r) => r.row);
+  if (rows.length === 0) return;
+  const tableName = effectiveTargetTable.value || 'target_table';
+  void copyText(toInsertSql(tableName, visibleColumns.value, rows, res.engineKey));
+}
+
+function submitServerQuery(pageIndex = 0, pageSizeOverride?: number) {
+  const res = currentResult.value;
+  if (!res || !res.sourceTable) return;
+  emit('server-query-page', res, {
+    where: serverWhereInput.value.trim(),
+    orderBy: serverOrderByInput.value.trim(),
+    pageIndex: Math.max(0, pageIndex),
+    pageSize: Math.max(1, pageSizeOverride ?? res.pageSize ?? 100),
+  });
+}
+
+function resetServerQuery() {
+  serverWhereInput.value = '';
+  serverOrderByInput.value = '';
+  submitServerQuery(0);
+}
+
+function applyCellServerFilter(operator: '=' | '!=' | 'IS NULL' | 'LIKE') {
+  const res = currentResult.value;
+  if (!res || !cellCtxMenu.col) return;
+  const val = getContextCellRaw();
+  serverWhereInput.value = appendWhereCondition(
+    serverWhereInput.value,
+    cellCtxMenu.col,
+    operator,
+    val,
+    res.engineKey,
+  );
+  if (res.sourceTable) {
+    submitServerQuery(0);
+  } else {
+    emit('notify', '当前为自定义 SQL 结果，已生成 WHERE 片段（仅单表查询支持一键重查）');
+  }
+}
+
 function buildCurrentMutationPlan(): GridMutationPlan | null {
   const res = currentResult.value;
   const draft = activeDraft.value;
@@ -634,14 +883,30 @@ function applyValueViewerEdit(setNull = false) {
 }
 
 watch(
-  () => props.activeResultTabId,
-  () => {
-    editingCell.value = null;
-    selectedIsInserted.value = false;
-    selectedRowOrigIdx.value = 0;
-    selectedColName.value = currentResult.value?.columns[0] ?? '';
-    syncValueViewerDraft();
+  () => [props.activeResultTabId, currentResult.value?.serverWhere, currentResult.value?.serverOrderBy],
+  ([newId], oldVal) => {
+    const res = currentResult.value;
+    serverWhereInput.value = res?.serverWhere ?? '';
+    serverOrderByInput.value = res?.serverOrderBy ?? '';
+    if (!oldVal || newId !== oldVal[0]) {
+      editingCell.value = null;
+      selectedIsInserted.value = false;
+      selectedRowOrigIdx.value = 0;
+      selectedRowIndices.value = [];
+      lastClickedDisplayIdx.value = null;
+      selectedColName.value = res?.columns[0] ?? '';
+      recordFieldFilter.value = '';
+      visualExplainMode.value = Boolean(
+        res && isExplainResult(res.columns, res.sql) && res.rows.length > 0,
+      );
+      if (visualExplainMode.value) {
+        transposeMode.value = false;
+        chartMode.value = false;
+      }
+      syncValueViewerDraft();
+    }
   },
+  { immediate: true },
 );
 
 function toggleSort(col: string) {
@@ -905,8 +1170,8 @@ const cellCtxMenu = reactive<{
 
 function openCellContextMenu(ev: MouseEvent, origIdx: number, col: string) {
   selectCell(false, origIdx, col);
-  const maxX = Math.max(8, window.innerWidth - 230);
-  const maxY = Math.max(8, window.innerHeight - 310);
+  const maxX = Math.max(8, window.innerWidth - 245);
+  const maxY = Math.max(8, window.innerHeight - 420);
   cellCtxMenu.x = Math.min(ev.clientX, maxX);
   cellCtxMenu.y = Math.min(ev.clientY, maxY);
   cellCtxMenu.origIdx = origIdx;
@@ -1240,9 +1505,31 @@ const currentColWidthOverrides = computed(() => {
   return hasAny ? out : undefined;
 });
 
-const columnWidthsPx = computed(() =>
+const pinnedWidthsPx = computed(() =>
   computeGridColumnWidths(
-    visibleColumns.value,
+    currentPinnedCols.value,
+    currentResult.value?.rows ?? [],
+    currentColWidthOverrides.value,
+  ),
+);
+
+const pinnedColItems = computed(() => {
+  let left = 44;
+  return currentPinnedCols.value.map((col, idx) => {
+    const width = pinnedWidthsPx.value[idx] ?? 130;
+    const item = { col, width, left };
+    left += width;
+    return item;
+  });
+});
+
+const pinnedTotalWidth = computed(() =>
+  pinnedColItems.value.reduce((sum, it) => sum + it.width, 0),
+);
+
+const scrollableColWidthsPx = computed(() =>
+  computeGridColumnWidths(
+    scrollableColumns.value,
     currentResult.value?.rows ?? [],
     currentColWidthOverrides.value,
   ),
@@ -1263,14 +1550,14 @@ const renderedRows = computed(() =>
 );
 
 const colWindow = computed(() => {
-  const widths = columnWidthsPx.value;
-  if (visibleColumns.value.length <= COL_VIRTUAL_THRESHOLD) {
+  const widths = scrollableColWidthsPx.value;
+  if (scrollableColumns.value.length <= COL_VIRTUAL_THRESHOLD) {
     const totalSize = widths.reduce((sum, w) => sum + w, 0);
     return { start: 0, end: widths.length, beforeSize: 0, afterSize: 0, totalSize };
   }
   return computeVariableVirtualRange(
     scrollLeft.value,
-    Math.max(400, viewportWidth.value - 44),
+    Math.max(320, viewportWidth.value - 44 - pinnedTotalWidth.value),
     widths,
     5,
   );
@@ -1278,8 +1565,8 @@ const colWindow = computed(() => {
 
 const renderedColumns = computed(() => {
   const start = colWindow.value.start;
-  const cols = visibleColumns.value.slice(start, colWindow.value.end);
-  const widths = columnWidthsPx.value;
+  const cols = scrollableColumns.value.slice(start, colWindow.value.end);
+  const widths = scrollableColWidthsPx.value;
   return cols.map((col, idx) => ({
     col,
     width: widths[start + idx] ?? 130,
@@ -1289,6 +1576,7 @@ const renderedColumns = computed(() => {
 const renderedColSpan = computed(
   () =>
     1 +
+    pinnedColItems.value.length +
     (colWindow.value.beforeSize > 0 ? 1 : 0) +
     renderedColumns.value.length +
     (colWindow.value.afterSize > 0 ? 1 : 0),
@@ -1693,16 +1981,37 @@ function exportQuickChartSvg() {
                 :class="{ active: transposeMode }"
                 @click="
                   transposeMode = !transposeMode;
-                  if (transposeMode) chartMode = false;
+                  if (transposeMode) {
+                    chartMode = false;
+                    visualExplainMode = false;
+                  }
                 "
               >
-                ⇅ {{ t('transposeView') }}
+                ⇅ 表单/转置
+              </button>
+              <button
+                v-if="isCurrentExplain"
+                class="icon-btn compact"
+                :class="{ active: visualExplainMode }"
+                title="切换可视化 EXPLAIN 执行计划树与瓶颈诊断"
+                @click="
+                  visualExplainMode = !visualExplainMode;
+                  if (visualExplainMode) {
+                    chartMode = false;
+                    transposeMode = false;
+                  }
+                "
+              >
+                🌳 执行计划图
               </button>
               <button
                 class="icon-btn compact"
                 :class="{ active: chartMode }"
                 title="切换可视化统计图表（柱状 / 折线 / 饼图）"
-                @click="toggleChartMode"
+                @click="
+                  visualExplainMode = false;
+                  toggleChartMode();
+                "
               >
                 📊 图表
               </button>
@@ -1712,6 +2021,14 @@ function exportQuickChartSvg() {
                 @click="showValueViewer = !showValueViewer"
               >
                 👁 {{ t('valueViewer') }}
+              </button>
+              <button
+                v-if="currentPinnedCols.length > 0"
+                class="icon-btn compact active"
+                title="取消全部左侧冻结列"
+                @click="clearPinnedColumns"
+              >
+                📌 取消固定 ({{ currentPinnedCols.length }})
               </button>
               <span v-if="executing" class="pill pill-test">⏳ 正在执行新查询...</span>
               <span v-else-if="currentResult.summary" style="font-size: 11px; color: var(--text-secondary)">
@@ -1830,10 +2147,133 @@ function exportQuickChartSvg() {
             </div>
           </div>
 
+          <!-- Server-Side WHERE / ORDER BY Toolbar (Single-Table Result Tabs) -->
+          <div v-if="currentResult.sourceTable && !isCurrentExplain" class="grid-server-filter-bar">
+            <span class="server-clause-tag">WHERE</span>
+            <input
+              v-model="serverWhereInput"
+              class="field server-clause-input"
+              placeholder="输入服务端过滤条件，如 status = 'ACTIVE' AND amount > 100 (Enter 执行)"
+              @keydown.enter="submitServerQuery(0)"
+            />
+            <span class="server-clause-tag">ORDER BY</span>
+            <input
+              v-model="serverOrderByInput"
+              class="field server-order-input"
+              placeholder="排序字段，如 id DESC"
+              @keydown.enter="submitServerQuery(0)"
+            />
+            <button class="btn btn-sm btn-primary" :disabled="executing" @click="submitServerQuery(0)">
+              筛选执行
+            </button>
+            <button
+              v-if="serverWhereInput || serverOrderByInput || (currentResult.pageIndex ?? 0) > 0"
+              class="btn btn-sm"
+              :disabled="executing"
+              @click="resetServerQuery"
+            >
+              重置
+            </button>
+            <button
+              class="btn btn-sm"
+              title="打开当前表的数据内容对比与同步 SQL"
+              @click="emit('open-data-diff', currentResult)"
+            >
+              🧬 数据对比
+            </button>
+          </div>
+
+          <!-- Multi-Row Selection Bulk Actions Bar -->
+          <div v-if="selectedRowIndices.length > 0" class="grid-bulk-bar">
+            <span class="pill pill-accent">已选中 {{ selectedRowIndices.length }} 行</span>
+            <button class="btn btn-sm" @click="copySelectedRowsAsTsv">复制选中 (TSV)</button>
+            <button class="btn btn-sm" @click="copySelectedRowsAsInsert">生成 INSERT SQL</button>
+            <button
+              v-if="!currentResult.readOnly"
+              class="btn btn-sm"
+              @click="duplicateRowsByIndices(selectedRowIndices)"
+            >
+              📋 克隆为新增行
+            </button>
+            <button
+              v-if="!currentResult.readOnly"
+              class="btn btn-sm"
+              style="color: var(--prod)"
+              @click="markSelectedRowsDeleted"
+            >
+              标记删除
+            </button>
+            <button class="btn btn-sm" @click="selectedRowIndices = []">清空选择</button>
+          </div>
+
           <div class="grid-split">
             <div ref="gridScrollRef" class="grid-scroll" @scroll.passive="onGridScroll">
+              <!-- Visual EXPLAIN Execution Plan View -->
+              <div v-if="visualExplainMode && visualExplainPlan" class="explain-visual-pane">
+                <div class="explain-summary-header">
+                  <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+                    <span
+                      class="pill"
+                      :class="
+                        visualExplainPlan.health === 'critical'
+                          ? 'pill-prod'
+                          : visualExplainPlan.health === 'warn'
+                            ? 'pill-test'
+                            : 'pill-dev'
+                      "
+                    >
+                      {{
+                        visualExplainPlan.health === 'critical'
+                          ? '需要优化'
+                          : visualExplainPlan.health === 'warn'
+                            ? '存在瓶颈风险'
+                            : '执行计划良好'
+                      }}
+                    </span>
+                    <strong>{{ visualExplainPlan.headline }}</strong>
+                    <span style="font-size: 11px; color: var(--text-secondary)">
+                      引擎: {{ visualExplainPlan.engineFamily.toUpperCase() }} · 预估扫描行数:
+                      {{ visualExplainPlan.totalEstimatedRows.toLocaleString() }}
+                    </span>
+                  </div>
+                  <button class="btn btn-sm" @click="visualExplainMode = false">查看原始表格</button>
+                </div>
+
+                <div v-if="visualExplainPlan.summaryTips.length > 0" class="explain-tips-banner">
+                  <div v-for="(tip, tIdx) in visualExplainPlan.summaryTips" :key="tIdx">
+                    • {{ tip }}
+                  </div>
+                </div>
+
+                <div class="explain-node-list">
+                  <div
+                    v-for="node in visualExplainPlan.nodes"
+                    :key="node.id"
+                    class="explain-node-wrap"
+                    :style="{ paddingLeft: `${Math.min(node.depth, 8) * 22}px` }"
+                  >
+                    <div class="explain-node-card" :class="`sev-${node.severity}`">
+                      <div class="explain-node-head">
+                        <span class="explain-node-title">{{ node.title }}</span>
+                        <span v-if="node.tableName" class="explain-meta-tag">{{ node.tableName }}</span>
+                        <span v-if="node.accessType" class="explain-meta-tag">type: {{ node.accessType }}</span>
+                        <span v-if="node.indexUsed" class="explain-meta-tag tag-ok">key: {{ node.indexUsed }}</span>
+                        <span v-if="node.estimatedRows != null" class="explain-meta-tag">rows: {{ node.estimatedRows }}</span>
+                        <span v-if="node.costLabel" class="explain-meta-tag">{{ node.costLabel }}</span>
+                        <span v-if="node.filteredPct != null" class="explain-meta-tag">filtered: {{ node.filteredPct }}%</span>
+                      </div>
+                      <div v-if="node.subtitle" class="explain-node-sub">{{ node.subtitle }}</div>
+                      <div v-if="node.extra" class="explain-node-extra">Extra: {{ node.extra }}</div>
+                      <div v-if="node.tips.length > 0" class="explain-node-tips">
+                        <span v-for="(tMsg, idx) in node.tips" :key="idx">⚠ {{ tMsg }}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <!-- Quick Visualization Chart Mode -->
-              <div v-if="chartMode" class="chart-workspace">
+              <div v-else-if="chartMode" class="chart-workspace">
                 <div class="chart-toolbar">
                   <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
                     <button
@@ -2015,49 +2455,168 @@ function exportQuickChartSvg() {
                 </div>
               </div>
 
-              <!-- Transpose View -->
-              <table v-else-if="transposeMode && displayedRows[selectedRowOrigIdx]" class="dg-grid">
-                <thead>
-                  <tr>
-                    <th style="width: 220px">{{ t('columnsLabel') }}</th>
-                    <th>行 #{{ selectedRowOrigIdx + 1 }} 值</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="col in visibleColumns" :key="col">
-                    <td style="font-weight: 600">{{ col }}</td>
-                    <td
-                      :class="{
-                        'selected-cell': selectedColName === col,
-                        'cell-dirty': isCellModified(selectedRowOrigIdx, col),
-                      }"
-                      @click="selectCell(false, selectedRowOrigIdx, col)"
-                      @dblclick="startEditCell(false, selectedRowOrigIdx, col)"
+              <!-- Enhanced Record Form / Transpose View -->
+              <div v-else-if="transposeMode && displayedRows[currentTransposeDisplayPos]" class="record-form-wrap">
+                <div class="record-form-nav">
+                  <div style="display: flex; align-items: center; gap: 6px">
+                    <button
+                      class="btn btn-sm"
+                      :disabled="currentTransposeDisplayPos <= 0"
+                      @click="stepTransposeRow(-1)"
                     >
-                      <span v-if="displayedRows[selectedRowOrigIdx].row[col] === null" class="null-pill">
-                        &lt;NULL&gt;
-                      </span>
-                      <span v-else>{{ formatCell(displayedRows[selectedRowOrigIdx].row[col]) }}</span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      ◀ 上一条
+                    </button>
+                    <span style="font-size: 11.5px; color: var(--text-secondary)">
+                      第 {{ currentTransposeDisplayPos + 1 }} / {{ displayedRows.length }} 条 (原行 #{{ displayedRows[currentTransposeDisplayPos].origIdx + 1 }})
+                    </span>
+                    <button
+                      class="btn btn-sm"
+                      :disabled="currentTransposeDisplayPos >= displayedRows.length - 1"
+                      @click="stepTransposeRow(1)"
+                    >
+                      下一条 ▶
+                    </button>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 6px">
+                    <input
+                      v-model="recordFieldFilter"
+                      class="field"
+                      style="width: 170px; padding: 2px 6px; font-size: 11.5px"
+                      placeholder="筛选字段名..."
+                    />
+                    <button
+                      v-if="!currentResult.readOnly"
+                      class="btn btn-sm"
+                      @click="duplicateRowsByIndices([displayedRows[currentTransposeDisplayPos].origIdx])"
+                    >
+                      📋 复制为新增行
+                    </button>
+                    <button class="btn btn-sm" @click="transposeMode = false">返回表格</button>
+                  </div>
+                </div>
+                <table class="dg-grid">
+                  <thead>
+                    <tr>
+                      <th style="width: 240px">{{ t('columnsLabel') }}</th>
+                      <th>当前记录字段值（双击可修改）</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="col in recordFormColumns" :key="col">
+                      <td style="font-weight: 600">
+                        <IdeIcon v-if="currentResult.primaryKeys.includes(col)" name="key" :size="11" style="margin-right: 4px" />
+                        <span>{{ col }}</span>
+                        <span
+                          v-if="getFkForCol(col)"
+                          class="fk-col-badge"
+                          :title="`外键 -> ${getFkForCol(col)?.referencedTable}.${getFkForCol(col)?.referencedColumn}`"
+                        >
+                          FK
+                        </span>
+                      </td>
+                      <td
+                        :class="{
+                          'selected-cell': selectedColName === col,
+                          'cell-dirty': isCellModified(displayedRows[currentTransposeDisplayPos].origIdx, col),
+                        }"
+                        @click="selectCell(false, displayedRows[currentTransposeDisplayPos].origIdx, col)"
+                        @dblclick="startEditCell(false, displayedRows[currentTransposeDisplayPos].origIdx, col)"
+                      >
+                        <div class="cell-value-wrap">
+                          <span
+                            v-if="
+                              displayedRows[currentTransposeDisplayPos].row[col] === null ||
+                              displayedRows[currentTransposeDisplayPos].row[col] === undefined
+                            "
+                            class="null-pill"
+                          >
+                            &lt;NULL&gt;
+                          </span>
+                          <span v-else>{{ formatCell(displayedRows[currentTransposeDisplayPos].row[col]) }}</span>
+                          <button
+                            v-if="
+                              getFkForCol(col) &&
+                              displayedRows[currentTransposeDisplayPos].row[col] !== null &&
+                              displayedRows[currentTransposeDisplayPos].row[col] !== undefined
+                            "
+                            class="cell-fk-jump-btn"
+                            :title="`跳转至 ${getFkForCol(col)?.referencedTable}`"
+                            @click.stop="
+                              emit(
+                                'jump-foreign-key',
+                                currentResult,
+                                getFkForCol(col)!,
+                                displayedRows[currentTransposeDisplayPos].row[col],
+                              )
+                            "
+                          >
+                            🔗
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
 
-              <!-- Standard 2D-Virtualized Editable Pacer Result Grid -->
+              <!-- Standard 2D-Virtualized Editable Pacer Result Grid (with Left Pinned Columns) -->
               <table
                 v-else
                 class="dg-grid dg-grid-fixed"
-                :style="{ width: `${44 + colWindow.totalSize}px` }"
+                :style="{ width: `${44 + pinnedTotalWidth + colWindow.totalSize}px` }"
               >
                 <colgroup>
                   <col style="width: 44px" />
+                  <col v-for="pc in pinnedColItems" :key="`pcol-${pc.col}`" :style="{ width: `${pc.width}px` }" />
                   <col v-if="colWindow.beforeSize > 0" :style="{ width: `${colWindow.beforeSize}px` }" />
                   <col v-for="rc in renderedColumns" :key="`col-${rc.col}`" :style="{ width: `${rc.width}px` }" />
                   <col v-if="colWindow.afterSize > 0" :style="{ width: `${colWindow.afterSize}px` }" />
                 </colgroup>
                 <thead>
                   <tr>
-                    <th class="row-num">#</th>
+                    <th
+                      class="row-num sticky-rownum"
+                      style="cursor: pointer"
+                      title="点击全选 / 取消全选当前页行（支持 Shift/Ctrl 多选）"
+                      @click="toggleSelectAllDisplayedRows"
+                    >
+                      #
+                    </th>
+                    <th
+                      v-for="(pc, pIdx) in pinnedColItems"
+                      :key="`ph-${pc.col}`"
+                      class="pinned-col"
+                      :class="{ 'pinned-col-last': pIdx === pinnedColItems.length - 1 }"
+                      :style="{ left: `${pc.left}px` }"
+                      @click="toggleSort(pc.col)"
+                    >
+                      <IdeIcon v-if="currentResult.primaryKeys.includes(pc.col)" name="key" :size="12" style="margin-right: 3px" />
+                      <span>{{ pc.col }}</span>
+                      <span
+                        v-if="getFkForCol(pc.col)"
+                        class="fk-col-badge"
+                        :title="`外键 -> ${getFkForCol(pc.col)?.referencedTable}.${getFkForCol(pc.col)?.referencedColumn}`"
+                      >
+                        FK
+                      </span>
+                      <button
+                        class="col-pin-btn active"
+                        title="取消固定此列"
+                        @click.stop="togglePinColumn(pc.col)"
+                      >
+                        📌
+                      </button>
+                      <span v-if="sortCol === pc.col" style="margin-left: 3px; color: var(--accent)">
+                        {{ sortDir === 'asc' ? '▲' : '▼' }}
+                      </span>
+                      <span
+                        class="col-resize-handle"
+                        title="拖拽调整列宽（双击恢复自动宽度）"
+                        @mousedown.stop.prevent="startColResize($event, pc.col)"
+                        @dblclick.stop="resetColWidth(pc.col)"
+                        @click.stop
+                      />
+                    </th>
                     <th v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <th
                       v-for="rc in renderedColumns"
@@ -2066,7 +2625,21 @@ function exportQuickChartSvg() {
                     >
                       <IdeIcon v-if="currentResult.primaryKeys.includes(rc.col)" name="key" :size="12" style="margin-right: 3px" />
                       <span>{{ rc.col }}</span>
-                      <span v-if="sortCol === rc.col" style="margin-left: 4px; color: var(--accent)">
+                      <span
+                        v-if="getFkForCol(rc.col)"
+                        class="fk-col-badge"
+                        :title="`外键 -> ${getFkForCol(rc.col)?.referencedTable}.${getFkForCol(rc.col)?.referencedColumn}`"
+                      >
+                        FK
+                      </span>
+                      <button
+                        class="col-pin-btn"
+                        title="固定此列到左侧（冻结列）"
+                        @click.stop="togglePinColumn(rc.col)"
+                      >
+                        📌
+                      </button>
+                      <span v-if="sortCol === rc.col" style="margin-left: 3px; color: var(--accent)">
                         {{ sortDir === 'asc' ? '▲' : '▼' }}
                       </span>
                       <span
@@ -2120,9 +2693,78 @@ function exportQuickChartSvg() {
                     v-for="(item, localIdx) in renderedRows"
                     :key="`orig-${item.origIdx}`"
                     class="dg-grid-row"
-                    :class="{ 'row-deleted': isRowDeleted(item.origIdx) }"
+                    :class="{
+                      'row-deleted': isRowDeleted(item.origIdx),
+                      'row-selected': selectedRowSet.has(item.origIdx),
+                    }"
                   >
-                    <td class="row-num">{{ rowWindow.start + localIdx + 1 }}</td>
+                    <td
+                      class="row-num sticky-rownum"
+                      :class="{ 'row-selected': selectedRowSet.has(item.origIdx) }"
+                      title="点击选择整行（Shift 连选，Ctrl/Cmd 多选）"
+                      @click="onRowNumClick($event, item.origIdx, rowWindow.start + localIdx)"
+                    >
+                      {{ rowWindow.start + localIdx + 1 }}
+                    </td>
+                    <!-- Pinned Left Frozen Columns -->
+                    <td
+                      v-for="(pc, pIdx) in pinnedColItems"
+                      :key="`pc-${pc.col}`"
+                      class="pinned-col"
+                      :class="{
+                        'pinned-col-last': pIdx === pinnedColItems.length - 1,
+                        'num-cell': isNumeric(item.row[pc.col]),
+                        'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === pc.col,
+                        'cell-dirty': isCellModified(item.origIdx, pc.col),
+                      }"
+                      :style="{ left: `${pc.left}px` }"
+                      @mouseenter="onCellMouseEnter($event, item.origIdx, pc.col)"
+                      @click="selectCell(false, item.origIdx, pc.col)"
+                      @dblclick="startEditCell(false, item.origIdx, pc.col)"
+                      @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, pc.col)"
+                    >
+                      <div
+                        v-if="
+                          editingCell &&
+                          !editingCell.isInserted &&
+                          editingCell.rowIdx === item.origIdx &&
+                          editingCell.col === pc.col
+                        "
+                        class="cell-inline-editor"
+                        @click.stop
+                      >
+                        <input
+                          ref="inlineInputRef"
+                          v-model="editingCell.draftText"
+                          @keydown.enter.prevent="commitInlineEdit(false)"
+                          @keydown.esc.prevent="cancelInlineEdit"
+                        />
+                        <button class="cell-inline-btn" title="设为 NULL" @click="commitInlineEdit(true)">
+                          NULL
+                        </button>
+                        <button class="cell-inline-btn" title="确认修改 (Enter)" @click="commitInlineEdit(false)">
+                          ✓
+                        </button>
+                      </div>
+                      <div v-else class="cell-value-wrap">
+                        <span v-if="item.row[pc.col] === null || item.row[pc.col] === undefined" class="null-pill">
+                          &lt;NULL&gt;
+                        </span>
+                        <span v-else>{{ formatCell(item.row[pc.col]) }}</span>
+                        <button
+                          v-if="
+                            getFkForCol(pc.col) &&
+                            item.row[pc.col] !== null &&
+                            item.row[pc.col] !== undefined
+                          "
+                          class="cell-fk-jump-btn"
+                          :title="`跳转到 ${getFkForCol(pc.col)?.referencedTable}.${getFkForCol(pc.col)?.referencedColumn}`"
+                          @click.stop="emit('jump-foreign-key', currentResult, getFkForCol(pc.col)!, item.row[pc.col])"
+                        >
+                          🔗
+                        </button>
+                      </div>
+                    </td>
                     <td v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <td
                       v-for="rc in renderedColumns"
@@ -2160,12 +2802,24 @@ function exportQuickChartSvg() {
                           ✓
                         </button>
                       </div>
-                      <template v-else>
+                      <div v-else class="cell-value-wrap">
                         <span v-if="item.row[rc.col] === null || item.row[rc.col] === undefined" class="null-pill">
                           &lt;NULL&gt;
                         </span>
                         <span v-else>{{ formatCell(item.row[rc.col]) }}</span>
-                      </template>
+                        <button
+                          v-if="
+                            getFkForCol(rc.col) &&
+                            item.row[rc.col] !== null &&
+                            item.row[rc.col] !== undefined
+                          "
+                          class="cell-fk-jump-btn"
+                          :title="`跳转到 ${getFkForCol(rc.col)?.referencedTable}.${getFkForCol(rc.col)?.referencedColumn}`"
+                          @click.stop="emit('jump-foreign-key', currentResult, getFkForCol(rc.col)!, item.row[rc.col])"
+                        >
+                          🔗
+                        </button>
+                      </div>
                     </td>
                     <td v-if="colWindow.afterSize > 0" class="virtual-spacer-cell" />
                   </tr>
@@ -2181,7 +2835,46 @@ function exportQuickChartSvg() {
                     :key="`ins-${insIdx}`"
                     class="dg-grid-row row-inserted"
                   >
-                    <td class="row-num" title="待新增行">+{{ insIdx + 1 }}</td>
+                    <td class="row-num sticky-rownum" title="待新增行">+{{ insIdx + 1 }}</td>
+                    <td
+                      v-for="(pc, pIdx) in pinnedColItems"
+                      :key="`pins-${pc.col}`"
+                      class="pinned-col"
+                      :class="{
+                        'pinned-col-last': pIdx === pinnedColItems.length - 1,
+                        'selected-cell': selectedIsInserted && selectedRowOrigIdx === insIdx && selectedColName === pc.col,
+                      }"
+                      :style="{ left: `${pc.left}px` }"
+                      @click="selectCell(true, insIdx, pc.col)"
+                      @dblclick="startEditCell(true, insIdx, pc.col)"
+                    >
+                      <div
+                        v-if="
+                          editingCell &&
+                          editingCell.isInserted &&
+                          editingCell.rowIdx === insIdx &&
+                          editingCell.col === pc.col
+                        "
+                        class="cell-inline-editor"
+                        @click.stop
+                      >
+                        <input
+                          ref="inlineInputRef"
+                          v-model="editingCell.draftText"
+                          @keydown.enter.prevent="commitInlineEdit(false)"
+                          @keydown.esc.prevent="cancelInlineEdit"
+                        />
+                        <button class="cell-inline-btn" @click="commitInlineEdit(true)">NULL</button>
+                        <button class="cell-inline-btn" @click="commitInlineEdit(false)">✓</button>
+                      </div>
+                      <template v-else>
+                        <span v-if="insRow[pc.col] === null" class="null-pill">&lt;NULL&gt;</span>
+                        <span v-else-if="insRow[pc.col] === ''" style="color: var(--text-muted); font-style: italic">
+                          &lt;双击填写&gt;
+                        </span>
+                        <span v-else>{{ formatCell(insRow[pc.col]) }}</span>
+                      </template>
+                    </td>
                     <td v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <td
                       v-for="rc in renderedColumns"
@@ -2301,23 +2994,70 @@ function exportQuickChartSvg() {
             </div>
           </div>
 
-          <!-- Instant Column Summary Stats Bar -->
-          <div v-if="columnStats" class="grid-stats-bar">
-            <div style="display: flex; align-items: center; gap: 12px">
-              <span>
-                列统计 <strong style="color: var(--text-primary); font-family: var(--font-mono)">{{ columnStats.column }}</strong>
-              </span>
-              <span>行数: <strong>{{ columnStats.total }}</strong></span>
-              <span>非空: <strong>{{ columnStats.nonNull }}</strong></span>
-              <span>去重: <strong>{{ columnStats.distinct }}</strong></span>
-              <template v-if="columnStats.isNumeric">
-                <span>SUM: <strong>{{ columnStats.sum }}</strong></span>
-                <span>AVG: <strong>{{ columnStats.avg }}</strong></span>
-                <span>MIN: <strong>{{ columnStats.min }}</strong></span>
-                <span>MAX: <strong>{{ columnStats.max }}</strong></span>
+          <!-- Server Pagination + Instant Column Summary Stats Bar -->
+          <div v-if="columnStats || currentResult.sourceTable" class="grid-stats-bar">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+              <template v-if="columnStats">
+                <span>
+                  列统计 <strong style="color: var(--text-primary); font-family: var(--font-mono)">{{ columnStats.column }}</strong>
+                </span>
+                <span>行: <strong>{{ columnStats.total }}</strong></span>
+                <span>非空: <strong>{{ columnStats.nonNull }}</strong></span>
+                <span>去重: <strong>{{ columnStats.distinct }}</strong></span>
+                <template v-if="columnStats.isNumeric">
+                  <span>SUM: <strong>{{ columnStats.sum }}</strong></span>
+                  <span>AVG: <strong>{{ columnStats.avg }}</strong></span>
+                  <span>MIN: <strong>{{ columnStats.min }}</strong></span>
+                  <span>MAX: <strong>{{ columnStats.max }}</strong></span>
+                </template>
               </template>
             </div>
-            <span style="opacity: 0.78">提示：点击列名排序 · 双击单元格直接修改 · 点击「复制列 IN (...)」快速生成查询条件</span>
+            <div v-if="currentResult.sourceTable" class="grid-pagination-bar">
+              <span>每页</span>
+              <select
+                :value="currentResult.pageSize ?? 100"
+                class="field"
+                style="width: auto; padding: 1px 5px; font-size: 11px"
+                :disabled="executing"
+                @change="submitServerQuery(0, Number(($event.target as HTMLSelectElement).value) || 100)"
+              >
+                <option :value="50">50</option>
+                <option :value="100">100</option>
+                <option :value="200">200</option>
+                <option :value="500">500</option>
+                <option :value="1000">1000</option>
+              </select>
+              <button
+                class="icon-btn compact"
+                :disabled="executing || (currentResult.pageIndex ?? 0) <= 0"
+                @click="submitServerQuery((currentResult.pageIndex ?? 0) - 1)"
+              >
+                ◀ 上一页
+              </button>
+              <span style="font-family: var(--font-mono)">
+                第 {{ (currentResult.pageIndex ?? 0) + 1 }} 页
+              </span>
+              <button
+                class="icon-btn compact"
+                :disabled="executing || currentResult.rows.length < (currentResult.pageSize ?? 100)"
+                @click="submitServerQuery((currentResult.pageIndex ?? 0) + 1)"
+              >
+                下一页 ▶
+              </button>
+              <button
+                v-if="currentResult.totalRowCount == null"
+                class="icon-btn compact"
+                :disabled="executing"
+                title="执行 SELECT COUNT(*) 获取精确总行数"
+                @click="emit('server-count-rows', currentResult)"
+              >
+                统计总行数
+              </button>
+              <span v-else class="pill pill-neutral">
+                共 {{ currentResult.totalRowCount.toLocaleString() }} 条
+              </span>
+            </div>
+            <span v-else style="opacity: 0.78">提示：点击列名排序 · 点击 # 行号多选 · 点击「📌」可冻结列到左侧</span>
           </div>
         </template>
       </template>
@@ -2735,6 +3475,68 @@ function exportQuickChartSvg() {
       >
         <span>隐藏当前列 [{{ cellCtxMenu.col }}]</span>
       </button>
+      <button
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          togglePinColumn(cellCtxMenu.col);
+        "
+      >
+        <span>
+          {{ pinnedColumnsSet.has(cellCtxMenu.col) ? `取消固定列 [${cellCtxMenu.col}]` : `📌 固定列 [${cellCtxMenu.col}] 到左侧` }}
+        </span>
+      </button>
+      <template v-if="currentResult.sourceTable">
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            applyCellServerFilter('=');
+          "
+        >
+          <span>服务端重查：WHERE [{{ cellCtxMenu.col }}] = 当前值</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            applyCellServerFilter('!=');
+          "
+        >
+          <span>服务端重查：WHERE [{{ cellCtxMenu.col }}] != 当前值</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            applyCellServerFilter('IS NULL');
+          "
+        >
+          <span>服务端重查：WHERE [{{ cellCtxMenu.col }}] IS NULL</span>
+        </button>
+      </template>
+      <button
+        v-if="
+          getFkForCol(cellCtxMenu.col) &&
+          getContextCellRaw() !== null &&
+          getContextCellRaw() !== undefined
+        "
+        class="dropdown-item"
+        @click="
+          cellCtxMenu.visible = false;
+          emit(
+            'jump-foreign-key',
+            currentResult,
+            getFkForCol(cellCtxMenu.col)!,
+            getContextCellRaw(),
+          );
+        "
+      >
+        <span>
+          🔗 跳转外键表 {{ getFkForCol(cellCtxMenu.col)?.referencedTable }}.{{ getFkForCol(cellCtxMenu.col)?.referencedColumn }}
+        </span>
+      </button>
       <div class="dropdown-sep" />
       <button
         class="dropdown-item"
@@ -2773,6 +3575,15 @@ function exportQuickChartSvg() {
           "
         >
           <span>编辑此单元格</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="
+            cellCtxMenu.visible = false;
+            duplicateRowsByIndices([cellCtxMenu.origIdx]);
+          "
+        >
+          <span>📋 克隆此行为新增行</span>
         </button>
         <button
           class="dropdown-item"

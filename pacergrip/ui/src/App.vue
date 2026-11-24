@@ -4,6 +4,8 @@ import { useI18n } from './i18n';
 import {
   analyzeSql,
   assignConnectionProject,
+  cancelQuery,
+  commitTransaction,
   createDemoMarkdownFile,
   createDemoSqliteConnection,
   createSamplePlugin,
@@ -19,6 +21,7 @@ import {
   extractStatementAtCursor,
   formatSql,
   getTableDdl,
+  getTransactionStatus,
   getWorkspaceInfo,
   importDbeaverPath,
   importDbeaverText,
@@ -27,10 +30,12 @@ import {
   listConnections,
   listDatabases,
   listExtensions,
+  listForeignKeys,
   listIndexes,
   listLocalPlugins,
   listProjects,
   listQueryHistory,
+  listRoutines,
   listTables,
   listWorkspaceFiles,
   openTextFile,
@@ -43,10 +48,12 @@ import {
   pickSqlScriptFile,
   pickTextFileToOpen,
   revealInExplorer,
+  rollbackTransaction,
   saveConnection,
   saveConsoleScratch,
   saveProject,
   saveTextFile,
+  setTransactionMode,
   testConnection,
   type ColumnMeta,
   type ConnectionDraft,
@@ -54,14 +61,17 @@ import {
   type DatabaseMeta,
   type DirectConfig,
   type ExtensionMeta,
+  type ForeignKeyMeta,
   type IndexMeta,
   type LocalPluginManifest,
   type MarkdownSqlBlock,
   type OpenedFileDto,
   type ProjectDraft,
   type QueryHistoryEntry,
+  type RoutineMeta,
   type ScriptAnalysis,
   type TableMeta,
+  type TransactionStatus,
   type WorkspaceFileEntry,
   type WorkspaceInfoDto,
   type WorkspaceProject,
@@ -82,6 +92,7 @@ import {
   extractSingleTableTarget,
   extractSqlParameters,
   formatBytes,
+  formatSqlLiteral,
   generateMockInsertSql,
   getEngineDisplayName,
   getExplainModesForEngine,
@@ -98,6 +109,10 @@ import {
   type RedisEditableType,
   type SqlSnippet,
 } from './utils/sqlTools';
+import {
+  buildTableCountQuerySql,
+  buildTablePageQuerySql,
+} from './utils/commercialTools';
 import {
   FILE_MANAGER_LABEL,
   IS_MAC,
@@ -136,6 +151,9 @@ import AdvancedToolsModals, {
 } from './components/AdvancedToolsModals.vue';
 import ServerMonitorModal from './components/ServerMonitorModal.vue';
 import ErDiagramModal from './components/ErDiagramModal.vue';
+import CommercialToolsModals, {
+  type CommercialModalKind,
+} from './components/CommercialToolsModals.vue';
 
 interface EditorTab {
   id: string;
@@ -389,6 +407,9 @@ const databasesByProfile = reactive<Record<string, DatabaseMeta[]>>({});
 const tablesByKey = reactive<Record<string, TableMeta[]>>({});
 const columnsByKey = reactive<Record<string, ColumnMeta[]>>({});
 const indexesByKey = reactive<Record<string, IndexMeta[]>>({});
+const foreignKeysByKey = reactive<Record<string, ForeignKeyMeta[]>>({});
+const routinesByKey = reactive<Record<string, RoutineMeta[]>>({});
+const txStatusByProfile = reactive<Record<string, TransactionStatus>>({});
 const expandedProfiles = reactive<Record<string, boolean>>({});
 const expandedDatabases = reactive<Record<string, boolean>>({});
 const expandedTables = reactive<Record<string, boolean>>({});
@@ -407,6 +428,12 @@ const inspectedIndexes = computed(() => {
   if (!inspectedTable.value) return [];
   const k = `${inspectedTable.value.profileId}:${inspectedTable.value.dbName}:${inspectedTable.value.tableName}`;
   return indexesByKey[k] ?? [];
+});
+
+const inspectedForeignKeys = computed(() => {
+  if (!inspectedTable.value) return [];
+  const k = `${inspectedTable.value.profileId}:${inspectedTable.value.dbName}:${inspectedTable.value.tableName}`;
+  return foreignKeysByKey[k] ?? [];
 });
 
 // Files Explorer (Recursive Tree) & Snippets State
@@ -615,6 +642,30 @@ const historyEntries = ref<QueryHistoryEntry[]>([]);
 const astAnalysis = ref<ScriptAnalysis | null>(null);
 const busy = ref(false);
 const queryExecuting = ref(false);
+const activeQueryId = ref<string | null>(null);
+const queryElapsedMs = ref(0);
+let queryTimerHandle: number | null = null;
+const splitTabId = ref<string | null>(null);
+const splitEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
+const splitTab = computed<EditorTab | null>(
+  () => tabs.value.find((t) => t.id === splitTabId.value) ?? null,
+);
+const commercialModalKind = ref<CommercialModalKind>('none');
+const commercialProfileId = ref('');
+const commercialDbName = ref('');
+const commercialTableName = ref('');
+const activeTxStatus = computed<TransactionStatus>(() => {
+  const pid = activeProfile.value?.id;
+  if (!pid) return { supported: false, manualMode: false, inTransaction: false, pendingStatements: 0 };
+  return (
+    txStatusByProfile[pid] ?? {
+      supported: false,
+      manualMode: false,
+      inTransaction: false,
+      pendingStatements: 0,
+    }
+  );
+});
 const statusMessage = ref('就绪 · 支持多项目多数据源管理、DBeaver 导入、结果集直接修改与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
 
@@ -795,13 +846,22 @@ function isTabDirty(tab: EditorTab): boolean {
 }
 
 function updateTabContent(next: string) {
-  const tab = activeTab.value;
+  updateTabContentByTarget(activeTab.value, next);
+}
+
+function updateTabContentByTarget(tab: EditorTab | null | undefined, next: string) {
   if (!tab) return;
   tab.content = next;
   tab.byteSize = estimateUtf8Bytes(next);
   tab.cursor.lineCount = countLines(next);
   tab.cursor.charCount = next.length;
   scheduleAstInspect();
+}
+
+function handleSplitCursorChange(telemetry: EditorCursorTelemetry) {
+  if (splitTab.value) {
+    splitTab.value.cursor = telemetry;
+  }
 }
 
 function handleCursorChange(telemetry: EditorCursorTelemetry) {
@@ -1144,6 +1204,13 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
       : rawTables;
     tablesByKey[key] = tables;
     expandedDatabases[key] = true;
+    if (!isRedisProfile(profile)) {
+      listRoutines(profile.id, dbName)
+        .then((rts) => {
+          routinesByKey[key] = rts;
+        })
+        .catch(() => {});
+    }
     // Prefetch first few tables' columns silently for instant SQL autocomplete
     for (const tbl of tables.slice(0, 12)) {
       const cKey = `${profile.id}:${dbName}:${tbl.name}`;
@@ -1250,13 +1317,18 @@ async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
 
 async function loadTableMetadata(profile: ConnectionProfile, dbName: string, tableName: string) {
   const key = `${profile.id}:${dbName}:${tableName}`;
+  const isRedis = isRedisProfile(profile);
   try {
-    const [cols, idxs] = await Promise.all([
+    const [cols, idxs, fks] = await Promise.all([
       listColumns(profile.id, dbName, tableName),
       listIndexes(profile.id, dbName, tableName).catch(() => [] as IndexMeta[]),
+      isRedis
+        ? Promise.resolve([] as ForeignKeyMeta[])
+        : listForeignKeys(profile.id, dbName, tableName).catch(() => [] as ForeignKeyMeta[]),
     ]);
     columnsByKey[key] = cols;
     indexesByKey[key] = idxs;
+    foreignKeysByKey[key] = fks;
   } catch (err) {
     setStatus(`读取表元数据失败 (${tableName}): ${String(err)}`, true);
   }
@@ -1279,6 +1351,16 @@ async function selectTableNode(profile: ConnectionProfile, dbName: string, table
   await loadTableMetadata(profile, dbName, tableName);
 }
 
+async function refreshTransactionStatus(profileId: string) {
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (!prof || isRedisProfile(prof) || !isTauriRuntime()) return;
+  try {
+    txStatusByProfile[profileId] = await getTransactionStatus(profileId);
+  } catch {
+    // non-fatal
+  }
+}
+
 async function handleProfileSelectChange(profileId: string) {
   selectedProfileId.value = profileId;
   selectedDbName.value = '';
@@ -1290,6 +1372,7 @@ async function handleProfileSelectChange(profileId: string) {
   const prof = connections.value.find((c) => c.id === profileId);
   if (prof) {
     syncActiveProjectForProfile(prof);
+    void refreshTransactionStatus(prof.id);
     await loadDatabasesForProfile(prof, true);
     const finalDb = activeTab.value?.dbName || selectedDbName.value || '';
     if (activeTab.value?.path && activeTab.value.profileId === prof.id) {
@@ -1674,9 +1757,15 @@ async function handleQueryTop100(profile: ConnectionProfile, dbName: string, tab
     return;
   }
   const engineKey = engineKeyOf(profile);
-  const quotedTable = quoteIdentifier(tableName, engineKey);
-  const sql = `SELECT * FROM ${quotedTable} LIMIT 100;`;
-  await executeStatementsBatch([sql], `${tableName} (前100行)`, profile, dbName, tableName);
+  const pageSize = maxRowsLimit.value ?? 100;
+  const sql = `${buildTablePageQuerySql({
+    dbName,
+    tableName,
+    engineKey,
+    limit: pageSize,
+    offset: 0,
+  })};`;
+  await executeStatementsBatch([sql], `${tableName} (前${pageSize}行)`, profile, dbName, tableName);
 }
 
 async function handleCountTable(profile: ConnectionProfile, dbName: string, tableName: string) {
@@ -2348,17 +2437,26 @@ async function handleOpenErDiagram(profile?: ConnectionProfile, dbName?: string)
     }
     const toFetch = tables
       .slice(0, 48)
-      .filter((tb) => !columnsByKey[`${target.profile.id}:${target.dbName}:${tb.name}`]);
+      .filter(
+        (tb) =>
+          !columnsByKey[`${target.profile.id}:${target.dbName}:${tb.name}`] ||
+          !foreignKeysByKey[`${target.profile.id}:${target.dbName}:${tb.name}`],
+      );
     for (let i = 0; i < toFetch.length; i += 6) {
       const batch = toFetch.slice(i, i + 6);
       await Promise.all(
         batch.map(async (tb) => {
           const ck = `${target.profile.id}:${target.dbName}:${tb.name}`;
-          try {
-            columnsByKey[ck] = await listColumns(target.profile.id, target.dbName, tb.name);
-          } catch {
-            columnsByKey[ck] = [];
-          }
+          const [colsRes, fksRes] = await Promise.all([
+            columnsByKey[ck]
+              ? Promise.resolve(columnsByKey[ck])
+              : listColumns(target.profile.id, target.dbName, tb.name).catch(() => [] as ColumnMeta[]),
+            foreignKeysByKey[ck]
+              ? Promise.resolve(foreignKeysByKey[ck])
+              : listForeignKeys(target.profile.id, target.dbName, tb.name).catch(() => [] as ForeignKeyMeta[]),
+          ]);
+          columnsByKey[ck] = colsRes;
+          foreignKeysByKey[ck] = fksRes;
         }),
       );
     }
@@ -2428,6 +2526,21 @@ async function runActiveEditor(runAll: boolean) {
     setStatus('请先在顶部工具栏选择一个目标数据源', true);
     return;
   }
+  await executeEditorTabSource(tab, prof, runAll);
+}
+
+async function runSplitEditor(runAll: boolean) {
+  const tab = splitTab.value;
+  if (!tab) return;
+  const prof = connections.value.find((c) => c.id === tab.profileId) ?? activeProfile.value;
+  if (!prof) {
+    setStatus('请先为分屏窗口选择目标数据源', true);
+    return;
+  }
+  await executeEditorTabSource(tab, prof, runAll);
+}
+
+async function executeEditorTabSource(tab: EditorTab, prof: ConnectionProfile, runAll: boolean) {
   const isRedis = isRedisProfile(prof);
 
   // 1. Selected text ALWAYS has highest priority (works in .md, .sql, .txt!)
@@ -2446,19 +2559,22 @@ async function runActiveEditor(runAll: boolean) {
   // 2. Markdown mode: execute enclosing SQL block or all fenced SQL blocks
   if (tab.fileKind === 'markdown') {
     if (runAll) {
-      if (activeMdBlocks.value.length === 0) {
+      const blocks = extractMarkdownSqlBlocksLocal(tab.content);
+      if (blocks.length === 0) {
         setStatus(t('mdNoBlocks'), true);
         return;
       }
       await runStatementsWithGuard(
-        activeMdBlocks.value.map((b) => b.sql),
+        blocks.map((b) => b.sql),
         tab.title,
         prof,
         tab.dbName,
       );
       return;
     }
-    const block = findEnclosingMarkdownBlock(tab.cursor.line);
+    const blocks = extractMarkdownSqlBlocksLocal(tab.content);
+    const block =
+      blocks.find((b) => tab.cursor.line >= b.startLine && tab.cursor.line <= b.endLine) ?? null;
     if (block) {
       await runStatementsWithGuard(
         [block.sql],
@@ -2493,6 +2609,7 @@ async function runActiveEditor(runAll: boolean) {
   }
 
   // 4. Regular SQL console/file: single statement at cursor or full script
+  const engineKey = engineKeyOf(prof);
   if (!runAll) {
     const stmt = await extractStatementAtCursor(tab.content, tab.cursor.cursorOffset);
     const toRun = (stmt ?? tab.content).trim();
@@ -2507,7 +2624,7 @@ async function runActiveEditor(runAll: boolean) {
       setStatus('当前脚本为空', true);
       return;
     }
-    const analysis = await analyzeSql(full, activeEngineKey.value);
+    const analysis = await analyzeSql(full, engineKey);
     const stmts =
       analysis.statements.length > 0
         ? analysis.statements.map((s) => s.sql.trim()).filter(Boolean)
@@ -2676,6 +2793,64 @@ async function resolveTablePrimaryKeys(
   return (cols ?? []).filter((c) => c.isPrimaryKey).map((c) => c.name);
 }
 
+async function resolveTableForeignKeys(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+): Promise<ForeignKeyMeta[]> {
+  const k = `${profile.id}:${dbName}:${tableName}`;
+  let fks = foreignKeysByKey[k];
+  if (!fks && dbName) {
+    try {
+      fks = await listForeignKeys(profile.id, dbName, tableName);
+      foreignKeysByKey[k] = fks;
+    } catch {
+      fks = [];
+    }
+  }
+  return fks ?? [];
+}
+
+function startQueryTimer(): string {
+  stopQueryTimer();
+  const qid = `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  activeQueryId.value = qid;
+  queryElapsedMs.value = 0;
+  const startedAt = Date.now();
+  queryTimerHandle = window.setInterval(() => {
+    queryElapsedMs.value = Date.now() - startedAt;
+  }, 100);
+  return qid;
+}
+
+function stopQueryTimer() {
+  if (queryTimerHandle !== null) {
+    window.clearInterval(queryTimerHandle);
+    queryTimerHandle = null;
+  }
+  activeQueryId.value = null;
+}
+
+async function handleCancelRunningQuery() {
+  const qid = activeQueryId.value;
+  if (!qid) return;
+  try {
+    const ok = await cancelQuery(qid);
+    if (ok) {
+      setStatus('已发送停止查询指令，正在终止当前执行...');
+      pushProjectLog({
+        projectId: activeProjectId.value,
+        profileId: activeProfile.value?.id,
+        profileName: activeProfile.value?.name || '查询控制',
+        level: 'warn',
+        summary: '用户中止了正在执行的查询',
+      });
+    }
+  } catch (err) {
+    setStatus(`取消查询失败: ${String(err)}`, true);
+  }
+}
+
 async function executeStatementsBatch(
   statements: string[],
   label: string,
@@ -2685,6 +2860,7 @@ async function executeStatementsBatch(
 ) {
   busy.value = true;
   queryExecuting.value = true;
+  const queryId = startQueryTimer();
   activeServiceTab.value = 'result';
   bottomVisible.value = true;
   const newTabs: ResultTabItem[] = [];
@@ -2715,11 +2891,17 @@ async function executeStatementsBatch(
       const effectiveDb = detected?.db || dbName;
       const sourceTable = isRedis ? null : (detected?.table ?? null);
 
-      // Kick off primary key metadata lookup in parallel so wide queries never stall waiting for SHOW COLUMNS.
+      // Kick off primary key & FK metadata lookup in parallel so wide queries never stall waiting for SHOW COLUMNS.
       const pkPromise =
         !isRedis && sourceTable && effectiveDb
           ? resolveTablePrimaryKeys(profile, effectiveDb, sourceTable).catch(() => [] as string[])
           : Promise.resolve([] as string[]);
+      const fkPromise =
+        !isRedis && sourceTable && effectiveDb
+          ? resolveTableForeignKeys(profile, effectiveDb, sourceTable).catch(
+              () => [] as ForeignKeyMeta[],
+            )
+          : Promise.resolve([] as ForeignKeyMeta[]);
 
       const rawColumns: string[] = [];
       const rawRows: Record<string, unknown>[] = [];
@@ -2747,6 +2929,7 @@ async function executeStatementsBatch(
             rawRows.push(...chunk.rows);
           }
         },
+        queryId,
       );
 
       let finalCols = rawColumns;
@@ -2775,7 +2958,10 @@ async function executeStatementsBatch(
         }
       }
 
-      const primaryKeys = await pkPromise;
+      const [primaryKeys, foreignKeys] = await Promise.all([pkPromise, fkPromise]);
+      const normalizedPageSize = [50, 100, 200, 500, 1000].includes(maxRowsLimit.value ?? 100)
+        ? (maxRowsLimit.value ?? 100)
+        : 100;
       const item: ResultTabItem = {
         id: tabId,
         title: tabTitle,
@@ -2789,9 +2975,15 @@ async function executeStatementsBatch(
         sourceTable,
         availableTables: isRedis ? [] : availableTables,
         primaryKeys,
+        foreignKeys,
         columns: markRaw(finalCols),
         rows: markRaw(rawRows),
         summary,
+        serverWhere: '',
+        serverOrderBy: '',
+        pageIndex: 0,
+        pageSize: normalizedPageSize,
+        totalRowCount: null,
       };
 
       totalMsAll += summary.durationMs;
@@ -2870,9 +3062,264 @@ async function executeStatementsBatch(
     activeServiceTab.value = 'output';
     setStatus(`执行 SQL 出错: ${msg}`, true);
   } finally {
+    stopQueryTimer();
+    queryExecuting.value = false;
+    busy.value = false;
+    if (!isRedis) {
+      void refreshTransactionStatus(profile.id);
+    }
+  }
+}
+
+async function handleServerQueryPage(
+  tab: ResultTabItem,
+  opts: { where: string; orderBy: string; pageIndex: number; pageSize: number },
+) {
+  if (!tab.sourceTable) return;
+  const prof = connections.value.find((c) => c.id === tab.profileId);
+  if (!prof) {
+    setStatus('该结果集关联的数据源已不存在', true);
+    return;
+  }
+  const sql = buildTablePageQuerySql({
+    dbName: tab.dbName,
+    tableName: tab.sourceTable,
+    engineKey: tab.engineKey,
+    whereClause: opts.where,
+    orderByClause: opts.orderBy,
+    limit: opts.pageSize,
+    offset: opts.pageIndex * opts.pageSize,
+  });
+  busy.value = true;
+  queryExecuting.value = true;
+  const queryId = startQueryTimer();
+  try {
+    const rawCols: string[] = [];
+    const rawRows: Record<string, unknown>[] = [];
+    const summary = await executeSql(
+      prof.id,
+      tab.dbName || null,
+      sql,
+      opts.pageSize,
+      (chunk) => {
+        if (rawCols.length === 0 && chunk.columns.length > 0) {
+          rawCols.push(...chunk.columns);
+        }
+        if (chunk.rows.length > 0) {
+          rawRows.push(...chunk.rows);
+        }
+      },
+      queryId,
+    );
+    const target = resultTabs.value.find((r) => r.id === tab.id) ?? tab;
+    if (summary.success) {
+      if (rawCols.length > 0) {
+        target.columns = markRaw(rawCols);
+      }
+      target.rows = markRaw(rawRows);
+      target.summary = summary;
+      target.sql = `${sql};`;
+      if ((target.serverWhere ?? '') !== opts.where) {
+        target.totalRowCount = null;
+      }
+      target.serverWhere = opts.where;
+      target.serverOrderBy = opts.orderBy;
+      target.pageIndex = opts.pageIndex;
+      target.pageSize = opts.pageSize;
+      setStatus(
+        `分页筛选完成 · 第 ${opts.pageIndex + 1} 页 · ${rawRows.length} 行 · ${summary.durationMs} ms`,
+      );
+    } else {
+      setStatus(`服务端筛选失败: ${summary.errorMessage || '未知错误'}`, true);
+    }
+  } catch (err) {
+    setStatus(`服务端分页查询异常: ${String(err)}`, true);
+  } finally {
+    stopQueryTimer();
     queryExecuting.value = false;
     busy.value = false;
   }
+}
+
+async function handleServerCountRows(tab: ResultTabItem) {
+  if (!tab.sourceTable) return;
+  const prof = connections.value.find((c) => c.id === tab.profileId);
+  if (!prof) return;
+  const countSql = buildTableCountQuerySql({
+    dbName: tab.dbName,
+    tableName: tab.sourceTable,
+    engineKey: tab.engineKey,
+    whereClause: tab.serverWhere,
+  });
+  busy.value = true;
+  try {
+    const rows: Record<string, unknown>[] = [];
+    const summary = await executeSql(prof.id, tab.dbName || null, countSql, 5, (chunk) => {
+      if (chunk.rows.length > 0) rows.push(...chunk.rows);
+    });
+    if (summary.success && rows.length > 0) {
+      const firstVal = Object.values(rows[0])[0];
+      const countNum = Number(firstVal ?? 0);
+      const target = resultTabs.value.find((r) => r.id === tab.id) ?? tab;
+      target.totalRowCount = Number.isFinite(countNum) ? countNum : 0;
+      setStatus(`表 ${tab.sourceTable} 匹配总行数: ${target.totalRowCount.toLocaleString()} 条`);
+    } else if (!summary.success) {
+      setStatus(`统计总行数失败: ${summary.errorMessage || '未知错误'}`, true);
+    }
+  } catch (err) {
+    setStatus(`统计总行数出错: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleJumpForeignKey(tab: ResultTabItem, fk: ForeignKeyMeta, cellValue: unknown) {
+  const prof = connections.value.find((c) => c.id === tab.profileId);
+  if (!prof) {
+    setStatus('未找到当前结果集的数据源', true);
+    return;
+  }
+  const whereClause = `${quoteIdentifier(fk.referencedColumn, tab.engineKey)} = ${formatSqlLiteral(cellValue)}`;
+  const sql = `${buildTablePageQuerySql({
+    dbName: tab.dbName,
+    tableName: fk.referencedTable,
+    engineKey: tab.engineKey,
+    whereClause,
+    limit: 100,
+    offset: 0,
+  })};`;
+  await executeStatementsBatch(
+    [sql],
+    `${fk.referencedTable} ← ${fk.columnName}`,
+    prof,
+    tab.dbName,
+    fk.referencedTable,
+  );
+}
+
+async function handleToggleTransactionMode() {
+  const prof = activeProfile.value;
+  if (!prof || isRedisProfile(prof)) return;
+  const nextManual = !activeTxStatus.value.manualMode;
+  busy.value = true;
+  try {
+    const st = await setTransactionMode(prof.id, nextManual);
+    txStatusByProfile[prof.id] = st;
+    setStatus(
+      nextManual
+        ? `已为「${prof.name}」开启手动事务模式 (Manual Tx)`
+        : `已为「${prof.name}」恢复自动提交模式 (Auto-Commit)`,
+    );
+  } catch (err) {
+    setStatus(`切换事务模式失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleCommitTransaction() {
+  const prof = activeProfile.value;
+  if (!prof || isRedisProfile(prof)) return;
+  busy.value = true;
+  try {
+    const st = await commitTransaction(prof.id);
+    txStatusByProfile[prof.id] = st;
+    setStatus(`事务已提交 (COMMIT) · ${prof.name}`);
+    pushProjectLog({
+      projectId: prof.projectId || activeProjectId.value,
+      profileId: prof.id,
+      profileName: prof.name,
+      level: 'success',
+      summary: '手动事务已 COMMIT 提交',
+    });
+  } catch (err) {
+    setStatus(`COMMIT 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function handleRollbackTransaction() {
+  const prof = activeProfile.value;
+  if (!prof || isRedisProfile(prof)) return;
+  busy.value = true;
+  try {
+    const st = await rollbackTransaction(prof.id);
+    txStatusByProfile[prof.id] = st;
+    setStatus(`事务已回滚 (ROLLBACK) · ${prof.name}`);
+    pushProjectLog({
+      projectId: prof.projectId || activeProjectId.value,
+      profileId: prof.id,
+      profileName: prof.name,
+      level: 'warn',
+      summary: '手动事务已 ROLLBACK 回滚',
+    });
+  } catch (err) {
+    setStatus(`ROLLBACK 失败: ${String(err)}`, true);
+  } finally {
+    busy.value = false;
+  }
+}
+
+function toggleSplitEditor() {
+  if (splitTabId.value) {
+    splitTabId.value = null;
+    return;
+  }
+  if (!activeTab.value) {
+    setStatus('请先打开至少 1 个编辑器标签页再开启分屏', true);
+    return;
+  }
+  const other = tabs.value.find((t) => t.id !== activeTab.value?.id);
+  splitTabId.value = other?.id ?? activeTab.value.id;
+}
+
+function handleOpenCommercialTool(
+  kind: CommercialModalKind,
+  profile?: ConnectionProfile,
+  dbName?: string,
+  tableName?: string,
+) {
+  const prof = profile ?? activeProfile.value;
+  if (prof) syncActiveProjectForProfile(prof);
+  commercialProfileId.value = prof?.id ?? '';
+  commercialDbName.value = dbName ?? activeTab.value?.dbName ?? selectedDbName.value ?? '';
+  commercialTableName.value = tableName ?? inspectedTable.value?.tableName ?? '';
+  commercialModalKind.value = kind;
+}
+
+function handleSendCommercialSqlToEditor(sql: string, profileId?: string, dbName?: string) {
+  commercialModalKind.value = 'none';
+  handleSendToolSqlToEditor(sql, profileId, dbName);
+}
+
+async function handleRunCommercialStatements(
+  statements: string[],
+  label: string,
+  profileId: string,
+  dbName: string,
+  refreshDb = false,
+) {
+  commercialModalKind.value = 'none';
+  const prof = connections.value.find((c) => c.id === profileId);
+  if (!prof) {
+    setStatus('未找到目标数据源连接', true);
+    return;
+  }
+  await runStatementsWithGuard(statements, label, prof, dbName, true);
+  if (refreshDb && dbName) {
+    await loadTablesForDb(prof, dbName);
+  }
+}
+
+function handleInspectRoutine(profile: ConnectionProfile, dbName: string, routine: RoutineMeta) {
+  const header = `-- ${routine.kind}: ${dbName}.${routine.name}${routine.returnType ? ` -> ${routine.returnType}` : ''}${routine.comment ? `\n-- ${routine.comment}` : ''}\n`;
+  ddlTitle.value = `${profile.name} · ${dbName}.${routine.name} (${routine.kind})`;
+  ddlText.value = routine.definition?.trim()
+    ? `${header}\n${routine.definition}`
+    : `${header}\n-- 当前数据库驱动未返回例程源码正文。`;
+  activeServiceTab.value = 'ddl';
+  bottomVisible.value = true;
 }
 
 function handlePreviewGridMutations(payload: GridMutationPreviewPayload) {
@@ -3372,6 +3819,9 @@ function closeEditorTab(id: string, force = false) {
   }
   pushClosedTabs([closing]);
   tabs.value = tabs.value.filter((t) => t.id !== id);
+  if (splitTabId.value === id) {
+    splitTabId.value = null;
+  }
   if (tabs.value.length === 0) {
     activeTabId.value = '';
     astAnalysis.value = null;
@@ -3417,6 +3867,7 @@ function closeOtherTabs(keepId: string) {
   pushClosedTabs(toClose);
   tabs.value = [target];
   activeTabId.value = target.id;
+  if (splitTabId.value && splitTabId.value !== keepId) splitTabId.value = null;
   scheduleAstInspect();
 }
 
@@ -3425,6 +3876,7 @@ function closeAllTabs() {
   pushClosedTabs(tabs.value);
   tabs.value = [];
   activeTabId.value = '';
+  splitTabId.value = null;
   astAnalysis.value = null;
 }
 
@@ -3437,6 +3889,9 @@ function closeTabsToLeft(targetId: string) {
   if (!tabs.value.some((t) => t.id === activeTabId.value)) {
     activeTabId.value = targetId;
   }
+  if (splitTabId.value && !tabs.value.some((t) => t.id === splitTabId.value)) {
+    splitTabId.value = null;
+  }
 }
 
 function closeTabsToRight(targetId: string) {
@@ -3448,6 +3903,9 @@ function closeTabsToRight(targetId: string) {
   if (!tabs.value.some((t) => t.id === activeTabId.value)) {
     activeTabId.value = targetId;
   }
+  if (splitTabId.value && !tabs.value.some((t) => t.id === splitTabId.value)) {
+    splitTabId.value = null;
+  }
 }
 
 function closeUnmodifiedTabs() {
@@ -3457,9 +3915,15 @@ function closeUnmodifiedTabs() {
   tabs.value = tabs.value.filter((t) => isTabDirty(t));
   if (tabs.value.length === 0) {
     activeTabId.value = '';
+    splitTabId.value = null;
     astAnalysis.value = null;
-  } else if (!tabs.value.some((t) => t.id === activeTabId.value)) {
-    activeTabId.value = tabs.value[0].id;
+  } else {
+    if (!tabs.value.some((t) => t.id === activeTabId.value)) {
+      activeTabId.value = tabs.value[0].id;
+    }
+    if (splitTabId.value && !tabs.value.some((t) => t.id === splitTabId.value)) {
+      splitTabId.value = null;
+    }
   }
 }
 
@@ -3894,6 +4358,10 @@ const searchItems = computed<SearchEverywhereItem[]>(() => {
     { id: 'act-create-table', category: 'action', label: '可视化新建数据表...', detail: '零手写 DDL，可视化设计字段、主键、自增与索引并实时预览生成 SQL', badge: '建模' },
     { id: 'act-object-search', category: 'action', label: '🔍 在数据库中全局查找表/字段/Key...', detail: '跨表检索表名、列名、注释与 Redis Key 模式', badge: '搜索' },
     { id: 'act-schema-diff', category: 'action', label: '⚖️ 表结构对比与同步 DDL...', detail: '对比任意两张表或跨环境差异并生成 ALTER 同步脚本', badge: '比对' },
+    { id: 'act-data-diff', category: 'action', label: '🧬 表数据内容对比与同步 SQL...', detail: '按主键比对两表真实数据行差异并生成 INSERT/UPDATE/DELETE 同步脚本', badge: '同步' },
+    { id: 'act-data-transfer', category: 'action', label: '🚚 跨库 / 跨引擎数据迁移向导...', detail: '支持 MySQL/PostgreSQL/SQLite 自动方言建表与分批高效迁移数据', badge: '迁移' },
+    { id: 'act-data-dict', category: 'action', label: '📘 生成并导出数据库数据字典...', detail: '批量汇总字段/索引/外键/例程元数据并导出 Markdown / HTML 文档', badge: '文档' },
+    { id: 'act-split-editor', category: 'action', label: '⧉ 开启 / 关闭双栏分屏编辑器', detail: '同时并排查看或对照编辑两份 SQL 脚本', badge: '分屏' },
     { id: 'act-er-diagram', category: 'action', label: '🗺️ 查看当前库 ER 关系图谱...', detail: '交互式画布展示数据表关联并支持导出 SVG', badge: 'ER图' },
     { id: 'act-server-monitor', category: 'action', label: '📊 打开实例服务器监控与会话管理...', detail: '实时监控 QPS/内存/活跃会话，支持安全终止异常查询', badge: '监控' },
     { id: 'act-import', category: 'action', label: t('importDbeaver'), detail: '扫描本机 DBeaver 或导入 data-sources.json / .dbp / .xml', badge: 'DBeaver' },
@@ -3989,6 +4457,10 @@ async function handleSelectSearchItem(item: SearchEverywhereItem) {
     else if (item.id === 'act-create-table') openCreateTableFromToolbar();
     else if (item.id === 'act-object-search') handleOpenObjectSearch();
     else if (item.id === 'act-schema-diff') handleOpenSchemaDiff();
+    else if (item.id === 'act-data-diff') handleOpenCommercialTool('data-diff');
+    else if (item.id === 'act-data-transfer') handleOpenCommercialTool('data-transfer');
+    else if (item.id === 'act-data-dict') handleOpenCommercialTool('data-dict');
+    else if (item.id === 'act-split-editor') toggleSplitEditor();
     else if (item.id === 'act-er-diagram') await handleOpenErDiagram();
     else if (item.id === 'act-server-monitor') handleOpenServerMonitor();
     else if (item.id === 'act-import') activeModal.value = 'import';
@@ -4088,6 +4560,14 @@ function onGlobalKeydown(e: KeyboardEvent) {
     e.stopPropagation();
     openDataSourcesDialog(true);
     return;
+  }
+
+  if (matchesCombo(e, keymap.getCombo('cancelQuery'))) {
+    if (queryExecuting.value) {
+      e.preventDefault();
+      void handleCancelRunningQuery();
+      return;
+    }
   }
 
   if (matchesCombo(e, keymap.getCombo('openKeymap'))) {
@@ -4509,6 +4989,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  stopQueryTimer();
   window.removeEventListener('keydown', onGlobalKeydown, { capture: true });
   window.removeEventListener('keyup', onGlobalKeyup);
   window.removeEventListener('click', onGlobalClick);
@@ -4707,6 +5188,18 @@ onBeforeUnmount(() => {
               </button>
               <button class="dropdown-item" @click="openMenu = null; handleOpenSchemaDiff()">
                 <span>⚖️ 表结构对比与同步 DDL...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleOpenCommercialTool('data-diff')">
+                <span>🧬 表数据内容对比与同步 SQL...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleOpenCommercialTool('data-transfer')">
+                <span>🚚 跨库 / 跨引擎数据迁移向导...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; handleOpenCommercialTool('data-dict')">
+                <span>📘 生成并导出数据库数据字典 (.md / .html)...</span>
+              </button>
+              <button class="dropdown-item" @click="openMenu = null; toggleSplitEditor()">
+                <span>⧉ {{ splitTab ? '关闭分屏对比编辑器' : '开启分屏对比编辑器' }}</span>
               </button>
               <button class="dropdown-item" @click="openMenu = null; handleOpenServerMonitor()">
                 <span>📊 服务器监控与活跃会话管理...</span>
@@ -4959,6 +5452,16 @@ onBeforeUnmount(() => {
           </button>
 
           <button
+            v-if="queryExecuting"
+            class="icon-btn btn-stop-query"
+            :title="`停止正在执行的查询 (${keymap.getDisplay('cancelQuery')})`"
+            @click="handleCancelRunningQuery"
+          >
+            <span>■ 停止</span>
+            <span style="font-family: var(--font-mono)">{{ (queryElapsedMs / 1000).toFixed(1) }}s</span>
+          </button>
+
+          <button
             class="icon-btn"
             :disabled="busy || !activeProfile || !activeTab"
             :title="`${t('explainBtn')} · ${activeExplainMeta.dialectLabel} (${keymap.getDisplay('explainSql')})`"
@@ -5124,6 +5627,8 @@ onBeforeUnmount(() => {
           :tables-by-key="tablesByKey"
           :columns-by-key="columnsByKey"
           :indexes-by-key="indexesByKey"
+          :foreign-keys-by-key="foreignKeysByKey"
+          :routines-by-key="routinesByKey"
           :expanded-profiles="expandedProfiles"
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
@@ -5172,6 +5677,10 @@ onBeforeUnmount(() => {
           @open-alter-table="handleOpenAlterTable"
           @open-er-diagram="handleOpenErDiagram"
           @open-server-monitor="handleOpenServerMonitor"
+          @open-data-diff="(p, d, tName) => handleOpenCommercialTool('data-diff', p, d, tName)"
+          @open-data-transfer="(p, d, tName) => handleOpenCommercialTool('data-transfer', p, d, tName)"
+          @open-data-dict="(p, d, tName) => handleOpenCommercialTool('data-dict', p, d, tName)"
+          @inspect-routine="handleInspectRoutine"
           @dump-sql="handleDumpSql"
           @run-sql-file="handleRunLocalSqlFile"
           @open-redis-new-key="handleOpenRedisNewKey"
@@ -5572,6 +6081,52 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <div
+              v-if="activeProfile && !isRedisProfile(activeProfile) && !isMarkdownTab"
+              class="tx-bar-group"
+            >
+              <button
+                class="btn btn-sm"
+                :class="{ 'btn-primary': activeTxStatus.manualMode }"
+                title="切换当前连接会话的事务模式：自动提交 (Auto) / 手动提交 (Manual)"
+                @click="handleToggleTransactionMode"
+              >
+                Tx: {{ activeTxStatus.manualMode ? '手动' : '自动' }}
+              </button>
+              <template v-if="activeTxStatus.manualMode || activeTxStatus.inTransaction">
+                <span v-if="activeTxStatus.inTransaction" class="pill pill-test">
+                  未提交 {{ activeTxStatus.pendingStatements }}
+                </span>
+                <button
+                  class="btn btn-sm"
+                  style="color: var(--run-green-bright)"
+                  :disabled="!activeTxStatus.inTransaction || busy"
+                  title="提交当前手动事务 (COMMIT)"
+                  @click="handleCommitTransaction"
+                >
+                  Commit
+                </button>
+                <button
+                  class="btn btn-sm"
+                  style="color: var(--prod)"
+                  :disabled="!activeTxStatus.inTransaction || busy"
+                  title="回滚当前手动事务 (ROLLBACK)"
+                  @click="handleRollbackTransaction"
+                >
+                  Rollback
+                </button>
+              </template>
+            </div>
+
+            <button
+              class="btn btn-sm"
+              :class="{ 'btn-primary': Boolean(splitTab) }"
+              title="开启 / 关闭右侧分屏对比编辑器"
+              @click="toggleSplitEditor"
+            >
+              ⧉ 分屏
+            </button>
+
             <span
               v-if="astAnalysis"
               class="pill"
@@ -5733,6 +6288,59 @@ onBeforeUnmount(() => {
               </div>
             </template>
           </div>
+
+          <!-- Split Dual-Pane Secondary SQL Editor -->
+          <div
+            v-if="splitTab && (!isMarkdownTab || activeTab.mdViewMode === 'source')"
+            class="editor-pane editor-pane-split"
+          >
+            <div class="split-pane-header">
+              <div style="display: flex; align-items: center; gap: 6px; min-width: 0">
+                <span style="font-size: 11px; color: var(--text-secondary)">分屏:</span>
+                <select
+                  v-model="splitTabId"
+                  class="field"
+                  style="width: auto; max-width: 220px; padding: 1px 6px; font-size: 11px"
+                >
+                  <option v-for="tb in tabs" :key="tb.id" :value="tb.id">
+                    {{ tb.title }}
+                  </option>
+                </select>
+              </div>
+              <div style="display: flex; align-items: center; gap: 4px">
+                <button
+                  class="btn btn-sm"
+                  :disabled="busy"
+                  title="执行分屏编辑器当前 SQL"
+                  @click="runSplitEditor(false)"
+                >
+                  ▶ 运行
+                </button>
+                <button
+                  class="icon-btn compact"
+                  title="关闭分屏"
+                  @click="splitTabId = null"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <CodeEditor
+              ref="splitEditorRef"
+              :model-value="splitTab.content"
+              :file-kind="splitTab.fileKind"
+              :engine-key="activeEngineKey"
+              :theme="theme"
+              :read-only="splitTab.readOnly"
+              :font-size="editorFontSize"
+              :word-wrap="editorWordWrap"
+              :schema-map="activeSchemaMap"
+              :max-rows-limit="maxRowsLimit"
+              @update:model-value="updateTabContentByTarget(splitTab, $event)"
+              @cursor-change="handleSplitCursorChange"
+              @run-shortcut="runSplitEditor"
+            />
+          </div>
         </div>
 
         <!-- Empty Editor State (when all console / file tabs are closed) -->
@@ -5807,6 +6415,15 @@ onBeforeUnmount(() => {
             @run-console-sql="handleRunConsoleQuickSql"
             @send-sql-to-editor="createNewConsoleTab($event)"
             @rerun-result="handleRerunResultTab"
+            @server-query-page="handleServerQueryPage"
+            @server-count-rows="handleServerCountRows"
+            @jump-foreign-key="handleJumpForeignKey"
+            @open-data-diff="
+              (tab) => {
+                const p = connections.find((c) => c.id === tab.profileId);
+                handleOpenCommercialTool('data-diff', p, tab.dbName, tab.sourceTable ?? undefined);
+              }
+            "
             @notify="setStatus($event)"
           />
         </section>
@@ -6025,6 +6642,34 @@ onBeforeUnmount(() => {
                 </div>
                 <div style="font-size: 10.5px; color: var(--text-secondary); font-family: var(--font-mono); margin-top: 2px">
                   ({{ idx.columns.join(', ') }})
+                </div>
+              </div>
+
+              <div style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin: 12px 2px 4px">
+                外键关联 ({{ inspectedForeignKeys.length }})
+              </div>
+              <div
+                v-if="inspectedForeignKeys.length === 0"
+                style="font-size: 11px; color: var(--text-muted); padding: 4px 6px"
+              >
+                无外键约束
+              </div>
+              <div
+                v-for="fk in inspectedForeignKeys"
+                :key="`${fk.name}-${fk.columnName}`"
+                style="
+                  padding: 5px 6px;
+                  border-bottom: 1px solid var(--border-subtle);
+                  font-size: 11.5px;
+                "
+              >
+                <div style="font-family: var(--font-mono); font-weight: 600">
+                  🔗 {{ fk.columnName }} → {{ fk.referencedTable }}.{{ fk.referencedColumn }}
+                </div>
+                <div style="font-size: 10.5px; color: var(--text-secondary); margin-top: 2px">
+                  {{ fk.name }}
+                  <template v-if="fk.onDelete"> · ON DELETE {{ fk.onDelete }}</template>
+                  <template v-if="fk.onUpdate"> · ON UPDATE {{ fk.onUpdate }}</template>
                 </div>
               </div>
             </template>
@@ -6461,6 +7106,7 @@ onBeforeUnmount(() => {
       :db-name="erDiagramDbName"
       :tables="erDiagramProfile && erDiagramDbName ? (tablesByKey[`${erDiagramProfile.id}:${erDiagramDbName}`] ?? []) : []"
       :columns-by-key="columnsByKey"
+      :foreign-keys-by-key="foreignKeysByKey"
       @close="erDiagramVisible = false"
       @query-table="
         (prof, db, tbl) => {
@@ -6468,6 +7114,25 @@ onBeforeUnmount(() => {
           handleQueryTop100(prof, db, tbl);
         }
       "
+      @notify="setStatus($event)"
+    />
+
+    <CommercialToolsModals
+      :modal-kind="commercialModalKind"
+      :connections="connections"
+      :databases-by-profile="databasesByProfile"
+      :tables-by-key="tablesByKey"
+      :columns-by-key="columnsByKey"
+      :indexes-by-key="indexesByKey"
+      :foreign-keys-by-key="foreignKeysByKey"
+      :routines-by-key="routinesByKey"
+      :initial-profile-id="commercialProfileId"
+      :initial-db-name="commercialDbName"
+      :initial-table-name="commercialTableName"
+      :busy="busy"
+      @close="commercialModalKind = 'none'"
+      @send-sql-to-editor="handleSendCommercialSqlToEditor"
+      @run-statements="handleRunCommercialStatements"
       @notify="setStatus($event)"
     />
 

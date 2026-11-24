@@ -19,6 +19,7 @@ use pacer_core::{
 use pacer_sql_ast::{analyze_sql, split_redis_commands, tokenize_redis_command, SqlAccessKind};
 
 use crate::sqlite::stream_chunks;
+use crate::ssh_tunnel::{open_ssh_tunnel, SshTunnelHandle};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_RESP_DEPTH: usize = 16;
@@ -150,7 +151,7 @@ struct RedisConn {
 
 impl RedisConn {
     async fn connect(endpoint: &RedisEndpoint) -> CoreResult<Self> {
-        let addr = (endpoint.host.as_str(), endpoint.port);
+        let addr = (endpoint.connect_host.as_str(), endpoint.connect_port);
         let tcp = tokio::time::timeout(IO_TIMEOUT, TcpStream::connect(addr))
             .await
             .map_err(|_| {
@@ -424,6 +425,8 @@ impl RedisConn {
 struct RedisEndpoint {
     host: String,
     port: u16,
+    connect_host: String,
+    connect_port: u16,
     username: Option<String>,
     password: Option<String>,
     default_db: u32,
@@ -438,6 +441,7 @@ pub struct RedisBackend {
     endpoint: RedisEndpoint,
     read_only: bool,
     conn: Mutex<Option<RedisConn>>,
+    _ssh_tunnel: Option<SshTunnelHandle>,
 }
 
 impl RedisBackend {
@@ -471,9 +475,20 @@ impl RedisBackend {
             .map(split_redis_commands)
             .unwrap_or_default();
 
+        let ssh_tunnel = match config.ssh.as_ref().filter(|s| s.enabled) {
+            Some(ssh_cfg) => Some(open_ssh_tunnel(ssh_cfg, &host, port).await?),
+            None => None,
+        };
+        let (connect_host, connect_port) = match &ssh_tunnel {
+            Some(t) => ("127.0.0.1".to_string(), t.local_port()),
+            None => (host.clone(), port),
+        };
+
         let endpoint = RedisEndpoint {
             host,
             port,
+            connect_host,
+            connect_port,
             username: config.username.clone().filter(|s| !s.trim().is_empty()),
             password: password
                 .map(|s| s.to_string())
@@ -497,6 +512,7 @@ impl RedisBackend {
             endpoint,
             read_only: config.read_only,
             conn: Mutex::new(Some(initial_conn)),
+            _ssh_tunnel: ssh_tunnel,
         })
     }
 }

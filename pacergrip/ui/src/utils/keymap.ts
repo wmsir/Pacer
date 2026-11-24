@@ -10,6 +10,7 @@ export type ShortcutCategory = 'execution' | 'tabs' | 'files' | 'panels' | 'edit
 export type ShortcutActionId =
   | 'runCurrent'
   | 'runAll'
+  | 'cancelQuery'
   | 'explainSql'
   | 'formatSql'
   | 'newConsole'
@@ -68,6 +69,13 @@ export const SHORTCUT_ACTIONS: ShortcutActionDef[] = [
     labelZh: '执行全部脚本 / 所有 SQL 块',
     labelEn: 'Execute All Statements',
     defaultCombo: 'Ctrl+Shift+Enter',
+  },
+  {
+    id: 'cancelQuery',
+    category: 'execution',
+    labelZh: '中止当前运行中的查询',
+    labelEn: 'Stop Running Query',
+    defaultCombo: 'Ctrl+F2',
   },
   {
     id: 'explainSql',
@@ -243,6 +251,7 @@ export const KEYMAP_PRESETS: Record<'idea' | 'vscode', Record<ShortcutActionId, 
   idea: {
     runCurrent: 'Ctrl+Enter',
     runAll: 'Ctrl+Shift+Enter',
+    cancelQuery: 'Ctrl+F2',
     explainSql: 'Ctrl+Alt+E',
     formatSql: 'Ctrl+Alt+L',
     newConsole: 'Ctrl+N',
@@ -271,6 +280,7 @@ export const KEYMAP_PRESETS: Record<'idea' | 'vscode', Record<ShortcutActionId, 
   vscode: {
     runCurrent: 'Ctrl+Enter',
     runAll: 'F5',
+    cancelQuery: 'Ctrl+F2',
     explainSql: 'Ctrl+Alt+E',
     formatSql: 'Alt+Shift+F',
     newConsole: 'Ctrl+N',
