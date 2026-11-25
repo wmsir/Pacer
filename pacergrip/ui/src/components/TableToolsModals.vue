@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { openTextFile, pickDataImportFile, type ColumnMeta, type EnvLevel } from '../api/ipc';
+import {
+  openTextFile,
+  pickDataImportFile,
+  readXlsxSheet,
+  type ColumnMeta,
+  type EnvLevel,
+  type XlsxSheetPreview,
+} from '../api/ipc';
 import IdeIcon from './IdeIcon.vue';
 import {
   buildBatchInsertStatements,
@@ -61,17 +68,64 @@ const emit = defineEmits<{
   (e: 'notify', message: string): void;
 }>();
 
-// ==================== 1. CSV / TSV / JSON Data Import ====================
+// ==================== 1. Excel / CSV / TSV / JSON Data Import ====================
 const importRawText = ref('');
 const importSourceFile = ref('');
+const importXlsxPreview = ref<XlsxSheetPreview | null>(null);
 const importFormat = ref<'auto' | 'csv' | 'json'>('auto');
 const importDelimiter = ref<'auto' | ',' | '\t' | ';'>('auto');
 const importHasHeader = ref(true);
 const importBatchSize = ref(100);
-const importIgnoreDuplicates = ref(true);
+const importMode = ref<'insert' | 'ignore' | 'upsert'>('ignore');
+const importConflictKeys = ref<string[]>([]);
 const columnMappings = reactive<Record<string, string>>({});
 
+function toggleConflictKey(colName: string) {
+  if (importConflictKeys.value.includes(colName)) {
+    importConflictKeys.value = importConflictKeys.value.filter((c) => c !== colName);
+  } else {
+    importConflictKeys.value = [...importConflictKeys.value, colName];
+  }
+}
+
 const parsedImport = computed(() => {
+  if (importXlsxPreview.value) {
+    const pv = importXlsxPreview.value;
+    if (importHasHeader.value) {
+      const headers = pv.headers;
+      const rows = pv.rows.map((cells) => {
+        const obj: Record<string, unknown> = {};
+        for (let i = 0; i < headers.length; i++) {
+          obj[headers[i]] = cells[i] ?? '';
+        }
+        return obj;
+      });
+      return {
+        detectedFormat: 'xlsx',
+        headers,
+        rows,
+        delimiter: '',
+        error: null as string | null,
+      };
+    }
+    const allRows = pv.headers.length > 0 ? [pv.headers, ...pv.rows] : pv.rows;
+    const width = Math.max(0, ...allRows.map((r) => r.length));
+    const headers = Array.from({ length: width }, (_, i) => `col_${i + 1}`);
+    const rows = allRows.map((cells) => {
+      const obj: Record<string, unknown> = {};
+      for (let i = 0; i < headers.length; i++) {
+        obj[headers[i]] = cells[i] ?? '';
+      }
+      return obj;
+    });
+    return {
+      detectedFormat: 'xlsx',
+      headers,
+      rows,
+      delimiter: '',
+      error: null as string | null,
+    };
+  }
   try {
     return {
       ...parseImportData(importRawText.value, importFormat.value, {
@@ -82,7 +136,7 @@ const parsedImport = computed(() => {
     };
   } catch (err) {
     return {
-      detectedFormat: 'csv' as const,
+      detectedFormat: 'csv',
       headers: [] as string[],
       rows: [] as Array<Record<string, unknown>>,
       delimiter: ',',
@@ -118,15 +172,42 @@ watch(
     if (kind === 'import-data') {
       importSourceFile.value = '';
       importRawText.value = '';
+      importXlsxPreview.value = null;
+      importConflictKeys.value =
+        props.tableContext?.columns.filter((c) => c.isPrimaryKey).map((c) => c.name) ?? [];
       for (const k of Object.keys(columnMappings)) delete columnMappings[k];
     }
   },
 );
 
+async function switchXlsxSheet(sheetName: string) {
+  if (!importSourceFile.value) return;
+  try {
+    for (const k of Object.keys(columnMappings)) delete columnMappings[k];
+    importXlsxPreview.value = await readXlsxSheet(importSourceFile.value, sheetName, 2000);
+    emit('notify', `已切换 Excel 工作表：${importXlsxPreview.value.activeSheet}`);
+  } catch (err) {
+    emit('notify', `读取工作表失败: ${String(err)}`);
+  }
+}
+
 async function browseImportDataFile() {
   try {
     const path = await pickDataImportFile();
     if (!path) return;
+    for (const k of Object.keys(columnMappings)) delete columnMappings[k];
+    if (path.toLowerCase().endsWith('.xlsx')) {
+      importSourceFile.value = path;
+      importRawText.value = '';
+      const preview = await readXlsxSheet(path, null, 2000);
+      importXlsxPreview.value = preview;
+      emit(
+        'notify',
+        `已解析 Excel 工作簿「${preview.activeSheet}」(${preview.rows.length}${preview.truncated ? `+ / 共 ${preview.totalRows}` : ''} 行)`,
+      );
+      return;
+    }
+    importXlsxPreview.value = null;
     const opened = await openTextFile(path);
     importSourceFile.value = path;
     importRawText.value = opened.content;
@@ -172,7 +253,9 @@ function buildMappedImportStatements(): string[] {
     targetColumnTypes,
     rows: mappedRows,
     batchSize: importBatchSize.value,
-    ignoreDuplicates: importIgnoreDuplicates.value,
+    ignoreDuplicates: importMode.value === 'ignore',
+    mode: importMode.value,
+    conflictKeys: importConflictKeys.value,
   });
 }
 
@@ -456,14 +539,31 @@ function executeRenameTable() {
 
       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px">
         <button class="btn btn-sm" @click="browseImportDataFile">
-          <IdeIcon name="folder-open" :size="12" /> 选择 CSV / TSV / JSON 文件...
+          <IdeIcon name="folder-open" :size="12" /> 选择 Excel (.xlsx) / CSV / JSON...
         </button>
-        <select v-model="importFormat" class="field" style="width: auto; font-size: 11.5px">
+        <select
+          v-if="importXlsxPreview"
+          :value="importXlsxPreview.activeSheet"
+          class="field"
+          style="width: auto; font-size: 11.5px"
+          @change="switchXlsxSheet(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-for="sn in importXlsxPreview.sheetNames" :key="sn" :value="sn">
+            Sheet: {{ sn }}
+          </option>
+        </select>
+        <select
+          v-if="!importXlsxPreview"
+          v-model="importFormat"
+          class="field"
+          style="width: auto; font-size: 11.5px"
+        >
           <option value="auto">格式：自动识别</option>
           <option value="csv">CSV / TSV</option>
           <option value="json">JSON 数组</option>
         </select>
         <select
+          v-if="!importXlsxPreview"
           v-model="importDelimiter"
           class="field"
           style="width: auto; font-size: 11.5px"
@@ -478,10 +578,11 @@ function executeRenameTable() {
           <input v-model="importHasHeader" type="checkbox" />
           <span>首行为列名</span>
         </label>
-        <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; cursor: pointer">
-          <input v-model="importIgnoreDuplicates" type="checkbox" />
-          <span>忽略冲突 (IGNORE)</span>
-        </label>
+        <select v-model="importMode" class="field" style="width: auto; font-size: 11.5px" title="冲突写入策略">
+          <option value="insert">普通插入 (INSERT)</option>
+          <option value="ignore">忽略冲突 (IGNORE)</option>
+          <option value="upsert">冲突更新 (UPSERT)</option>
+        </select>
         <select v-model.number="importBatchSize" class="field" style="width: auto; font-size: 11.5px">
           <option :value="50">每批 50 行</option>
           <option :value="100">每批 100 行</option>
@@ -489,16 +590,48 @@ function executeRenameTable() {
         </select>
       </div>
 
-      <div v-if="importSourceFile" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; font-family: var(--font-mono)">
-        已载入：{{ importSourceFile }}
+      <div
+        v-if="importMode === 'upsert' && tableContext"
+        style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 11px"
+      >
+        <span style="color: var(--text-secondary); font-weight: 600">冲突判定键 (PG/SQLite):</span>
+        <label
+          v-for="col in tableContext.columns"
+          :key="`ck-${col.name}`"
+          style="display: inline-flex; align-items: center; gap: 3px; cursor: pointer"
+        >
+          <input
+            type="checkbox"
+            :checked="importConflictKeys.includes(col.name)"
+            @change="toggleConflictKey(col.name)"
+          />
+          <span>{{ col.name }}</span>
+        </label>
+      </div>
+
+      <div v-if="importSourceFile" style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px; font-family: var(--font-mono); display: flex; justify-content: space-between; align-items: center; gap: 8px">
+        <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+          已载入：{{ importSourceFile }}
+          <template v-if="importXlsxPreview?.truncated">
+            (预览前 {{ importXlsxPreview.rows.length }} / 共 {{ importXlsxPreview.totalRows }} 行)
+          </template>
+        </span>
+        <button
+          v-if="importXlsxPreview"
+          class="icon-btn compact"
+          @click="importXlsxPreview = null; importSourceFile = ''"
+        >
+          清除重选
+        </button>
       </div>
 
       <textarea
+        v-if="!importXlsxPreview"
         v-model="importRawText"
         class="field"
         rows="4"
         style="font-family: var(--font-mono); font-size: 11.5px; margin-bottom: 8px; resize: vertical"
-        placeholder="粘贴 CSV / TSV 文本或 JSON 数组（也可点击上方按钮直接读取 Excel CSV/JSON 文件，自动兼容 GBK 与 UTF-8 BOM）..."
+        placeholder="粘贴 CSV / TSV 文本或 JSON 数组（也可点击上方按钮直接读取 Excel .xlsx 工作簿 / CSV / JSON 文件）..."
       />
 
       <div v-if="parsedImport.error" style="color: var(--prod); font-size: 12px; margin-bottom: 8px">

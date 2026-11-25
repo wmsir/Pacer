@@ -12,6 +12,7 @@ import type {
   WorkspaceProject,
 } from '../api/ipc';
 import IdeIcon, { type IdeIconName } from './IdeIcon.vue';
+import { buildRedisNamespaceTree, type RedisNamespaceNode } from '../utils/commercialTools';
 
 export interface ConnectionHealthInfo {
   status: 'ok' | 'error' | 'testing';
@@ -44,6 +45,7 @@ const props = defineProps<{
   expandedDatabases: Record<string, boolean>;
   expandedTables: Record<string, boolean>;
   connHealthByProfile?: Record<string, ConnectionHealthInfo>;
+  activeConnectedIds?: string[];
   favorites?: FavoriteTableEntry[];
   batchTesting?: boolean;
 }>();
@@ -102,6 +104,8 @@ const emit = defineEmits<{
   (e: 'open-redis-new-key', profile: ConnectionProfile, dbName: string): void;
   (e: 'edit-redis-key', profile: ConnectionProfile, dbName: string, keyName: string): void;
   (e: 'toggle-favorite', profile: ConnectionProfile, dbName: string, tableName: string): void;
+  (e: 'disconnect-profile', profile: ConnectionProfile): void;
+  (e: 'redis-prefix-action', action: 'unlink' | 'expire' | 'bigkeys', profile: ConnectionProfile, dbName: string, prefix: string): void;
   (e: 'copy-text', text: string): void;
 }>();
 
@@ -128,8 +132,36 @@ const { t } = useI18n();
 const search = ref('');
 const objectFilter = ref<'all' | 'table' | 'view'>('all');
 const expandedRoutinesGroup = ref<Record<string, boolean>>({});
+const expandedRedisFolders = ref<Record<string, boolean>>({});
+const redisTreeMode = ref(true);
+const redisDelimiter = ref(':');
 const selectedNodeKey = ref('');
 const favoritesCollapsed = ref(false);
+
+interface FlatRedisRow {
+  node: RedisNamespaceNode;
+  depth: number;
+}
+
+function flattenedRedisNodes(profileId: string, dbName: string): FlatRedisRow[] {
+  const tree = buildRedisNamespaceTree(filterTables(profileId, dbName), redisDelimiter.value);
+  const out: FlatRedisRow[] = [];
+  function walk(list: RedisNamespaceNode[], depth: number) {
+    for (const n of list) {
+      out.push({ node: n, depth });
+      if (n.isFolder && expandedRedisFolders.value[`${profileId}:${dbName}:${n.id}`]) {
+        walk(n.children, depth + 1);
+      }
+    }
+  }
+  walk(tree, 0);
+  return out;
+}
+
+function toggleRedisFolder(profileId: string, dbName: string, nodeId: string) {
+  const k = `${profileId}:${dbName}:${nodeId}`;
+  expandedRedisFolders.value[k] = !expandedRedisFolders.value[k];
+}
 
 function toggleRoutinesGroup(key: string) {
   expandedRoutinesGroup.value[key] = !expandedRoutinesGroup.value[key];
@@ -155,11 +187,12 @@ const ctxMenu = ref<{
   visible: boolean;
   x: number;
   y: number;
-  kind: 'project' | 'profile' | 'database' | 'table';
+  kind: 'project' | 'profile' | 'database' | 'table' | 'redis-folder';
   project?: WorkspaceProject;
   profile?: ConnectionProfile;
   dbName?: string;
   tableName?: string;
+  redisPrefix?: string;
 }>({
   visible: false,
   x: 0,
@@ -176,6 +209,7 @@ function engineShort(dbType: string | Record<string, string>): string {
   if (norm.includes('postgres')) return 'PG';
   if (norm.includes('mysql')) return 'MySQL';
   if (norm.includes('maria')) return 'MariaDB';
+  if (norm.includes('clickhouse')) return 'CH';
   if (norm.includes('oracle')) return 'Oracle';
   if (norm.includes('dameng') || norm === 'dm') return 'DM8';
   if (norm.includes('kingbase')) return 'KB';
@@ -296,6 +330,24 @@ function openTableContext(
     profile,
     dbName,
     tableName,
+  };
+}
+
+function openRedisFolderContext(
+  ev: MouseEvent,
+  profile: ConnectionProfile,
+  dbName: string,
+  prefix: string,
+) {
+  ev.preventDefault();
+  ctxMenu.value = {
+    visible: true,
+    x: ev.clientX,
+    y: ev.clientY,
+    kind: 'redis-folder',
+    profile,
+    dbName,
+    redisPrefix: prefix,
   };
 }
 
@@ -540,6 +592,14 @@ function closeContext() {
               />
               <span class="tree-label" style="font-weight: 600">{{ p.name }}</span>
               <span
+                v-if="activeConnectedIds?.includes(p.id)"
+                class="pill pill-dev"
+                style="font-size: 8.5px; padding: 0 4px; flex-shrink: 0"
+                title="活跃连接会话与连接池已建立"
+              >
+                LIVE
+              </span>
+              <span
                 v-if="p.env === 'PROD' || p.env === 'TEST'"
                 class="pill"
                 :class="p.env === 'PROD' ? 'pill-prod' : 'pill-test'"
@@ -602,8 +662,87 @@ function closeContext() {
                   </span>
                 </div>
 
-                <!-- Tables -->
+                <!-- Tables / Redis Namespaces -->
                 <div v-if="expandedDatabases[`${p.id}:${db.name}`]">
+                  <div
+                    v-if="isRedisProfile(p)"
+                    style="display: flex; align-items: center; gap: 4px; padding: 3px 8px 3px 46px; font-size: 10.5px; color: var(--text-secondary)"
+                  >
+                    <button
+                      class="tree-filter-chip"
+                      :class="{ active: redisTreeMode }"
+                      @click="redisTreeMode = true"
+                    >
+                      树形
+                    </button>
+                    <button
+                      class="tree-filter-chip"
+                      :class="{ active: !redisTreeMode }"
+                      @click="redisTreeMode = false"
+                    >
+                      平铺
+                    </button>
+                    <select
+                      v-if="redisTreeMode"
+                      v-model="redisDelimiter"
+                      class="field"
+                      style="width: auto; padding: 0 4px; font-size: 10.5px; height: 20px"
+                      title="Redis 命名空间分隔符"
+                    >
+                      <option value=":">:</option>
+                      <option value="/">/</option>
+                      <option value=".">.</option>
+                    </select>
+                    <button
+                      class="icon-btn compact"
+                      title="扫描 Top 20 大 Key (MEMORY USAGE)"
+                      @click="emit('redis-prefix-action', 'bigkeys', p, db.name, '')"
+                    >
+                      大Key
+                    </button>
+                  </div>
+
+                  <template v-if="isRedisProfile(p) && redisTreeMode">
+                    <template v-for="item in flattenedRedisNodes(p.id, db.name)" :key="item.node.id">
+                      <div
+                        v-if="item.node.isFolder"
+                        class="tree-row"
+                        :style="{ paddingLeft: `${48 + item.depth * 14}px` }"
+                        @click="toggleRedisFolder(p.id, db.name, item.node.id)"
+                        @contextmenu="openRedisFolderContext($event, p, db.name, item.node.prefix)"
+                      >
+                        <span class="tree-chevron">
+                          <IdeIcon :name="expandedRedisFolders[`${p.id}:${db.name}:${item.node.id}`] ? 'chevron-down' : 'chevron-right'" :size="11" />
+                        </span>
+                        <IdeIcon name="folder" :size="13" color="#EAB308" />
+                        <span class="tree-label" style="font-weight: 500">{{ item.node.label }}</span>
+                        <span class="tree-meta">{{ item.node.keyCount }}</span>
+                      </div>
+                      <div
+                        v-else-if="item.node.meta"
+                        class="tree-row"
+                        :style="{ paddingLeft: `${48 + item.depth * 14}px` }"
+                        :class="{ selected: selectedNodeKey === `t:${p.id}:${db.name}:${item.node.meta.name}` }"
+                        @click="
+                          selectedNodeKey = `t:${p.id}:${db.name}:${item.node.meta!.name}`;
+                          emit('select-table', p, db.name, item.node.meta!.name);
+                          emit('toggle-table', p, db.name, item.node.meta!.name);
+                        "
+                        @dblclick="emit('query-top100', p, db.name, item.node.meta!.name)"
+                        @contextmenu="openTableContext($event, p, db.name, item.node.meta!.name)"
+                      >
+                        <IdeIcon name="key" :size="12" />
+                        <span class="tree-label">
+                          {{ item.node.prefix ? item.node.meta.name.slice(item.node.prefix.length) : item.node.meta.name }}
+                        </span>
+                        <span class="tree-meta">
+                          {{ [item.node.meta.tableType, item.node.meta.engine].filter(Boolean).join(' · ') }}
+                        </span>
+                      </div>
+                    </template>
+                  </template>
+
+                  <template v-else>
                   <div v-for="tbl in filterTables(p.id, db.name)" :key="tbl.name">
                     <div
                       class="tree-row"
@@ -696,6 +835,7 @@ function closeContext() {
                       </div>
                     </div>
                   </div>
+                  </template>
 
                   <!-- Routines / Functions / Triggers Group -->
                   <div
@@ -781,6 +921,13 @@ function closeContext() {
         </button>
         <button class="dropdown-item" @click="emit('test-profile', ctxMenu.profile)">
           <span>{{ t('btnTest') }}</span>
+        </button>
+        <button
+          v-if="activeConnectedIds?.includes(ctxMenu.profile.id)"
+          class="dropdown-item"
+          @click="emit('disconnect-profile', ctxMenu.profile)"
+        >
+          <span>🔌 断开连接（释放连接池/隧道）</span>
         </button>
         <button class="dropdown-item" @click="emit('open-server-monitor', ctxMenu.profile)">
           <span>📊 服务器监控与活跃会话管理...</span>
@@ -1030,6 +1177,35 @@ function closeContext() {
           @click="emit('drop-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
           <span>{{ isRedisProfile(ctxMenu.profile) ? '🗑️ 删除 Key (DEL)' : '🗑️ 删除表 (DROP TABLE)' }}</span>
+        </button>
+      </template>
+
+      <template v-else-if="ctxMenu.kind === 'redis-folder' && ctxMenu.profile && ctxMenu.dbName && ctxMenu.redisPrefix">
+        <button
+          class="dropdown-item"
+          @click="emit('redis-prefix-action', 'bigkeys', ctxMenu.profile, ctxMenu.dbName, ctxMenu.redisPrefix)"
+        >
+          <span>📊 扫描此命名空间 Top 20 大 Key...</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('redis-prefix-action', 'expire', ctxMenu.profile, ctxMenu.dbName, ctxMenu.redisPrefix)"
+        >
+          <span>⏱️ 批量设置过期时间 (EXPIRE)...</span>
+        </button>
+        <button
+          class="dropdown-item"
+          @click="emit('copy-text', ctxMenu.redisPrefix)"
+        >
+          <span>复制 Key 前缀 ({{ ctxMenu.redisPrefix }})</span>
+        </button>
+        <div class="dropdown-sep" />
+        <button
+          class="dropdown-item"
+          style="color: var(--prod)"
+          @click="emit('redis-prefix-action', 'unlink', ctxMenu.profile, ctxMenu.dbName, ctxMenu.redisPrefix)"
+        >
+          <span>🗑️ 批量删除前缀 Key ({{ ctxMenu.redisPrefix }}* UNLINK)...</span>
         </button>
       </template>
     </div>

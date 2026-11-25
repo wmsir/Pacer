@@ -2,6 +2,7 @@ pub mod dbeaver;
 pub mod jdbc;
 pub mod matcher;
 pub mod sql_dump;
+pub mod sql_script;
 pub mod xlsx;
 
 pub use dbeaver::{
@@ -18,4 +19,8 @@ pub use sql_dump::{
     format_sql_dump_table, format_sql_value, quote_qualified_table, quote_sql_ident,
     write_sql_dump_insert_batch, write_sql_dump_table_header, SqlDumpFormatOptions,
 };
-pub use xlsx::{build_xlsx_bytes, col_index_to_excel_letters, write_xlsx_file};
+pub use sql_script::SqlScriptStreamReader;
+pub use xlsx::{
+    build_xlsx_bytes, col_index_to_excel_letters, read_xlsx_sheet_preview, write_csv_row,
+    write_xlsx_file, StreamingXlsxWriter,
+};

@@ -12,3 +12,6 @@ tokio.workspace = true
 async-trait.workspace = true
 encoding_rs.workspace = true
 chardetng.workspace = true
+aes.workspace = true
+cbc.workspace = true
+uuid.workspace = true

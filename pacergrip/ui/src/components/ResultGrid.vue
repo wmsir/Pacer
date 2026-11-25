@@ -17,8 +17,18 @@ import IdeIcon from './IdeIcon.vue';
 import { IS_MAC } from '../utils/keymap';
 import {
   appendWhereCondition,
+  computeWatchResultDiff,
+  decodeBase64Safe,
+  decodeHexToUtf8,
+  decodeJwtToken,
+  decodeUrlSafe,
+  detectImageDataUri,
+  formatHexDump,
   isExplainResult,
+  matchesColumnFilter,
   parseExplainPlanVisual,
+  parseSpreadsheetPasteMatrix,
+  type ColumnFilterOp,
   type VisualExplainPlan,
 } from '../utils/commercialTools';
 import {
@@ -123,7 +133,7 @@ const emit = defineEmits<{
   (e: 'clear-console-logs', projectId: string): void;
   (e: 'run-console-sql', sql: string): void;
   (e: 'send-sql-to-editor', sql: string): void;
-  (e: 'rerun-result', tab: ResultTabItem): void;
+  (e: 'rerun-result', tab: ResultTabItem, silent?: boolean): void;
   (
     e: 'server-query-page',
     tab: ResultTabItem,
@@ -132,6 +142,10 @@ const emit = defineEmits<{
   (e: 'server-count-rows', tab: ResultTabItem): void;
   (e: 'jump-foreign-key', tab: ResultTabItem, fk: ForeignKeyMeta, cellValue: unknown): void;
   (e: 'open-data-diff', tab: ResultTabItem): void;
+  (e: 'export-full-query', tab: ResultTabItem, format: 'xlsx' | 'csv' | 'json'): void;
+  (e: 'toggle-history-pin', entry: QueryHistoryEntry): void;
+  (e: 'delete-history-entry', entry: QueryHistoryEntry): void;
+  (e: 'rerun-history-sql', entry: QueryHistoryEntry): void;
   (e: 'notify', message: string): void;
 }>();
 
@@ -191,6 +205,38 @@ const colWidths = reactive<Record<string, number>>({});
 const showColPicker = ref(false);
 const colPickerSearch = ref('');
 const showExportMenu = ref(false);
+
+interface ColumnFilterRule {
+  id: string;
+  col: string;
+  op: ColumnFilterOp;
+  value: string;
+}
+
+const showColumnFilterBar = ref(false);
+const columnFilters = ref<ColumnFilterRule[]>([]);
+const newFilterCol = ref('');
+const newFilterOp = ref<ColumnFilterOp>('contains');
+const newFilterVal = ref('');
+
+const watchIntervalSec = ref<number>(0);
+let watchTimerHandle: number | null = null;
+const watchPrevRowsByTab: Record<string, Array<Record<string, unknown>>> = {};
+const watchDiffByTab = reactive<
+  Record<
+    string,
+    {
+      addedIndices: Set<number>;
+      changedCells: Set<string>;
+      addedCount: number;
+      changedCount: number;
+    }
+  >
+>({});
+
+const rangeAnchor = ref<{ dispRow: number; colIdx: number } | null>(null);
+const rangeEnd = ref<{ dispRow: number; colIdx: number } | null>(null);
+const viewerDecoderTab = ref<'raw' | 'base64' | 'url' | 'jwt' | 'hex' | 'image'>('raw');
 
 // Per-result-tab mutation drafts
 const draftsByTab = reactive<Record<string, TabEditDraft>>({});
@@ -453,6 +499,13 @@ const displayedRows = computed<IndexedRow[]>(() => {
           .toLowerCase()
           .includes(q),
       ),
+    );
+  }
+
+  if (columnFilters.value.length > 0) {
+    const activeRules = columnFilters.value;
+    list = list.filter((item) =>
+      activeRules.every((rule) => matchesColumnFilter(item.row[rule.col], rule.op, rule.value)),
     );
   }
 
@@ -844,13 +897,244 @@ function revertCurrentDraft() {
   emit('notify', '已撤销当前结果集的全部未提交修改');
 }
 
-// ==================== Selection & Value Viewer ====================
-function selectCell(isInserted: boolean, origIdx: number, col: string) {
+// ==================== Selection, Range Stats, Paste, Watch & Decoders ====================
+const orderedDisplayCols = computed(() => [
+  ...currentPinnedCols.value,
+  ...scrollableColumns.value,
+]);
+
+const colOrderIndexMap = computed(() => {
+  const m = new Map<string, number>();
+  orderedDisplayCols.value.forEach((c, idx) => m.set(c, idx));
+  return m;
+});
+
+const selectionBounds = computed(() => {
+  if (!rangeAnchor.value || !rangeEnd.value) return null;
+  const r1 = Math.min(rangeAnchor.value.dispRow, rangeEnd.value.dispRow);
+  const r2 = Math.max(rangeAnchor.value.dispRow, rangeEnd.value.dispRow);
+  const c1 = Math.min(rangeAnchor.value.colIdx, rangeEnd.value.colIdx);
+  const c2 = Math.max(rangeAnchor.value.colIdx, rangeEnd.value.colIdx);
+  return { r1, r2, c1, c2 };
+});
+
+function isCellInRange(dispRow: number, col: string): boolean {
+  const b = selectionBounds.value;
+  if (!b) return false;
+  if (b.r1 === b.r2 && b.c1 === b.c2) return false;
+  const cIdx = colOrderIndexMap.value.get(col);
+  if (cIdx === undefined) return false;
+  return dispRow >= b.r1 && dispRow <= b.r2 && cIdx >= b.c1 && cIdx <= b.c2;
+}
+
+const rangeSelectionStats = computed(() => {
+  const b = selectionBounds.value;
+  if (!b) return null;
+  const rowsCount = b.r2 - b.r1 + 1;
+  const colsCount = b.c2 - b.c1 + 1;
+  const totalCells = rowsCount * colsCount;
+  if (totalCells <= 1) return null;
+  const maxScanCells = 50_000;
+  const rows = displayedRows.value;
+  const cols = orderedDisplayCols.value;
+  let scanned = 0;
+  let numCount = 0;
+  let sum = 0;
+  let min = Infinity;
+  let max = -Infinity;
+  for (let r = b.r1; r <= b.r2 && r < rows.length; r++) {
+    const rowObj = rows[r].row;
+    for (let c = b.c1; c <= b.c2 && c < cols.length; c++) {
+      scanned += 1;
+      if (scanned > maxScanCells) break;
+      const v = rowObj[cols[c]];
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        numCount += 1;
+        sum += v;
+        if (v < min) min = v;
+        if (v > max) max = v;
+      } else if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim()) && v.trim().length <= 15) {
+        const parsed = Number(v.trim());
+        if (Number.isFinite(parsed)) {
+          numCount += 1;
+          sum += parsed;
+          if (parsed < min) min = parsed;
+          if (parsed > max) max = parsed;
+        }
+      }
+    }
+    if (scanned > maxScanCells) break;
+  }
+  return {
+    rowsCount,
+    colsCount,
+    totalCells,
+    numCount,
+    sum: Number(sum.toFixed(4)),
+    avg: numCount > 0 ? Number((sum / numCount).toFixed(4)) : 0,
+    min: numCount > 0 ? min : 0,
+    max: numCount > 0 ? max : 0,
+  };
+});
+
+function selectCell(isInserted: boolean, origIdx: number, col: string, ev?: MouseEvent, dispRow?: number) {
   selectedIsInserted.value = isInserted;
   selectedRowOrigIdx.value = origIdx;
   selectedColName.value = col;
   syncValueViewerDraft();
+  if (!isInserted && dispRow !== undefined) {
+    const colIdx = colOrderIndexMap.value.get(col);
+    if (colIdx !== undefined) {
+      if (ev?.shiftKey && rangeAnchor.value) {
+        rangeEnd.value = { dispRow, colIdx };
+      } else {
+        rangeAnchor.value = { dispRow, colIdx };
+        rangeEnd.value = { dispRow, colIdx };
+      }
+    }
+  }
 }
+
+function addColumnFilterRule() {
+  const res = currentResult.value;
+  const col = newFilterCol.value || res?.columns[0] || '';
+  if (!col) return;
+  columnFilters.value.push({
+    id: `cf-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    col,
+    op: newFilterOp.value,
+    value: newFilterVal.value,
+  });
+  newFilterVal.value = '';
+}
+
+function removeColumnFilterRule(id: string) {
+  columnFilters.value = columnFilters.value.filter((r) => r.id !== id);
+}
+
+function clearColumnFilterRules() {
+  columnFilters.value = [];
+}
+
+function handleGridPaste(ev: ClipboardEvent) {
+  if (editingCell.value) return;
+  const tgt = ev.target;
+  if (
+    tgt instanceof HTMLInputElement ||
+    tgt instanceof HTMLTextAreaElement ||
+    tgt instanceof HTMLSelectElement
+  ) {
+    return;
+  }
+  const res = currentResult.value;
+  if (!res) return;
+  if (res.readOnly) {
+    emit('notify', '当前数据源为只读模式，无法粘贴填充单元格');
+    return;
+  }
+  const clipText = ev.clipboardData?.getData('text/plain') ?? '';
+  const matrix = parseSpreadsheetPasteMatrix(clipText);
+  if (matrix.length === 0) return;
+  ev.preventDefault();
+
+  const b = selectionBounds.value;
+  const startDispRow = b?.r1 ?? 0;
+  const startColIdx = b?.c1 ?? Math.max(0, colOrderIndexMap.value.get(selectedColName.value) ?? 0);
+  const cols = orderedDisplayCols.value;
+  const dRows = displayedRows.value;
+  const draft = ensureDraft(res.id);
+
+  let updatedCells = 0;
+  let appendedRows = 0;
+  for (let r = 0; r < matrix.length; r++) {
+    const line = matrix[r];
+    const targetDispIdx = startDispRow + r;
+    if (targetDispIdx < dRows.length) {
+      const targetRow = dRows[targetDispIdx];
+      for (let c = 0; c < line.length && startColIdx + c < cols.length; c++) {
+        const colName = cols[startColIdx + c];
+        const origVal = res.rows[targetRow.origIdx]?.[colName];
+        const raw = line[c];
+        const nextVal = raw === '<NULL>' || raw.toUpperCase() === 'NULL' ? null : coerceInputValue(raw, origVal);
+        if (nextVal === origVal) {
+          if (draft.modified[targetRow.origIdx]) {
+            delete draft.modified[targetRow.origIdx][colName];
+          }
+        } else {
+          if (!draft.modified[targetRow.origIdx]) draft.modified[targetRow.origIdx] = {};
+          draft.modified[targetRow.origIdx][colName] = nextVal;
+        }
+        updatedCells += 1;
+      }
+    } else {
+      const newObj: Record<string, unknown> = {};
+      for (const colName of res.columns) newObj[colName] = null;
+      for (let c = 0; c < line.length && startColIdx + c < cols.length; c++) {
+        const colName = cols[startColIdx + c];
+        const raw = line[c];
+        newObj[colName] = raw === '<NULL>' || raw.toUpperCase() === 'NULL' ? null : raw;
+        updatedCells += 1;
+      }
+      draft.inserted.push(newObj);
+      appendedRows += 1;
+    }
+  }
+  syncValueViewerDraft();
+  emit(
+    'notify',
+    `已从剪贴板批量填充 ${updatedCells} 个单元格${appendedRows > 0 ? `（含新增 ${appendedRows} 行）` : ''}，可点击「预览并执行 SQL」提交`,
+  );
+}
+
+const currentWatchDiff = computed(() => {
+  const res = currentResult.value;
+  if (!res) return null;
+  return watchDiffByTab[res.id] ?? null;
+});
+
+function restartWatchTimer() {
+  if (watchTimerHandle !== null) {
+    window.clearInterval(watchTimerHandle);
+    watchTimerHandle = null;
+  }
+  const sec = watchIntervalSec.value;
+  if (sec <= 0) return;
+  watchTimerHandle = window.setInterval(() => {
+    const res = currentResult.value;
+    if (!res || props.executing || props.activeServiceTab !== 'result') return;
+    watchPrevRowsByTab[res.id] = res.rows;
+    emit('rerun-result', res, true);
+  }, sec * 1000);
+}
+
+watch([watchIntervalSec, () => currentResult.value?.id], () => {
+  restartWatchTimer();
+});
+
+watch(
+  () => currentResult.value?.rows,
+  (nextRows) => {
+    const res = currentResult.value;
+    if (!res || !nextRows) return;
+    const prevRows = watchPrevRowsByTab[res.id];
+    if (prevRows && watchIntervalSec.value > 0) {
+      watchDiffByTab[res.id] = computeWatchResultDiff(prevRows, nextRows, res.columns);
+      watchPrevRowsByTab[res.id] = nextRows;
+    }
+  },
+);
+
+watch(
+  () => [currentResult.value?.id, currentResult.value?.columns],
+  () => {
+    rangeAnchor.value = null;
+    rangeEnd.value = null;
+    const cols = currentResult.value?.columns ?? [];
+    if (!newFilterCol.value || !cols.includes(newFilterCol.value)) {
+      newFilterCol.value = cols[0] ?? '';
+    }
+  },
+);
 
 const inspectedRawValue = computed(() => {
   const res = currentResult.value;
@@ -888,6 +1172,12 @@ function syncValueViewerDraft() {
 }
 
 const inspectedTimestampHint = computed(() => decodeUnixTimestampHint(inspectedRawValue.value));
+const decodedBase64Result = computed(() => decodeBase64Safe(valueViewerDraft.value));
+const decodedUrlResult = computed(() => decodeUrlSafe(valueViewerDraft.value));
+const decodedJwtResult = computed(() => decodeJwtToken(valueViewerDraft.value));
+const decodedHexResult = computed(() => decodeHexToUtf8(valueViewerDraft.value));
+const decodedHexDumpText = computed(() => formatHexDump(valueViewerDraft.value));
+const decodedImageUri = computed(() => detectImageDataUri(valueViewerDraft.value));
 
 function formatValueViewerJson(pretty: boolean) {
   const text = valueViewerDraft.value.trim();
@@ -1391,6 +1681,8 @@ watch(
 const historyProjectFilter = ref<string>('ALL');
 const historyProfileFilter = ref<string>('ALL');
 const historyStatusFilter = ref<'ALL' | 'OK' | 'ERR'>('ALL');
+const historyPinnedOnly = ref<boolean>(false);
+const historyDateRange = ref<'all' | 'today' | '7d' | '30d'>('all');
 const historySearchText = ref<string>('');
 
 function resolveHistoryProjectId(entry: QueryHistoryEntry): string {
@@ -1437,7 +1729,19 @@ watch([historyProjectFilter, () => props.projects, () => props.connections], () 
 
 const filteredHistoryEntries = computed(() => {
   const q = historySearchText.value.trim().toLowerCase();
-  return props.historyEntries.filter((item) => {
+  const nowMs = Date.now();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const cutoffMs =
+    historyDateRange.value === 'today'
+      ? todayStart.getTime()
+      : historyDateRange.value === '7d'
+        ? nowMs - 7 * 86_400_000
+        : historyDateRange.value === '30d'
+          ? nowMs - 30 * 86_400_000
+          : 0;
+
+  const list = props.historyEntries.filter((item) => {
     const pid = resolveHistoryProjectId(item);
     if (historyProjectFilter.value !== 'ALL' && pid !== historyProjectFilter.value) return false;
     if (historyProfileFilter.value !== 'ALL' && item.profileId !== historyProfileFilter.value) {
@@ -1445,12 +1749,19 @@ const filteredHistoryEntries = computed(() => {
     }
     if (historyStatusFilter.value === 'OK' && !item.success) return false;
     if (historyStatusFilter.value === 'ERR' && item.success) return false;
+    if (historyPinnedOnly.value && !item.pinned) return false;
+    if (cutoffMs > 0) {
+      const ts = Date.parse(item.timestamp.replace(' ', 'T'));
+      if (Number.isFinite(ts) && ts < cutoffMs) return false;
+    }
     if (q) {
       const hay = `${projectNameById(pid)} ${item.profileName} ${item.database ?? ''} ${item.sql} ${item.errorMessage ?? ''}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
   });
+
+  return [...list].sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
 });
 
 const astWarnings = computed(
@@ -1516,6 +1827,10 @@ onBeforeUnmount(() => {
   if (scrollRafId !== null) {
     window.cancelAnimationFrame(scrollRafId);
     scrollRafId = null;
+  }
+  if (watchTimerHandle !== null) {
+    window.clearInterval(watchTimerHandle);
+    watchTimerHandle = null;
   }
   resizeObserver?.disconnect();
   resizeObserver = null;
@@ -2044,6 +2359,33 @@ function exportQuickChartSvg() {
                 ⇅ 表单/转置
               </button>
               <button
+                class="icon-btn compact"
+                :class="{ active: showColumnFilterBar || columnFilters.length > 0 }"
+                title="按列精准条件筛选结果行"
+                @click="showColumnFilterBar = !showColumnFilterBar"
+              >
+                ⧩ 列筛选{{ columnFilters.length > 0 ? ` (${columnFilters.length})` : '' }}
+              </button>
+              <select
+                v-model.number="watchIntervalSec"
+                class="field"
+                style="width: auto; padding: 2px 6px; font-size: 11px"
+                title="Watch Query 自动定时刷新与变更对比"
+              >
+                <option :value="0">自动刷新: 关</option>
+                <option :value="3">⏱ 每 3 秒</option>
+                <option :value="5">⏱ 每 5 秒</option>
+                <option :value="10">⏱ 每 10 秒</option>
+                <option :value="30">⏱ 每 30 秒</option>
+              </select>
+              <span
+                v-if="watchIntervalSec > 0 && currentWatchDiff && (currentWatchDiff.addedCount > 0 || currentWatchDiff.changedCount > 0)"
+                class="pill pill-test"
+                title="相比上次刷新的新增行 / 变化单元格数"
+              >
+                +{{ currentWatchDiff.addedCount }} 行 / Δ{{ currentWatchDiff.changedCount }} 格
+              </span>
+              <button
                 v-if="isCurrentExplain"
                 class="icon-btn compact"
                 :class="{ active: visualExplainMode }"
@@ -2187,6 +2529,28 @@ function exportQuickChartSvg() {
                     <span>{{ t('exportJson') }}</span>
                   </button>
                   <div class="dropdown-sep" />
+                  <button
+                    class="dropdown-item"
+                    title="服务端流式执行并导出完整未截断结果至 Excel (.xlsx)"
+                    @click="showExportMenu = false; emit('export-full-query', currentResult, 'xlsx')"
+                  >
+                    <span>🚀 流式导出完整结果 (.xlsx)</span>
+                  </button>
+                  <button
+                    class="dropdown-item"
+                    title="服务端流式执行并导出完整未截断结果至 CSV"
+                    @click="showExportMenu = false; emit('export-full-query', currentResult, 'csv')"
+                  >
+                    <span>🚀 流式导出完整结果 (.csv)</span>
+                  </button>
+                  <button
+                    class="dropdown-item"
+                    title="服务端流式执行并导出完整未截断结果至 JSON"
+                    @click="showExportMenu = false; emit('export-full-query', currentResult, 'json')"
+                  >
+                    <span>🚀 流式导出完整结果 (.json)</span>
+                  </button>
+                  <div class="dropdown-sep" />
                   <button class="dropdown-item" @click="showExportMenu = false; doCopyMarkdown()">
                     <span>{{ t('copyMarkdown') }}</span>
                   </button>
@@ -2198,6 +2562,39 @@ function exportQuickChartSvg() {
                   </button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Per-Column Local Filter Builder -->
+          <div v-if="showColumnFilterBar" class="grid-col-filter-bar">
+            <select v-model="newFilterCol" class="field" style="width: auto; max-width: 160px; padding: 2px 6px; font-size: 11px">
+              <option v-for="col in currentResult.columns" :key="col" :value="col">{{ col }}</option>
+            </select>
+            <select v-model="newFilterOp" class="field" style="width: auto; padding: 2px 6px; font-size: 11px">
+              <option value="contains">包含</option>
+              <option value="not_contains">不包含</option>
+              <option value="=">等于 (=)</option>
+              <option value="!=">不等于 (!=)</option>
+              <option value=">">大于 (&gt;)</option>
+              <option value="<">小于 (&lt;)</option>
+              <option value="is_null">为 NULL</option>
+              <option value="not_null">非 NULL</option>
+            </select>
+            <input
+              v-if="newFilterOp !== 'is_null' && newFilterOp !== 'not_null'"
+              v-model="newFilterVal"
+              class="field"
+              style="width: 150px; padding: 2px 6px; font-size: 11px"
+              placeholder="匹配值..."
+              @keydown.enter.prevent="addColumnFilterRule"
+            />
+            <button class="btn btn-sm btn-primary" @click="addColumnFilterRule">+ 添加筛选</button>
+            <button v-if="columnFilters.length > 0" class="btn btn-sm" @click="clearColumnFilterRules">清空</button>
+            <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap">
+              <span v-for="rule in columnFilters" :key="rule.id" class="col-filter-chip">
+                <span>{{ rule.col }} {{ rule.op }} {{ rule.op === 'is_null' || rule.op === 'not_null' ? '' : rule.value }}</span>
+                <button class="col-filter-chip-close" title="移除规则" @click="removeColumnFilterRule(rule.id)">✕</button>
+              </span>
             </div>
           </div>
 
@@ -2261,7 +2658,14 @@ function exportQuickChartSvg() {
           </div>
 
           <div class="grid-split">
-            <div ref="gridScrollRef" class="grid-scroll" @scroll.passive="onGridScroll">
+            <div
+              ref="gridScrollRef"
+              class="grid-scroll"
+              tabindex="0"
+              title="点击单元格可选中，Shift+点击可框选矩形区域，Ctrl+V/Cmd+V 可直接粘贴 Excel/TSV 多格矩阵"
+              @scroll.passive="onGridScroll"
+              @paste="handleGridPaste"
+            >
               <!-- Visual EXPLAIN Execution Plan View -->
               <div v-if="visualExplainMode && visualExplainPlan" class="explain-visual-pane">
                 <div class="explain-summary-header">
@@ -2750,6 +3154,7 @@ function exportQuickChartSvg() {
                     :class="{
                       'row-deleted': isRowDeleted(item.origIdx),
                       'row-selected': selectedRowSet.has(item.origIdx),
+                      'watch-row-added': Boolean(currentWatchDiff?.addedIndices.has(item.origIdx)),
                     }"
                   >
                     <td
@@ -2769,11 +3174,13 @@ function exportQuickChartSvg() {
                         'pinned-col-last': pIdx === pinnedColItems.length - 1,
                         'num-cell': isNumeric(item.row[pc.col]),
                         'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === pc.col,
+                        'range-selected-cell': isCellInRange(rowWindow.start + localIdx, pc.col),
+                        'watch-cell-changed': Boolean(currentWatchDiff?.changedCells.has(`${item.origIdx}:${pc.col}`)),
                         'cell-dirty': isCellModified(item.origIdx, pc.col),
                       }"
                       :style="{ left: `${pc.left}px` }"
                       @mouseenter="onCellMouseEnter($event, item.origIdx, pc.col)"
-                      @click="selectCell(false, item.origIdx, pc.col)"
+                      @click="selectCell(false, item.origIdx, pc.col, $event, rowWindow.start + localIdx)"
                       @dblclick="startEditCell(false, item.origIdx, pc.col)"
                       @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, pc.col)"
                     >
@@ -2826,10 +3233,12 @@ function exportQuickChartSvg() {
                       :class="{
                         'num-cell': isNumeric(item.row[rc.col]),
                         'selected-cell': !selectedIsInserted && selectedRowOrigIdx === item.origIdx && selectedColName === rc.col,
+                        'range-selected-cell': isCellInRange(rowWindow.start + localIdx, rc.col),
+                        'watch-cell-changed': Boolean(currentWatchDiff?.changedCells.has(`${item.origIdx}:${rc.col}`)),
                         'cell-dirty': isCellModified(item.origIdx, rc.col),
                       }"
                       @mouseenter="onCellMouseEnter($event, item.origIdx, rc.col)"
-                      @click="selectCell(false, item.origIdx, rc.col)"
+                      @click="selectCell(false, item.origIdx, rc.col, $event, rowWindow.start + localIdx)"
                       @dblclick="startEditCell(false, item.origIdx, rc.col)"
                       @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, rc.col)"
                     >
@@ -3001,6 +3410,20 @@ function exportQuickChartSvg() {
                   </button>
                 </div>
               </div>
+              <div class="viewer-decoder-tabs">
+                <button class="viewer-decoder-tab" :class="{ active: viewerDecoderTab === 'raw' }" @click="viewerDecoderTab = 'raw'">原文/JSON</button>
+                <button class="viewer-decoder-tab" :class="{ active: viewerDecoderTab === 'base64' }" @click="viewerDecoderTab = 'base64'">Base64</button>
+                <button class="viewer-decoder-tab" :class="{ active: viewerDecoderTab === 'url' }" @click="viewerDecoderTab = 'url'">URL</button>
+                <button class="viewer-decoder-tab" :class="{ active: viewerDecoderTab === 'jwt' }" @click="viewerDecoderTab = 'jwt'">JWT</button>
+                <button class="viewer-decoder-tab" :class="{ active: viewerDecoderTab === 'hex' }" @click="viewerDecoderTab = 'hex'">Hex</button>
+                <button
+                  class="viewer-decoder-tab"
+                  :class="{ active: viewerDecoderTab === 'image' }"
+                  @click="viewerDecoderTab = 'image'"
+                >
+                  图片{{ decodedImageUri ? ' ●' : '' }}
+                </button>
+              </div>
               <div
                 v-if="inspectedTimestampHint"
                 style="
@@ -3015,6 +3438,7 @@ function exportQuickChartSvg() {
                 时间解析：{{ inspectedTimestampHint }}
               </div>
               <textarea
+                v-if="viewerDecoderTab === 'raw'"
                 v-model="valueViewerDraft"
                 class="field"
                 style="
@@ -3028,8 +3452,36 @@ function exportQuickChartSvg() {
                 :readonly="currentResult.readOnly"
                 placeholder="点击任意单元格查看/编辑完整内容或 JSON..."
               />
+              <div v-else-if="viewerDecoderTab === 'base64'" class="viewer-decoder-body">
+                <div v-if="!decodedBase64Result.ok" style="color: var(--prod)">Base64 解析失败: {{ decodedBase64Result.error }}</div>
+                <pre v-else>{{ decodedBase64Result.text || '(空)' }}</pre>
+              </div>
+              <div v-else-if="viewerDecoderTab === 'url'" class="viewer-decoder-body">
+                <div v-if="!decodedUrlResult.ok" style="color: var(--prod)">URL 解码失败: {{ decodedUrlResult.error }}</div>
+                <pre v-else>{{ decodedUrlResult.text || '(空)' }}</pre>
+              </div>
+              <div v-else-if="viewerDecoderTab === 'jwt'" class="viewer-decoder-body">
+                <div v-if="!decodedJwtResult.valid" style="color: var(--text-secondary)">当前内容不是标准 3 段式 JWT Token</div>
+                <template v-else>
+                  <div v-if="decodedJwtResult.expHint" style="color: var(--accent); margin-bottom: 6px">过期时间: {{ decodedJwtResult.expHint }}</div>
+                  <div style="font-weight: 600; margin-bottom: 2px">Header</div>
+                  <pre>{{ decodedJwtResult.header }}</pre>
+                  <div style="font-weight: 600; margin: 6px 0 2px">Payload</div>
+                  <pre>{{ decodedJwtResult.payload }}</pre>
+                </template>
+              </div>
+              <div v-else-if="viewerDecoderTab === 'hex'" class="viewer-decoder-body">
+                <div v-if="decodedHexResult.ok" style="margin-bottom: 6px; color: var(--accent)">
+                  UTF-8: {{ decodedHexResult.text }}
+                </div>
+                <pre>{{ decodedHexDumpText || '(空)' }}</pre>
+              </div>
+              <div v-else-if="viewerDecoderTab === 'image'" class="viewer-decoder-body" style="display: flex; align-items: center; justify-content: center">
+                <img v-if="decodedImageUri" :src="decodedImageUri" class="viewer-img-preview" alt="单元格图片预览" />
+                <span v-else style="color: var(--text-secondary)">未检测到 Data URI 或 PNG/JPEG/GIF/WebP 十六进制图片头</span>
+              </div>
               <div
-                v-if="!currentResult.readOnly && selectedColName"
+                v-if="!currentResult.readOnly && selectedColName && viewerDecoderTab === 'raw'"
                 style="
                   display: flex;
                   justify-content: flex-end;
@@ -3048,9 +3500,21 @@ function exportQuickChartSvg() {
             </div>
           </div>
 
-          <!-- Server Pagination + Instant Column Summary Stats Bar -->
-          <div v-if="columnStats || currentResult.sourceTable" class="grid-stats-bar">
+          <!-- Server Pagination + Instant Column & Selection Summary Stats Bar -->
+          <div v-if="columnStats || rangeSelectionStats || currentResult.sourceTable" class="grid-stats-bar">
             <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap">
+              <template v-if="rangeSelectionStats">
+                <span class="pill pill-neutral">
+                  选区 {{ rangeSelectionStats.rowsCount }}×{{ rangeSelectionStats.colsCount }} ({{ rangeSelectionStats.totalCells }} 格)
+                </span>
+                <template v-if="rangeSelectionStats.numCount > 0">
+                  <span>数值: <strong>{{ rangeSelectionStats.numCount }}</strong></span>
+                  <span>SUM: <strong>{{ rangeSelectionStats.sum }}</strong></span>
+                  <span>AVG: <strong>{{ rangeSelectionStats.avg }}</strong></span>
+                  <span>MIN: <strong>{{ rangeSelectionStats.min }}</strong></span>
+                  <span>MAX: <strong>{{ rangeSelectionStats.max }}</strong></span>
+                </template>
+              </template>
               <template v-if="columnStats">
                 <span>
                   列统计 <strong style="color: var(--text-primary); font-family: var(--font-mono)">{{ columnStats.column }}</strong>
@@ -3341,6 +3805,23 @@ function exportQuickChartSvg() {
               <option value="ERR">仅失败</option>
             </select>
 
+            <select
+              v-model="historyDateRange"
+              class="field"
+              style="width: auto; padding: 2px 6px; font-size: 11.5px"
+              title="按时间范围筛选"
+            >
+              <option value="all">全部时间</option>
+              <option value="today">今天</option>
+              <option value="7d">近 7 天</option>
+              <option value="30d">近 30 天</option>
+            </select>
+
+            <label style="display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; cursor: pointer">
+              <input v-model="historyPinnedOnly" type="checkbox" />
+              <span>⭐ 仅置顶收藏</span>
+            </label>
+
             <input
               v-model="historySearchText"
               class="field"
@@ -3367,7 +3848,7 @@ function exportQuickChartSvg() {
                 <th style="width: 68px">状态</th>
                 <th style="width: 78px">耗时</th>
                 <th>SQL 语句（点击载入编辑器）</th>
-                <th style="width: 44px">操作</th>
+                <th style="width: 108px">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -3391,6 +3872,7 @@ function exportQuickChartSvg() {
                 </td>
                 <td class="num-cell">{{ item.durationMs }} ms</td>
                 <td :title="item.errorMessage ? `${item.sql}\n\nERROR: ${item.errorMessage}` : item.sql">
+                  <span v-if="item.pinned" style="margin-right: 4px" title="已置顶收藏">⭐</span>
                   <span>{{ item.sql }}</span>
                   <span
                     v-if="!item.success && item.errorMessage"
@@ -3400,13 +3882,37 @@ function exportQuickChartSvg() {
                   </span>
                 </td>
                 <td @click.stop>
-                  <button
-                    class="icon-btn compact"
-                    title="复制 SQL"
-                    @click="copyText(item.sql)"
-                  >
-                    <IdeIcon name="copy" :size="12" />
-                  </button>
+                  <div style="display: flex; align-items: center; gap: 3px">
+                    <button
+                      class="icon-btn compact"
+                      :class="{ active: item.pinned }"
+                      :title="item.pinned ? '取消置顶' : '置顶收藏'"
+                      @click="emit('toggle-history-pin', item)"
+                    >
+                      {{ item.pinned ? '★' : '☆' }}
+                    </button>
+                    <button
+                      class="icon-btn compact"
+                      title="直接重新执行该 SQL"
+                      @click="emit('rerun-history-sql', item)"
+                    >
+                      ▶
+                    </button>
+                    <button
+                      class="icon-btn compact"
+                      title="复制 SQL"
+                      @click="copyText(item.sql)"
+                    >
+                      <IdeIcon name="copy" :size="12" />
+                    </button>
+                    <button
+                      class="icon-btn compact"
+                      title="删除此条历史"
+                      @click="emit('delete-history-entry', item)"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </td>
               </tr>
             </tbody>

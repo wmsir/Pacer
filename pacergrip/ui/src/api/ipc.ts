@@ -53,6 +53,7 @@ export interface ConnectionOptionsConfig {
   startupScript?: string | null;
   autoSync?: boolean;
   introspectionLevel?: string | null;
+  queryTimeoutSec?: number | null;
 }
 
 export interface DirectConfig {
@@ -284,6 +285,7 @@ export interface QueryHistoryEntry {
   affectedRows?: number | null;
   success: boolean;
   errorMessage?: string | null;
+  pinned?: boolean;
 }
 
 export interface ExportResultDto {
@@ -475,9 +477,27 @@ export async function pickDataImportFile(): Promise<string | null> {
     multiple: false,
     directory: false,
     filters: [
-      { name: 'CSV / TSV / JSON Data', extensions: ['csv', 'tsv', 'json', 'txt'] },
+      { name: 'Excel / CSV / TSV / JSON Data', extensions: ['xlsx', 'csv', 'tsv', 'json', 'txt'] },
       { name: '所有文件', extensions: ['*'] },
     ],
+  });
+  return typeof res === 'string' ? res : null;
+}
+
+export async function pickQueryExportPath(
+  defaultPath: string,
+  format: 'csv' | 'xlsx' | 'json',
+): Promise<string | null> {
+  assertTauri();
+  const filter =
+    format === 'xlsx'
+      ? { name: 'Excel 工作簿 (.xlsx)', extensions: ['xlsx'] }
+      : format === 'csv'
+        ? { name: 'CSV 表格 (.csv)', extensions: ['csv'] }
+        : { name: 'JSON 数据 (.json)', extensions: ['json'] };
+  const res = await dialogSave({
+    defaultPath,
+    filters: [filter, { name: '所有文件', extensions: ['*'] }],
   });
   return typeof res === 'string' ? res : null;
 }
@@ -739,6 +759,11 @@ export async function disconnectConnection(profileId: string): Promise<boolean> 
   return invoke('disconnect_connection_cmd', { profileId });
 }
 
+export async function listActiveConnections(): Promise<string[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke('list_active_connections_cmd');
+}
+
 export async function getTransactionStatus(profileId: string): Promise<TransactionStatus> {
   if (!isTauriRuntime()) {
     return { supported: false, manualMode: false, inTransaction: false, pendingStatements: 0 };
@@ -780,6 +805,7 @@ export async function executeSql(
   limit: number | null,
   onData: (chunk: QueryChunk) => void,
   queryId?: string,
+  timeoutSec?: number | null,
 ): Promise<QuerySummary> {
   assertTauri();
   const onChunk = new Channel<QueryChunk>();
@@ -805,6 +831,7 @@ export async function executeSql(
     sql,
     limit,
     queryId: queryId ?? null,
+    timeoutSec: timeoutSec ?? null,
     onChunk,
   });
 
@@ -998,6 +1025,116 @@ export async function searchObjects(
 ): Promise<ObjectSearchHit[]> {
   assertTauri();
   return invoke('search_objects_cmd', { profileId, dbName, query });
+}
+
+export interface SqlScriptProgress {
+  executedStatements: number;
+  failedStatements: number;
+  bytesRead: number;
+  totalBytes: number;
+  currentStatementPreview: string;
+  lastError?: string | null;
+  done: boolean;
+}
+
+export interface SqlScriptRunResult {
+  totalStatements: number;
+  succeededStatements: number;
+  failedStatements: number;
+  durationMs: number;
+  cancelled: boolean;
+  errors: string[];
+}
+
+export interface QueryExportProgress {
+  exportedRows: number;
+  bytesWritten: number;
+  done: boolean;
+}
+
+export interface QueryExportResult {
+  path: string;
+  format: string;
+  exportedRows: number;
+  durationMs: number;
+}
+
+export interface XlsxSheetPreview {
+  sheetNames: string[];
+  activeSheet: string;
+  headers: string[];
+  rows: string[][];
+  totalRows: number;
+  truncated: boolean;
+}
+
+export async function toggleHistoryPin(historyId: string): Promise<boolean> {
+  assertTauri();
+  return invoke('toggle_history_pin_cmd', { historyId });
+}
+
+export async function deleteHistoryEntry(historyId: string): Promise<boolean> {
+  assertTauri();
+  return invoke('delete_history_entry_cmd', { historyId });
+}
+
+export async function readXlsxSheet(
+  path: string,
+  sheetName?: string | null,
+  maxRows = 1000,
+): Promise<XlsxSheetPreview> {
+  assertTauri();
+  return invoke('read_xlsx_sheet_cmd', {
+    path,
+    sheetName: sheetName ?? null,
+    maxRows,
+  });
+}
+
+export async function runSqlFileStream(
+  profileId: string,
+  dbName: string | null,
+  path: string,
+  continueOnError: boolean,
+  onProgressUpdate: (progress: SqlScriptProgress) => void,
+  queryId?: string,
+): Promise<SqlScriptRunResult> {
+  assertTauri();
+  const onProgress = new Channel<SqlScriptProgress>();
+  onProgress.onmessage = (p) => onProgressUpdate(p);
+  return invoke('run_sql_file_cmd', {
+    profileId,
+    dbName,
+    path,
+    continueOnError,
+    queryId: queryId ?? null,
+    onProgress,
+  });
+}
+
+export async function exportQueryToFile(req: {
+  profileId: string;
+  dbName: string | null;
+  sql: string;
+  format: 'csv' | 'xlsx' | 'json';
+  path: string;
+  sheetName?: string | null;
+  queryId?: string;
+  onProgressUpdate?: (progress: QueryExportProgress) => void;
+}): Promise<QueryExportResult> {
+  assertTauri();
+  const onProgress = new Channel<QueryExportProgress>();
+  onProgress.onmessage = (p) => req.onProgressUpdate?.(p);
+  return invoke('export_query_to_file_cmd', {
+    profileId: req.profileId,
+    dbName: req.dbName,
+    sql: req.sql,
+    format: req.format,
+    path: req.path,
+    sheetName: req.sheetName ?? null,
+    queryId: req.queryId ?? null,
+    onProgress,
+  });
 }
 
 export async function exportSqlDump(req: {

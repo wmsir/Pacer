@@ -615,12 +615,98 @@ impl DbBackend for PostgresBackend {
             lines.push(format!("  PRIMARY KEY ({})", pks.join(", ")));
         }
 
-        Ok(format!(
-            "CREATE TABLE \"{}\".\"{}\" (\n{}\n);",
-            schema.replace('"', "\"\""),
-            table.replace('"', "\"\""),
+        // UNIQUE, CHECK, and FOREIGN KEY constraints
+        let con_rows = sqlx::query(
+            "SELECT c.conname::text AS conname, \
+                    pg_get_constraintdef(c.oid, true) AS condef \
+             FROM pg_constraint c \
+             JOIN pg_class cl ON cl.oid = c.conrelid \
+             JOIN pg_namespace ns ON ns.oid = cl.relnamespace \
+             WHERE ns.nspname = $1 AND cl.relname = $2 AND c.contype IN ('u', 'c', 'f') \
+             ORDER BY CASE c.contype WHEN 'u' THEN 1 WHEN 'c' THEN 2 ELSE 3 END, c.conname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        for row in con_rows {
+            let cname: String = row.try_get("conname").unwrap_or_default();
+            let cdef: String = row.try_get("condef").unwrap_or_default();
+            if !cname.is_empty() && !cdef.is_empty() {
+                lines.push(format!(
+                    "  CONSTRAINT \"{}\" {}",
+                    cname.replace('"', "\"\""),
+                    cdef
+                ));
+            }
+        }
+
+        let q_schema = schema.replace('"', "\"\"");
+        let q_table = table.replace('"', "\"\"");
+        let mut ddl = format!(
+            "CREATE TABLE \"{q_schema}\".\"{q_table}\" (\n{}\n);",
             lines.join(",\n")
-        ))
+        );
+
+        // Non-constraint secondary indexes
+        let idx_rows = sqlx::query(
+            "SELECT i.indexdef::text AS indexdef \
+             FROM pg_indexes i \
+             WHERE i.schemaname = $1 AND i.tablename = $2 \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM pg_constraint c \
+                 JOIN pg_class cl ON cl.oid = c.conrelid \
+                 JOIN pg_namespace ns ON ns.oid = cl.relnamespace \
+                 WHERE ns.nspname = i.schemaname AND cl.relname = i.tablename AND c.conname = i.indexname \
+               ) \
+             ORDER BY i.indexname",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&self.pool)
+        .await
+        .unwrap_or_default();
+
+        for row in idx_rows {
+            let idx_def: String = row.try_get("indexdef").unwrap_or_default();
+            if !idx_def.trim().is_empty() {
+                ddl.push_str(&format!("\n{idx_def};"));
+            }
+        }
+
+        // Table & column comments
+        if let Ok(Some(tbl_cmt)) = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT obj_description(cl.oid, 'pg_class') \
+             FROM pg_class cl JOIN pg_namespace ns ON ns.oid = cl.relnamespace \
+             WHERE ns.nspname = $1 AND cl.relname = $2",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_one(&self.pool)
+        .await
+        {
+            if !tbl_cmt.is_empty() {
+                ddl.push_str(&format!(
+                    "\nCOMMENT ON TABLE \"{q_schema}\".\"{q_table}\" IS '{}';",
+                    tbl_cmt.replace('\'', "''")
+                ));
+            }
+        }
+        for c in &cols {
+            if let Some(ref cmt) = c.comment {
+                if !cmt.is_empty() {
+                    ddl.push_str(&format!(
+                        "\nCOMMENT ON COLUMN \"{q_schema}\".\"{q_table}\".\"{}\" IS '{}';",
+                        c.name.replace('"', "\"\""),
+                        cmt.replace('\'', "''")
+                    ));
+                }
+            }
+        }
+
+        Ok(ddl)
     }
 
     async fn execute_query(

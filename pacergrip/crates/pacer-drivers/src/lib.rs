@@ -1,7 +1,9 @@
+pub mod clickhouse;
 pub mod mysql;
 pub mod postgres;
 pub mod redis;
 pub mod sqlite;
+pub mod sqlserver;
 pub mod ssh_tunnel;
 
 use std::sync::Arc;
@@ -11,10 +13,12 @@ use pacer_core::{
     ConnectionOptionsConfig, CoreError, CoreResult, DbBackend, DbEngineType, DirectConfig,
 };
 
+pub use clickhouse::ClickHouseBackend;
 pub use mysql::MySqlBackend;
 pub use postgres::PostgresBackend;
 pub use redis::RedisBackend;
 pub use sqlite::{create_demo_sqlite_db, SqliteBackend};
+pub use sqlserver::SqlServerBackend;
 pub use ssh_tunnel::SshTunnelHandle;
 
 pub(crate) const JS_MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -163,6 +167,12 @@ pub async fn connect_direct(
         DbEngineType::PostgreSql | DbEngineType::OpenGauss | DbEngineType::Kingbase => {
             Ok(Arc::new(PostgresBackend::connect(config, password).await?))
         }
+        DbEngineType::ClickHouse => {
+            Ok(Arc::new(ClickHouseBackend::connect(config, password).await?))
+        }
+        DbEngineType::SqlServer => {
+            Ok(Arc::new(SqlServerBackend::connect(config, password).await?))
+        }
         DbEngineType::Redis => Ok(Arc::new(RedisBackend::connect(config, password).await?)),
         other => Err(CoreError::Unsupported(format!(
             "Direct native driver for {:?} is not yet bundled (requires external ODBC/OCI runtime); URL / DBeaver config import & AST parsing remain supported.",
@@ -262,6 +272,7 @@ mod tests {
                     sql: "UPDATE customers SET tier = 'GOLD' WHERE country = 'CN';".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx,
             )
@@ -282,6 +293,7 @@ mod tests {
                     sql: "DELETE FROM customers WHERE id = 1;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx2,
             )
@@ -312,6 +324,7 @@ mod tests {
                         .to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ddl,
             )
@@ -328,6 +341,7 @@ mod tests {
                     sql: insert_sql.to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ins,
             )
@@ -343,6 +357,7 @@ mod tests {
                     sql: "SELECT id, score, note, raw_bin FROM items_big ORDER BY id;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx,
             )
@@ -452,6 +467,7 @@ mod tests {
                     sql: "CREATE TABLE empty_activities (id INTEGER PRIMARY KEY, title TEXT, status TEXT, created_at TEXT);".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ddl,
             )
@@ -466,6 +482,7 @@ mod tests {
                     sql: "SELECT * FROM empty_activities LIMIT 100;".to_string(),
                     limit: Some(100),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx,
             )
@@ -495,6 +512,7 @@ mod tests {
                         .to_string(),
                     limit: Some(100),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx2,
             )
@@ -536,6 +554,7 @@ mod tests {
                     sql: "SELECT * FROM pragma_foreign_keys;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx,
             )
@@ -754,6 +773,7 @@ mod tests {
                     sql: "HGETALL user:1001".to_string(),
                     limit: Some(100),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_h,
             )
@@ -773,6 +793,7 @@ mod tests {
                     sql: "ZRANGE rank:scores 0 99 WITHSCORES".to_string(),
                     limit: Some(100),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_z,
             )
@@ -800,6 +821,7 @@ mod tests {
                     sql: "GET greeting".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ro_ok,
             )
@@ -814,6 +836,7 @@ mod tests {
                     sql: "SET greeting blocked".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ro_err,
             )
@@ -926,6 +949,7 @@ mod tests {
                     sql: "CREATE TRIGGER trg_customers_touch AFTER UPDATE ON customers BEGIN SELECT 1; END;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_trig,
             )
@@ -948,6 +972,7 @@ mod tests {
                     sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Temp Tx User', 'temp@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ins,
             )
@@ -967,6 +992,7 @@ mod tests {
                     sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
                     limit: Some(10),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_sel1,
             )
@@ -987,6 +1013,7 @@ mod tests {
                     sql: "SELECT * FROM customers WHERE email = 'temp@tx.local';".to_string(),
                     limit: Some(10),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_sel2,
             )
@@ -1003,6 +1030,7 @@ mod tests {
                     sql: "INSERT INTO customers (full_name, email, tier, country, created_at) VALUES ('Committed User', 'committed@tx.local', 'VIP', 'CN', '2026-11-25');".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ins2,
             )
@@ -1019,6 +1047,7 @@ mod tests {
                     sql: "SELECT * FROM customers WHERE email = 'committed@tx.local';".to_string(),
                     limit: Some(10),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_sel3,
             )
@@ -1052,6 +1081,7 @@ mod tests {
                         .to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ddl,
             )
@@ -1068,6 +1098,7 @@ mod tests {
                         .to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_ins,
             )
@@ -1084,6 +1115,7 @@ mod tests {
                     sql: "SELECT id, label FROM items_exact ORDER BY id;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_exact,
             )
@@ -1109,6 +1141,7 @@ mod tests {
                     sql: "SELECT id, label FROM items_exact ORDER BY id;".to_string(),
                     limit: Some(120),
                     query_id: Some("test-lim-q1".to_string()),
+                    timeout_sec: None,
                 },
                 tx_lim,
             )
@@ -1130,6 +1163,7 @@ mod tests {
                     sql: "SELECT COUNT(*) AS cnt FROM items_exact;".to_string(),
                     limit: None,
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx_after,
             )

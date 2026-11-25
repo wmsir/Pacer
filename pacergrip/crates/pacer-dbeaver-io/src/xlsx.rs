@@ -1,13 +1,15 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
-use std::io::{BufWriter, Cursor, Seek, Write};
+use std::io::{BufReader, BufWriter, Cursor, Seek, Write};
 use std::path::Path;
 
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
 use serde_json::Value;
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, ZipWriter};
+use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use pacer_core::{CoreError, CoreResult};
+use pacer_core::{CoreError, CoreResult, XlsxSheetPreview};
 
 const CONTENT_TYPES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -158,6 +160,522 @@ fn write_xlsx_to_writer<W: Write + Seek>(
     zw.finish()
         .map_err(|e| CoreError::ExecutionFailed(format!("完成 Excel 工作簿打包失败: {e}")))?;
     Ok(())
+}
+
+/// Incremental multi-chunk `.xlsx` streaming writer backed by `ZipWriter<BufWriter<File>>`.
+pub struct StreamingXlsxWriter {
+    zw: Option<ZipWriter<BufWriter<File>>>,
+    columns: Vec<String>,
+    col_letters: Vec<String>,
+    header_written: bool,
+    row_index: usize,
+    row_buf: String,
+}
+
+impl StreamingXlsxWriter {
+    pub fn create(path: &Path, sheet_name: &str) -> CoreResult<Self> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let file = File::create(path)?;
+        let bw = BufWriter::with_capacity(64 * 1024, file);
+        let safe_sheet = sanitize_sheet_name(sheet_name);
+        let mut escaped_sheet_attr = String::with_capacity(safe_sheet.len());
+        push_xml_attr_escaped(&mut escaped_sheet_attr, &safe_sheet);
+        let workbook_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="{escaped_sheet_attr}" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>"#
+        );
+
+        let mut zw = ZipWriter::new(bw);
+        let opts = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let static_parts: [(&str, &[u8]); 5] = [
+            ("[Content_Types].xml", CONTENT_TYPES_XML.as_bytes()),
+            ("_rels/.rels", ROOT_RELS_XML.as_bytes()),
+            ("xl/workbook.xml", workbook_xml.as_bytes()),
+            ("xl/_rels/workbook.xml.rels", WORKBOOK_RELS_XML.as_bytes()),
+            ("xl/styles.xml", STYLES_XML.as_bytes()),
+        ];
+        for (name, data) in static_parts {
+            zw.start_file(name, opts)
+                .map_err(|e| CoreError::ExecutionFailed(format!("创建 Excel ZIP 条目 {name} 失败: {e}")))?;
+            zw.write_all(data)
+                .map_err(|e| CoreError::ExecutionFailed(format!("写入 Excel 条目 {name} 失败: {e}")))?;
+        }
+        zw.start_file("xl/worksheets/sheet1.xml", opts)
+            .map_err(|e| CoreError::ExecutionFailed(format!("创建 Excel 工作表条目失败: {e}")))?;
+        zw.write_all(
+            br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+"#,
+        )?;
+
+        Ok(Self {
+            zw: Some(zw),
+            columns: Vec::new(),
+            col_letters: Vec::new(),
+            header_written: false,
+            row_index: 0,
+            row_buf: String::with_capacity(4096),
+        })
+    }
+
+    pub fn write_chunk(
+        &mut self,
+        columns: &[String],
+        rows: &[BTreeMap<String, Value>],
+    ) -> CoreResult<usize> {
+        let Some(zw) = self.zw.as_mut() else {
+            return Err(CoreError::ExecutionFailed(
+                "Excel streaming writer already finished".to_string(),
+            ));
+        };
+
+        if !self.header_written {
+            if !columns.is_empty() {
+                self.columns = columns.to_vec();
+            } else if let Some(first) = rows.first() {
+                self.columns = first.keys().cloned().collect();
+            }
+            if !self.columns.is_empty() {
+                self.col_letters = (0..self.columns.len())
+                    .map(col_index_to_excel_letters)
+                    .collect();
+                let mut widths: Vec<f64> = self
+                    .columns
+                    .iter()
+                    .map(|c| (display_width(c) + 4) as f64)
+                    .collect();
+                for row in rows.iter().take(500) {
+                    for (c_idx, col) in self.columns.iter().enumerate() {
+                        if let Some(val) = row.get(col) {
+                            let w = (value_preview_width(val) + 3) as f64;
+                            if w > widths[c_idx] {
+                                widths[c_idx] = w;
+                            }
+                        }
+                    }
+                }
+                self.row_buf.clear();
+                self.row_buf.push_str("  <cols>\n");
+                for (idx, w) in widths.iter().enumerate() {
+                    let clamped = w.clamp(10.0, 48.0);
+                    let one_based = idx + 1;
+                    use std::fmt::Write as _;
+                    let _ = writeln!(
+                        self.row_buf,
+                        r#"    <col min="{one_based}" max="{one_based}" width="{clamped:.1}" customWidth="1"/>"#
+                    );
+                }
+                self.row_buf.push_str("  </cols>\n  <sheetData>\n");
+                self.row_buf.push_str(r#"    <row r="1" ht="20" customHeight="1">"#);
+                for (c_idx, col_name) in self.columns.iter().enumerate() {
+                    append_inline_str_cell(&mut self.row_buf, &self.col_letters[c_idx], 1, "1", col_name);
+                }
+                self.row_buf.push_str("</row>\n");
+                zw.write_all(self.row_buf.as_bytes())?;
+                self.header_written = true;
+            }
+        }
+
+        if !self.header_written {
+            return Ok(0);
+        }
+
+        for row in rows {
+            let excel_row = self.row_index + 2;
+            self.row_buf.clear();
+            use std::fmt::Write as _;
+            let _ = write!(self.row_buf, r#"    <row r="{excel_row}">"#);
+            for (c_idx, col_name) in self.columns.iter().enumerate() {
+                if let Some(val) = row.get(col_name) {
+                    if !val.is_null() {
+                        encode_xlsx_cell(&mut self.row_buf, &self.col_letters[c_idx], excel_row, val);
+                    }
+                }
+            }
+            self.row_buf.push_str("</row>\n");
+            zw.write_all(self.row_buf.as_bytes())?;
+            self.row_index += 1;
+        }
+        Ok(rows.len())
+    }
+
+    pub fn finish(mut self) -> CoreResult<usize> {
+        let mut zw = self.zw.take().ok_or_else(|| {
+            CoreError::ExecutionFailed("Excel streaming writer already finished".to_string())
+        })?;
+        if !self.header_written {
+            zw.write_all(b"  <sheetData>\n")?;
+        }
+        zw.write_all(b"  </sheetData>\n</worksheet>")?;
+        let mut bw = zw
+            .finish()
+            .map_err(|e| CoreError::ExecutionFailed(format!("完成 Excel 工作簿打包失败: {e}")))?;
+        bw.flush()?;
+        Ok(self.row_index)
+    }
+}
+
+/// Writes one RFC 4180 CSV record with CRLF line ending into `writer`.
+pub fn write_csv_row<W: Write>(writer: &mut W, fields: &[&str]) -> std::io::Result<()> {
+    for (idx, field) in fields.iter().enumerate() {
+        if idx > 0 {
+            writer.write_all(b",")?;
+        }
+        let needs_quote = field.bytes().any(|b| matches!(b, b',' | b'"' | b'\n' | b'\r'));
+        if needs_quote {
+            writer.write_all(b"\"")?;
+            let mut first = true;
+            for part in field.split('"') {
+                if !first {
+                    writer.write_all(b"\"\"")?;
+                }
+                first = false;
+                writer.write_all(part.as_bytes())?;
+            }
+            writer.write_all(b"\"")?;
+        } else {
+            writer.write_all(field.as_bytes())?;
+        }
+    }
+    writer.write_all(b"\r\n")
+}
+
+/// Reads an `.xlsx` workbook in pure Rust and returns worksheet names plus a bounded row preview.
+pub fn read_xlsx_sheet_preview(
+    path: &Path,
+    sheet_name: Option<&str>,
+    max_rows: usize,
+) -> CoreResult<XlsxSheetPreview> {
+    let file = File::open(path)?;
+    let mut archive = ZipArchive::new(BufReader::new(file))
+        .map_err(|e| CoreError::ParseError(format!("打开 Excel 文件失败: {e}")))?;
+
+    let sheets = parse_workbook_sheets(&mut archive)?;
+    if sheets.is_empty() {
+        return Err(CoreError::ParseError("Excel 工作簿中未发现任何工作表".to_string()));
+    }
+    let sheet_names: Vec<String> = sheets.iter().map(|(n, _)| n.clone()).collect();
+    let (active_sheet, rid) = match sheet_name.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(wanted) => sheets
+            .iter()
+            .find(|(n, _)| n == wanted)
+            .cloned()
+            .unwrap_or_else(|| sheets[0].clone()),
+        None => sheets[0].clone(),
+    };
+
+    let rels = parse_workbook_rels(&mut archive);
+    let target_entry = rels
+        .get(&rid)
+        .map(|t| normalize_xl_entry(t))
+        .unwrap_or_else(|| "xl/worksheets/sheet1.xml".to_string());
+
+    let shared_strings = parse_shared_strings(&mut archive);
+    let (headers, rows, total_rows, truncated) =
+        parse_worksheet_rows(&mut archive, &target_entry, &shared_strings, max_rows.max(1))?;
+
+    Ok(XlsxSheetPreview {
+        sheet_names,
+        active_sheet,
+        headers,
+        rows,
+        total_rows,
+        truncated,
+    })
+}
+
+fn xml_attr_str(e: &BytesStart<'_>, wanted: &[&[u8]]) -> Option<String> {
+    for attr in e.attributes().flatten() {
+        let key = attr.key.as_ref();
+        if wanted.contains(&key) {
+            if let Ok(v) = attr.unescape_value() {
+                return Some(v.into_owned());
+            }
+        }
+    }
+    None
+}
+
+fn normalize_xl_entry(target: &str) -> String {
+    let clean = target.trim().trim_start_matches('/');
+    if clean.starts_with("xl/") {
+        clean.to_string()
+    } else {
+        format!("xl/{clean}")
+    }
+}
+
+fn parse_workbook_sheets<R: std::io::Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> CoreResult<Vec<(String, String)>> {
+    let entry = archive
+        .by_name("xl/workbook.xml")
+        .map_err(|e| CoreError::ParseError(format!("缺少 xl/workbook.xml: {e}")))?;
+    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut buf = Vec::new();
+    let mut sheets = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if e.local_name().as_ref() == b"sheet" {
+                    let name = xml_attr_str(e, &[b"name"]).unwrap_or_default();
+                    let rid = xml_attr_str(e, &[b"r:id", b"id"]).unwrap_or_default();
+                    if !name.is_empty() && !rid.is_empty() {
+                        sheets.push((name, rid));
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(CoreError::ParseError(format!("解析 workbook.xml 失败: {e}"))),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(sheets)
+}
+
+fn parse_workbook_rels<R: std::io::Read + Seek>(
+    archive: &mut ZipArchive<R>,
+) -> HashMap<String, String> {
+    let mut rels = HashMap::new();
+    let Ok(entry) = archive.by_name("xl/_rels/workbook.xml.rels") else {
+        return rels;
+    };
+    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                if e.local_name().as_ref() == b"Relationship" {
+                    if let (Some(id), Some(target)) =
+                        (xml_attr_str(e, &[b"Id"]), xml_attr_str(e, &[b"Target"]))
+                    {
+                        rels.insert(id, target);
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    rels
+}
+
+fn parse_shared_strings<R: std::io::Read + Seek>(archive: &mut ZipArchive<R>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Ok(entry) = archive.by_name("xl/sharedStrings.xml") else {
+        return out;
+    };
+    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut buf = Vec::new();
+    let mut in_si = false;
+    let mut in_t = false;
+    let mut cur = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                b"si" => {
+                    in_si = true;
+                    cur.clear();
+                }
+                b"t" if in_si => {
+                    in_t = true;
+                }
+                _ => {}
+            },
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                b"t" => in_t = false,
+                b"si" if in_si => {
+                    out.push(std::mem::take(&mut cur));
+                    in_si = false;
+                }
+                _ => {}
+            },
+            Ok(Event::Text(ref e)) if in_si && in_t => {
+                if let Ok(txt) = e.unescape() {
+                    cur.push_str(&txt);
+                }
+            }
+            Ok(Event::CData(ref e)) if in_si && in_t => {
+                cur.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    out
+}
+
+fn excel_col_ref_to_index(cell_ref: &str) -> Option<usize> {
+    let mut col: usize = 0;
+    let mut has_letter = false;
+    for b in cell_ref.bytes() {
+        if b.is_ascii_alphabetic() {
+            has_letter = true;
+            let upper = b.to_ascii_uppercase();
+            col = col.checked_mul(26)?.checked_add((upper - b'A') as usize + 1)?;
+        } else {
+            break;
+        }
+    }
+    if has_letter {
+        Some(col - 1)
+    } else {
+        None
+    }
+}
+
+type SheetRowsResult = (Vec<String>, Vec<Vec<String>>, usize, bool);
+
+fn parse_worksheet_rows<R: std::io::Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    entry_name: &str,
+    shared_strings: &[String],
+    max_rows: usize,
+) -> CoreResult<SheetRowsResult> {
+    let entry = archive
+        .by_name(entry_name)
+        .map_err(|e| CoreError::ParseError(format!("缺少工作表 {entry_name}: {e}")))?;
+    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut buf = Vec::new();
+
+    let mut headers: Vec<String> = Vec::new();
+    let mut data_rows: Vec<Vec<String>> = Vec::new();
+    let mut total_data_rows = 0usize;
+
+    let mut in_row = false;
+    let mut current_row: Vec<String> = Vec::new();
+    let mut in_cell = false;
+    let mut cell_type = String::new();
+    let mut cell_col: Option<usize> = None;
+    let mut cell_val = String::new();
+    let mut capture_text = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => match e.local_name().as_ref() {
+                b"row" => {
+                    in_row = true;
+                    current_row.clear();
+                }
+                b"c" if in_row => {
+                    in_cell = true;
+                    cell_type = xml_attr_str(e, &[b"t"]).unwrap_or_default();
+                    cell_col = xml_attr_str(e, &[b"r"]).and_then(|r| excel_col_ref_to_index(&r));
+                    cell_val.clear();
+                    capture_text = false;
+                }
+                b"v" | b"t" if in_cell => {
+                    capture_text = true;
+                }
+                _ => {}
+            },
+            Ok(Event::Empty(ref e)) if in_row && e.local_name().as_ref() == b"c" => {
+                let col_idx = xml_attr_str(e, &[b"r"])
+                    .and_then(|r| excel_col_ref_to_index(&r))
+                    .unwrap_or(current_row.len());
+                if col_idx >= current_row.len() {
+                    current_row.resize(col_idx + 1, String::new());
+                }
+            }
+            Ok(Event::Text(ref e)) if in_cell && capture_text => {
+                if let Ok(txt) = e.unescape() {
+                    cell_val.push_str(&txt);
+                }
+            }
+            Ok(Event::CData(ref e)) if in_cell && capture_text => {
+                cell_val.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::End(ref e)) => match e.local_name().as_ref() {
+                b"v" | b"t" => {
+                    capture_text = false;
+                }
+                b"c" if in_cell => {
+                    let resolved = match cell_type.as_str() {
+                        "s" => cell_val
+                            .trim()
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|idx| shared_strings.get(idx))
+                            .cloned()
+                            .unwrap_or_default(),
+                        "b" => {
+                            if cell_val.trim() == "1" {
+                                "true".to_string()
+                            } else {
+                                "false".to_string()
+                            }
+                        }
+                        _ => std::mem::take(&mut cell_val),
+                    };
+                    let idx = cell_col.unwrap_or(current_row.len());
+                    if idx >= current_row.len() {
+                        current_row.resize(idx + 1, String::new());
+                    }
+                    current_row[idx] = resolved;
+                    in_cell = false;
+                    capture_text = false;
+                }
+                b"row" if in_row => {
+                    in_row = false;
+                    let all_empty = current_row.iter().all(|s| s.is_empty());
+                    if headers.is_empty() {
+                        if !all_empty {
+                            headers = std::mem::take(&mut current_row);
+                            for (i, h) in headers.iter_mut().enumerate() {
+                                if h.trim().is_empty() {
+                                    *h = format!("col_{}", i + 1);
+                                }
+                            }
+                        }
+                    } else if !all_empty {
+                        total_data_rows += 1;
+                        if data_rows.len() < max_rows {
+                            if current_row.len() < headers.len() {
+                                current_row.resize(headers.len(), String::new());
+                            } else if current_row.len() > headers.len() {
+                                let extra = current_row.len() - headers.len();
+                                let start_idx = headers.len();
+                                for j in 0..extra {
+                                    headers.push(format!("col_{}", start_idx + j + 1));
+                                }
+                            }
+                            data_rows.push(std::mem::take(&mut current_row));
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(CoreError::ParseError(format!("解析 Excel 工作表 XML 失败: {e}"))),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    for row in &mut data_rows {
+        if row.len() < headers.len() {
+            row.resize(headers.len(), String::new());
+        }
+    }
+    let truncated = total_data_rows > max_rows;
+    Ok((headers, data_rows, total_data_rows, truncated))
 }
 
 fn sanitize_sheet_name(raw: &str) -> String {
@@ -546,6 +1064,48 @@ mod tests {
         assert!(sheet_xml.contains(
             r#"<c r="B1201" s="2" t="inlineStr"><is><t>1892345678901231200</t></is></c>"#
         ));
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_streaming_xlsx_writer_and_reader_roundtrip_plus_csv_escaping() {
+        let tmp = std::env::temp_dir().join(format!(
+            "pacergrip_xlsx_rt_{}.xlsx",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&tmp);
+
+        let cols = vec!["id".to_string(), "name".to_string(), "snowflake".to_string()];
+        let mut r1 = BTreeMap::new();
+        r1.insert("id".to_string(), json!(1));
+        r1.insert("name".to_string(), json!("Alice, \"VIP\""));
+        r1.insert("snowflake".to_string(), json!("1892345678901234567"));
+
+        let mut r2 = BTreeMap::new();
+        r2.insert("id".to_string(), json!(2));
+        r2.insert("name".to_string(), Value::Null);
+        r2.insert("snowflake".to_string(), json!("00123"));
+
+        let mut writer = StreamingXlsxWriter::create(&tmp, "Customers").unwrap();
+        assert_eq!(writer.write_chunk(&cols, &[r1]).unwrap(), 1);
+        assert_eq!(writer.write_chunk(&[], &[r2]).unwrap(), 1);
+        assert_eq!(writer.finish().unwrap(), 2);
+
+        let preview = read_xlsx_sheet_preview(&tmp, Some("Customers"), 50).unwrap();
+        assert_eq!(preview.sheet_names, vec!["Customers"]);
+        assert_eq!(preview.active_sheet, "Customers");
+        assert_eq!(preview.headers, vec!["id", "name", "snowflake"]);
+        assert_eq!(preview.total_rows, 2);
+        assert!(!preview.truncated);
+        assert_eq!(preview.rows[0], vec!["1", "Alice, \"VIP\"", "1892345678901234567"]);
+        assert_eq!(preview.rows[1], vec!["2", "", "00123"]);
+
+        let mut csv_buf = Vec::new();
+        write_csv_row(&mut csv_buf, &["id", "note"]).unwrap();
+        write_csv_row(&mut csv_buf, &["1", "hello, \"world\""]).unwrap();
+        let csv_str = String::from_utf8(csv_buf).unwrap();
+        assert_eq!(csv_str, "id,note\r\n1,\"hello, \"\"world\"\"\"\r\n");
+
         let _ = std::fs::remove_file(&tmp);
     }
 }

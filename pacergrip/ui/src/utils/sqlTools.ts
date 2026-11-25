@@ -1615,6 +1615,8 @@ export function buildBatchInsertStatements(opts: {
   rows: Array<Record<string, unknown>>;
   batchSize?: number;
   ignoreDuplicates?: boolean;
+  mode?: 'insert' | 'ignore' | 'upsert';
+  conflictKeys?: string[];
 }): string[] {
   if (opts.targetColumns.length === 0 || opts.rows.length === 0) return [];
   const q = (id: string) => quoteIdentifier(id, opts.engineKey);
@@ -1629,13 +1631,33 @@ export function buildBatchInsertStatements(opts: {
   const isMysqlFamily =
     eng.includes('mysql') || eng.includes('tidb') || eng.includes('maria') || eng.includes('oceanbase');
 
-  const prefix =
-    opts.ignoreDuplicates && isSqlite
-      ? 'INSERT OR IGNORE INTO'
-      : opts.ignoreDuplicates && isMysqlFamily
-        ? 'INSERT IGNORE INTO'
-        : 'INSERT INTO';
-  const suffix = opts.ignoreDuplicates && isPgFamily ? ' ON CONFLICT DO NOTHING' : '';
+  const mode = opts.mode ?? (opts.ignoreDuplicates ? 'ignore' : 'insert');
+  let prefix = 'INSERT INTO';
+  let suffix = '';
+
+  if (mode === 'ignore') {
+    if (isSqlite) prefix = 'INSERT OR IGNORE INTO';
+    else if (isMysqlFamily) prefix = 'INSERT IGNORE INTO';
+    else if (isPgFamily) suffix = ' ON CONFLICT DO NOTHING';
+  } else if (mode === 'upsert') {
+    const keys = (opts.conflictKeys ?? []).filter((k) => opts.targetColumns.includes(k));
+    const effectiveKeys = keys.length > 0 ? keys : [opts.targetColumns[0]];
+    const updateCols = opts.targetColumns.filter((c) => !effectiveKeys.includes(c));
+    if (isMysqlFamily) {
+      if (updateCols.length > 0) {
+        suffix = ` ON DUPLICATE KEY UPDATE ${updateCols.map((c) => `${q(c)} = VALUES(${q(c)})`).join(', ')}`;
+      } else {
+        prefix = 'INSERT IGNORE INTO';
+      }
+    } else if (isPgFamily || isSqlite) {
+      const conflictClause = effectiveKeys.map(q).join(', ');
+      if (updateCols.length > 0) {
+        suffix = ` ON CONFLICT (${conflictClause}) DO UPDATE SET ${updateCols.map((c) => `${q(c)} = EXCLUDED.${q(c)}`).join(', ')}`;
+      } else {
+        suffix = ` ON CONFLICT (${conflictClause}) DO NOTHING`;
+      }
+    }
+  }
 
   const batchSize = Math.max(1, opts.batchSize ?? 100);
   const out: string[] = [];

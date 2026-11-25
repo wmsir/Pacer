@@ -10,13 +10,16 @@ import {
   createDemoSqliteConnection,
   createSamplePlugin,
   deleteConnection,
+  deleteHistoryEntry,
   deleteProject,
+  disconnectConnection,
   executeSql,
   explainSql,
   exportConnectionsXlsx,
   exportDbeaverDbp,
   exportDbeaverFolder,
   exportDbeaverJson,
+  exportQueryToFile,
   exportSqlDump,
   extractStatementAtCursor,
   formatSql,
@@ -26,6 +29,7 @@ import {
   importDbeaverPath,
   importDbeaverText,
   isTauriRuntime,
+  listActiveConnections,
   listColumns,
   listConnections,
   listDatabases,
@@ -41,6 +45,7 @@ import {
   openTextFile,
   pickDirectoryToMount,
   pickExportFolderPath,
+  pickQueryExportPath,
   pickSaveDbeaverDbpPath,
   pickSaveFilePath,
   pickSaveSqlDumpPath,
@@ -49,12 +54,14 @@ import {
   pickTextFileToOpen,
   revealInExplorer,
   rollbackTransaction,
+  runSqlFileStream,
   saveConnection,
   saveConsoleScratch,
   saveProject,
   saveTextFile,
   setTransactionMode,
   testConnection,
+  toggleHistoryPin,
   type ColumnMeta,
   type ConnectionDraft,
   type ConnectionProfile,
@@ -451,7 +458,34 @@ const localPlugins = ref<LocalPluginManifest[]>([]);
 const consoleScratchPaths = reactive<Record<string, string>>({});
 const lastSavedScratchContent: Record<string, string> = {};
 const snippetFilter = ref('');
+const snippetCategoryFilter = ref<string>('ALL');
+const showSnippetEditorForm = ref(false);
+const editingSnippetId = ref<string | null>(null);
+const snippetDraftTitle = ref('');
+const snippetDraftCategory = ref('自定义');
+const snippetDraftSql = ref('');
+const activeConnectedIds = ref<string[]>([]);
+const queryTimeoutSec = ref<number>(Number(localStorage.getItem('pacer.queryTimeoutSec')) || 0);
+const redisExpireModal = reactive<{
+  visible: boolean;
+  profile: ConnectionProfile | null;
+  dbName: string;
+  prefix: string;
+  ttlSec: number;
+}>({
+  visible: false,
+  profile: null,
+  dbName: '',
+  prefix: '',
+  ttlSec: 3600,
+});
 const closedTabsStack = ref<EditorTab[]>([]);
+
+function setQueryTimeoutSec(sec: number) {
+  const clean = Math.max(0, Number.isFinite(sec) ? Math.floor(sec) : 0);
+  queryTimeoutSec.value = clean;
+  localStorage.setItem('pacer.queryTimeoutSec', String(clean));
+}
 
 function loadJsonStorage<T>(key: string, fallback: T): T {
   try {
@@ -462,7 +496,7 @@ function loadJsonStorage<T>(key: string, fallback: T): T {
   }
 }
 
-const allSnippets = computed(() => {
+const rawMergedSnippets = computed<SqlSnippet[]>(() => {
   const pluginSnippets: SqlSnippet[] = [];
   for (const plg of localPlugins.value) {
     if (!plg.enabled) continue;
@@ -476,15 +510,29 @@ const allSnippets = computed(() => {
       });
     }
   }
-  const merged = [...customSnippets.value, ...pluginSnippets, ...BUILTIN_SNIPPETS];
+  return [...customSnippets.value, ...pluginSnippets, ...BUILTIN_SNIPPETS];
+});
+
+const snippetCategories = computed(() => {
+  const set = new Set<string>();
+  for (const s of rawMergedSnippets.value) {
+    if (s.category) set.add(s.category);
+  }
+  return ['ALL', ...Array.from(set)];
+});
+
+const allSnippets = computed(() => {
   const q = snippetFilter.value.trim().toLowerCase();
-  if (!q) return merged;
-  return merged.filter(
-    (s) =>
+  const cat = snippetCategoryFilter.value;
+  return rawMergedSnippets.value.filter((s) => {
+    if (cat !== 'ALL' && s.category !== cat) return false;
+    if (!q) return true;
+    return (
       s.title.toLowerCase().includes(q) ||
       s.category.toLowerCase().includes(q) ||
-      s.sql.toLowerCase().includes(q),
-  );
+      s.sql.toLowerCase().includes(q)
+    );
+  });
 });
 
 // Editor Tabs State
@@ -1305,6 +1353,118 @@ async function applyTabDatabaseBinding(
   }
 }
 
+async function refreshActiveConnections() {
+  if (!isTauriRuntime()) {
+    activeConnectedIds.value = [];
+    return;
+  }
+  try {
+    activeConnectedIds.value = await listActiveConnections();
+  } catch {
+    // non-fatal
+  }
+}
+
+async function handleDisconnectProfile(profile: ConnectionProfile) {
+  try {
+    const closed = await disconnectConnection(profile.id);
+    expandedProfiles[profile.id] = false;
+    if (closed) {
+      delete connHealthByProfile[profile.id];
+      setStatus(`已主动断开数据源连接: ${profile.name}`);
+      pushProjectLog({
+        projectId: profile.projectId,
+        profileId: profile.id,
+        profileName: profile.name,
+        level: 'info',
+        summary: '已主动断开服务端连接会话',
+      });
+    } else {
+      setStatus(`数据源 ${profile.name} 当前无活动会话`);
+    }
+  } catch (err) {
+    setStatus(`断开连接失败: ${String(err)}`, true);
+  } finally {
+    void refreshActiveConnections();
+  }
+}
+
+async function handleRedisPrefixAction(
+  action: 'unlink' | 'expire' | 'bigkeys',
+  profile: ConnectionProfile,
+  dbName: string,
+  prefix: string,
+) {
+  if (!isRedisProfile(profile)) return;
+  const pattern = prefix ? `${prefix}*` : '*';
+  const keysList = (tablesByKey[`${profile.id}:${dbName}`] ?? [])
+    .map((t) => t.name)
+    .filter((k) => (prefix ? k.startsWith(prefix) : true));
+
+  if (action === 'bigkeys') {
+    const scanCmd = `SCAN 0 MATCH ${quoteRedisArg(pattern)} COUNT 500`;
+    await executeStatementsBatch([scanCmd], `扫描前缀 ${pattern}`, profile, dbName);
+    return;
+  }
+
+  if (action === 'expire') {
+    redisExpireModal.profile = profile;
+    redisExpireModal.dbName = dbName;
+    redisExpireModal.prefix = prefix;
+    redisExpireModal.ttlSec = 3600;
+    redisExpireModal.visible = true;
+    return;
+  }
+
+  // action === 'unlink'
+  if (keysList.length === 0) {
+    setStatus(`当前已加载键列表中没有匹配前缀 "${pattern}" 的 Key`, true);
+    return;
+  }
+  const previewNames = keysList.slice(0, 6).join(', ') + (keysList.length > 6 ? ` ... 等共 ${keysList.length} 个` : '');
+  const cmd = `UNLINK ${keysList.map((k) => quoteRedisArg(k)).join(' ')}`;
+  dangerContext.value = {
+    profileName: profile.name,
+    env: profile.env,
+    dbName,
+    sql: cmd,
+    warnings: [
+      {
+        code: 'REDIS_UNLINK_PREFIX',
+        level: 'CRITICAL',
+        message: `即将异步移除前缀 "${pattern}" 下的 ${keysList.length} 个 Redis Key（命中预览: ${previewNames}），操作不可恢复。`,
+      },
+    ],
+  };
+  pendingDangerAction.value = async () => {
+    await executeStatementsBatch([cmd], `批量删除前缀 ${pattern}`, profile, dbName);
+    await loadTablesForDb(profile, dbName);
+  };
+  activeModal.value = 'danger';
+}
+
+async function confirmRedisPrefixExpire() {
+  const prof = redisExpireModal.profile;
+  if (!prof) {
+    redisExpireModal.visible = false;
+    return;
+  }
+  const ttl = Math.max(1, Math.floor(Number(redisExpireModal.ttlSec) || 60));
+  const prefix = redisExpireModal.prefix;
+  const dbName = redisExpireModal.dbName;
+  const keysList = (tablesByKey[`${prof.id}:${dbName}`] ?? [])
+    .map((t) => t.name)
+    .filter((k) => (prefix ? k.startsWith(prefix) : true));
+  redisExpireModal.visible = false;
+  if (keysList.length === 0) {
+    setStatus(`当前已加载键列表中没有匹配前缀 "${prefix}*" 的 Key`, true);
+    return;
+  }
+  const cmds = keysList.map((k) => `EXPIRE ${quoteRedisArg(k)} ${ttl}`);
+  await executeStatementsBatch(cmds, `批量设置 TTL (${ttl}s)`, prof, dbName);
+  await loadTablesForDb(prof, dbName);
+}
+
 async function toggleProfileNode(profile: ConnectionProfile) {
   syncActiveProjectForProfile(profile);
   selectedProfileId.value = profile.id;
@@ -1324,6 +1484,7 @@ async function toggleProfileNode(profile: ConnectionProfile) {
     return;
   }
   await loadDatabasesForProfile(profile, true);
+  void refreshActiveConnections();
 }
 
 async function toggleDatabaseNode(profile: ConnectionProfile, dbName: string) {
@@ -1529,6 +1690,7 @@ async function handleTestProfile(profile: ConnectionProfile) {
     });
   } finally {
     busy.value = false;
+    void refreshActiveConnections();
   }
 }
 
@@ -2409,31 +2571,125 @@ async function handleDumpSql(
 async function handleRunLocalSqlFile(profile: ConnectionProfile, dbName: string) {
   const path = await pickSqlScriptFile();
   if (!path) return;
+  const fileName = path.split(/[\\/]/).pop() || path;
+  if (isRedisProfile(profile)) {
+    try {
+      const opened = await openTextFile(path);
+      const stmts = splitRedisCommands(opened.content.trim());
+      if (stmts.length === 0) {
+        setStatus('所选命令文件为空', true);
+        return;
+      }
+      await runStatementsWithGuard(stmts, `运行脚本 ${opened.name}`, profile, dbName, true);
+    } catch (err) {
+      setStatus(`读取或执行命令文件失败: ${String(err)}`, true);
+    }
+    return;
+  }
+
+  busy.value = true;
+  queryExecuting.value = true;
+  const queryId = startQueryTimer();
+  setStatus(`正在服务端流式执行脚本 ${fileName}...`);
+  pushProjectLog({
+    projectId: profile.projectId,
+    profileId: profile.id,
+    profileName: profile.name,
+    dbName: dbName || undefined,
+    level: 'sql',
+    summary: `开始流式执行 SQL 脚本: ${fileName}`,
+    detail: path,
+  });
+
   try {
-    const opened = await openTextFile(path);
-    const content = opened.content.trim();
-    if (!content) {
-      setStatus('所选 SQL 脚本文件为空', true);
-      return;
+    const res = await runSqlFileStream(
+      profile.id,
+      dbName || null,
+      path,
+      false,
+      (prog) => {
+        setStatus(
+          `正在执行 ${fileName}：已执行 ${prog.executedStatements} 条（失败 ${prog.failedStatements}）...`,
+        );
+      },
+      queryId,
+    );
+    const firstErr = res.errors?.[0] ?? '';
+    const tail = res.cancelled
+      ? '（已用户取消）'
+      : res.failedStatements > 0
+        ? `（失败 ${res.failedStatements} 条：${firstErr}）`
+        : '';
+    setStatus(
+      `脚本执行完成 ${fileName}：共 ${res.totalStatements} 条 · 成功 ${res.succeededStatements} 条 · ${res.durationMs} ms${tail}`,
+      res.failedStatements > 0 || res.cancelled,
+    );
+    pushProjectLog({
+      projectId: profile.projectId,
+      profileId: profile.id,
+      profileName: profile.name,
+      dbName: dbName || undefined,
+      level: res.failedStatements > 0 ? 'error' : 'success',
+      durationMs: res.durationMs,
+      summary: `脚本 ${fileName} 完成：共 ${res.totalStatements} 条（成功 ${res.succeededStatements} / 失败 ${res.failedStatements}）`,
+      detail: firstErr || path,
+    });
+    if (dbName) {
+      void loadTablesForDb(profile, dbName);
     }
-    const isRedis = isRedisProfile(profile);
-    let stmts: string[];
-    if (isRedis) {
-      stmts = splitRedisCommands(content);
-    } else {
-      const analysis = await analyzeSql(content, profile.dbType);
-      stmts =
-        analysis.statements.length > 0
-          ? analysis.statements.map((s) => s.sql.trim()).filter(Boolean)
-          : [content];
-    }
-    if (stmts.length === 0) {
-      setStatus('未解析出可执行语句', true);
-      return;
-    }
-    await runStatementsWithGuard(stmts, `运行脚本 ${opened.name}`, profile, dbName, true);
+    void refreshHistory();
   } catch (err) {
-    setStatus(`读取或执行本地 SQL 文件失败: ${String(err)}`, true);
+    setStatus(`流式执行 SQL 脚本失败: ${String(err)}`, true);
+  } finally {
+    stopQueryTimer();
+    queryExecuting.value = false;
+    busy.value = false;
+    void refreshActiveConnections();
+    void refreshTransactionStatus(profile.id);
+  }
+}
+
+async function handleExportFullQuery(tab: ResultTabItem, format: 'xlsx' | 'csv' | 'json') {
+  const defaultName = `${tab.sourceTable || 'query_result'}_full.${format}`;
+  const savePath = await pickQueryExportPath(defaultName, format);
+  if (!savePath) return;
+
+  busy.value = true;
+  queryExecuting.value = true;
+  const queryId = startQueryTimer();
+  setStatus(`正在流式导出完整结果集至 ${format.toUpperCase()}...`);
+  try {
+    const res = await exportQueryToFile({
+      profileId: tab.profileId,
+      dbName: tab.dbName || null,
+      sql: tab.sql,
+      format,
+      path: savePath,
+      sheetName: tab.sourceTable || 'Result',
+      queryId,
+      onProgressUpdate: (prog) => {
+        setStatus(`正在流式导出 (${format.toUpperCase()})：已写入 ${prog.exportedRows} 行...`);
+      },
+    });
+    setStatus(
+      `流式导出完成：共写入 ${res.exportedRows} 行 · ${res.durationMs} ms -> ${res.path}`,
+    );
+    pushProjectLog({
+      projectId: connections.value.find((c) => c.id === tab.profileId)?.projectId,
+      profileId: tab.profileId,
+      profileName: tab.profileName,
+      dbName: tab.dbName || undefined,
+      level: 'success',
+      durationMs: res.durationMs,
+      summary: `流式导出 ${res.exportedRows} 行至 ${format.toUpperCase()}`,
+      detail: res.path,
+    });
+  } catch (err) {
+    setStatus(`流式导出查询结果失败: ${String(err)}`, true);
+  } finally {
+    stopQueryTimer();
+    queryExecuting.value = false;
+    busy.value = false;
   }
 }
 
@@ -2965,6 +3221,7 @@ async function executeStatementsBatch(
           }
         },
         queryId,
+        queryTimeoutSec.value > 0 ? queryTimeoutSec.value : undefined,
       );
 
       let finalCols = rawColumns;
@@ -3101,6 +3358,7 @@ async function executeStatementsBatch(
     stopQueryTimer();
     queryExecuting.value = false;
     busy.value = false;
+    void refreshActiveConnections();
     if (!isRedis) {
       void refreshTransactionStatus(profile.id);
     }
@@ -3146,6 +3404,7 @@ async function handleServerQueryPage(
         }
       },
       queryId,
+      queryTimeoutSec.value > 0 ? queryTimeoutSec.value : undefined,
     );
     const target = resultTabs.value.find((r) => r.id === tab.id) ?? tab;
     if (summary.success) {
@@ -3479,19 +3738,51 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
   }
 }
 
-async function handleRerunResultTab(tab: ResultTabItem) {
+async function handleRerunResultTab(tab: ResultTabItem, silent = false) {
   const prof = connections.value.find((c) => c.id === tab.profileId);
   if (!prof) {
     setStatus('该结果集关联的数据源已不存在', true);
     return;
   }
-  await executeStatementsBatch(
-    [tab.sql],
-    tab.title,
-    prof,
-    tab.dbName,
-    tab.sourceTable ?? undefined,
-  );
+  if (!silent) {
+    await executeStatementsBatch(
+      [tab.sql],
+      tab.title,
+      prof,
+      tab.dbName,
+      tab.sourceTable ?? undefined,
+    );
+    return;
+  }
+  if (queryExecuting.value) return;
+  try {
+    const rawCols: string[] = [];
+    const rawRows: Record<string, unknown>[] = [];
+    const summary = await executeSql(
+      prof.id,
+      tab.dbName || null,
+      tab.sql,
+      tab.pageSize || maxRowsLimit.value,
+      (chunk) => {
+        if (rawCols.length === 0 && chunk.columns.length > 0) {
+          rawCols.push(...chunk.columns);
+        }
+        if (chunk.rows.length > 0) {
+          rawRows.push(...chunk.rows);
+        }
+      },
+      undefined,
+      queryTimeoutSec.value > 0 ? queryTimeoutSec.value : undefined,
+    );
+    const target = resultTabs.value.find((r) => r.id === tab.id);
+    if (target && summary.success) {
+      if (rawCols.length > 0) target.columns = markRaw(rawCols);
+      target.rows = markRaw(rawRows);
+      target.summary = summary;
+    }
+  } catch {
+    // Watch Query silent background refresh keeps current UI undisturbed on transient errors
+  }
 }
 
 async function handleRunConsoleQuickSql(sql: string) {
@@ -3789,6 +4080,38 @@ function closeResultTab(id: string) {
 function loadHistorySqlIntoEditor(entry: QueryHistoryEntry) {
   createNewConsoleTab(entry.sql, entry.profileId, entry.database ?? '');
   setStatus(`已从执行历史载入 SQL (${entry.profileName})`);
+}
+
+async function handleToggleHistoryPin(entry: QueryHistoryEntry) {
+  try {
+    const next = await toggleHistoryPin(entry.id);
+    entry.pinned = next;
+    void refreshHistory();
+    setStatus(next ? '已置顶收藏该历史记录' : '已取消历史记录置顶');
+  } catch (err) {
+    setStatus(`更新历史收藏状态失败: ${String(err)}`, true);
+  }
+}
+
+async function handleDeleteHistoryEntry(entry: QueryHistoryEntry) {
+  try {
+    await deleteHistoryEntry(entry.id);
+    historyEntries.value = historyEntries.value.filter((h) => h.id !== entry.id);
+    setStatus('已删除该条查询历史记录');
+  } catch (err) {
+    setStatus(`删除查询历史失败: ${String(err)}`, true);
+  }
+}
+
+async function handleRerunHistorySql(entry: QueryHistoryEntry) {
+  const prof = connections.value.find((c) => c.id === entry.profileId);
+  if (!prof) {
+    loadHistorySqlIntoEditor(entry);
+    setStatus('原数据源已不存在，已将 SQL 载入新控制台', true);
+    return;
+  }
+  const stmts = isRedisProfile(prof) ? splitRedisCommands(entry.sql) : [entry.sql];
+  await runStatementsWithGuard(stmts, `重放历史 (${entry.profileName})`, prof, entry.database ?? '');
 }
 
 // ==================== File & Markdown Operations ====================
@@ -4362,11 +4685,115 @@ function insertSnippetIntoEditor(sql: string) {
   setStatus('已插入 SQL 代码片段到编辑器');
 }
 
+function openNewSnippetForm() {
+  const tab = activeTab.value;
+  editingSnippetId.value = null;
+  snippetDraftTitle.value = '';
+  snippetDraftCategory.value = '自定义';
+  snippetDraftSql.value = (tab?.cursor.selectedText.trim() || '').slice(0, 4000);
+  showSnippetEditorForm.value = true;
+}
+
+function openEditSnippetForm(snip: SqlSnippet) {
+  editingSnippetId.value = snip.id;
+  snippetDraftTitle.value = snip.title;
+  snippetDraftCategory.value = snip.category || '自定义';
+  snippetDraftSql.value = snip.sql;
+  showSnippetEditorForm.value = true;
+}
+
+function saveSnippetDraftForm() {
+  const sql = snippetDraftSql.value.trim();
+  if (!sql) {
+    setStatus('请输入代码片段 SQL 内容', true);
+    return;
+  }
+  const title = snippetDraftTitle.value.trim() || sql.split('\n')[0].replace(/^--\s*/, '').slice(0, 32) || '自定义 SQL 片段';
+  const category = snippetDraftCategory.value.trim() || '自定义';
+  if (editingSnippetId.value && editingSnippetId.value.startsWith('custom-')) {
+    customSnippets.value = customSnippets.value.map((s) =>
+      s.id === editingSnippetId.value ? { ...s, title, category, sql } : s,
+    );
+  } else {
+    const entry: SqlSnippet = {
+      id: `custom-${Date.now()}`,
+      title,
+      category,
+      sql,
+    };
+    customSnippets.value = [entry, ...customSnippets.value].slice(0, 80);
+  }
+  localStorage.setItem('pacergrip.snippets', JSON.stringify(customSnippets.value));
+  showSnippetEditorForm.value = false;
+  editingSnippetId.value = null;
+  setStatus(`已保存代码片段: ${title}`);
+}
+
+async function handleExportCustomSnippets() {
+  if (customSnippets.value.length === 0) {
+    setStatus('当前没有自定义代码片段可导出', true);
+    return;
+  }
+  const payload = JSON.stringify(customSnippets.value, null, 2);
+  if (isTauriRuntime()) {
+    const path = await pickSaveFilePath('pacer_snippets.json');
+    if (path) {
+      await saveTextFile(path, payload, 'UTF-8', 'LF', false);
+      setStatus(`已导出 ${customSnippets.value.length} 个代码片段 -> ${path}`);
+      return;
+    }
+  }
+  await copyText(payload);
+}
+
+async function handleImportCustomSnippets() {
+  if (!isTauriRuntime()) return;
+  const path = await pickTextFileToOpen();
+  if (!path) return;
+  try {
+    const opened = await openTextFile(path);
+    const parsed = JSON.parse(opened.content);
+    if (!Array.isArray(parsed)) {
+      setStatus('导入文件格式错误，应为代码片段 JSON 数组', true);
+      return;
+    }
+    const existingIds = new Set(customSnippets.value.map((s) => s.id));
+    let added = 0;
+    const nextList = [...customSnippets.value];
+    for (const raw of parsed) {
+      if (!raw || typeof raw.sql !== 'string' || !raw.sql.trim()) continue;
+      const id =
+        typeof raw.id === 'string' && raw.id.startsWith('custom-') && !existingIds.has(raw.id)
+          ? raw.id
+          : `custom-${Date.now()}-${added}`;
+      existingIds.add(id);
+      nextList.unshift({
+        id,
+        title: String(raw.title || '导入片段'),
+        category: String(raw.category || '自定义'),
+        sql: raw.sql,
+      });
+      added += 1;
+    }
+    customSnippets.value = nextList.slice(0, 80);
+    localStorage.setItem('pacergrip.snippets', JSON.stringify(customSnippets.value));
+    setStatus(`已导入 ${added} 个自定义 SQL 代码片段`);
+  } catch (err) {
+    setStatus(`导入代码片段失败: ${String(err)}`, true);
+  }
+}
+
 function saveCurrentAsSnippet() {
   const tab = activeTab.value;
-  if (!tab) return;
+  if (!tab) {
+    openNewSnippetForm();
+    return;
+  }
   const sql = (tab.cursor.selectedText.trim() || tab.content.trim()).slice(0, 4000);
-  if (!sql) return;
+  if (!sql) {
+    openNewSnippetForm();
+    return;
+  }
   const title = sql.split('\n')[0].replace(/^--\s*/, '').slice(0, 32) || '自定义 SQL 片段';
   const entry: SqlSnippet = {
     id: `custom-${Date.now()}`,
@@ -4374,7 +4801,7 @@ function saveCurrentAsSnippet() {
     category: '自定义',
     sql,
   };
-  customSnippets.value = [entry, ...customSnippets.value].slice(0, 40);
+  customSnippets.value = [entry, ...customSnippets.value].slice(0, 80);
   localStorage.setItem('pacergrip.snippets', JSON.stringify(customSnippets.value));
   setStatus(`已保存代码片段: ${title}`);
 }
@@ -5019,6 +5446,7 @@ onMounted(async () => {
 
   await refreshProjectsAndConnections();
   await restoreEditorSession();
+  await refreshActiveConnections();
   await refreshHistory();
   if (isTauriRuntime()) {
     workspaceInfo.value = await getWorkspaceInfo().catch(() => null);
@@ -5517,6 +5945,20 @@ onBeforeUnmount(() => {
             <span style="font-family: var(--font-mono)">{{ (queryElapsedMs / 1000).toFixed(1) }}s</span>
           </button>
 
+          <select
+            :value="queryTimeoutSec"
+            class="field"
+            style="width: auto; padding: 2px 5px; font-size: 11px; height: 24px"
+            title="单次 SQL 执行超时限制（超时自动取消并释放连接）"
+            @change="setQueryTimeoutSec(Number(($event.target as HTMLSelectElement).value) || 0)"
+          >
+            <option :value="0">超时: 不限</option>
+            <option :value="15">超时: 15s</option>
+            <option :value="30">超时: 30s</option>
+            <option :value="60">超时: 60s</option>
+            <option :value="300">超时: 5min</option>
+          </select>
+
           <button
             class="icon-btn"
             :disabled="busy || !activeProfile || !activeTab"
@@ -5689,6 +6131,7 @@ onBeforeUnmount(() => {
           :expanded-databases="expandedDatabases"
           :expanded-tables="expandedTables"
           :conn-health-by-profile="connHealthByProfile"
+          :active-connected-ids="activeConnectedIds"
           :favorites="favorites"
           :batch-testing="batchTesting"
           @new-project="openProjectModal(null)"
@@ -5742,6 +6185,8 @@ onBeforeUnmount(() => {
           @open-redis-new-key="handleOpenRedisNewKey"
           @edit-redis-key="handleOpenRedisEditKey"
           @toggle-favorite="toggleFavorite"
+          @disconnect-profile="handleDisconnectProfile"
+          @redis-prefix-action="handleRedisPrefixAction"
           @edit-profile="openConnectionModal"
           @delete-profile="handleDeleteProfile"
           @copy-text="copyText"
@@ -5799,14 +6244,66 @@ onBeforeUnmount(() => {
                 title="保存当前选中/编辑器 SQL 为片段"
                 @click="saveCurrentAsSnippet"
               >
-                + 保存
+                + 快存
+              </button>
+              <button
+                class="icon-btn compact"
+                title="手动新建自定义代码片段"
+                @click="openNewSnippetForm"
+              >
+                + 新建
+              </button>
+              <button
+                class="icon-btn compact"
+                title="导出自定义代码片段为 JSON"
+                @click="handleExportCustomSnippets"
+              >
+                导出
+              </button>
+              <button
+                class="icon-btn compact"
+                title="从 JSON 文件导入代码片段"
+                @click="handleImportCustomSnippets"
+              >
+                导入
               </button>
             </div>
           </div>
-          <div class="tw-search">
+          <div class="tw-search" style="display: flex; flex-direction: column; gap: 6px">
             <input v-model="snippetFilter" class="field" placeholder="筛选 SQL 模板..." />
+            <div class="snippet-category-pills">
+              <button
+                v-for="cat in snippetCategories"
+                :key="cat"
+                class="icon-btn compact"
+                :class="{ active: snippetCategoryFilter === cat }"
+                @click="snippetCategoryFilter = cat"
+              >
+                {{ cat === 'ALL' ? '全部' : cat }}
+              </button>
+            </div>
           </div>
           <div class="tw-body">
+            <div v-if="showSnippetEditorForm" class="snippet-editor-card">
+              <div style="font-size: 12px; font-weight: 600; margin-bottom: 6px">
+                {{ editingSnippetId ? '编辑代码片段' : '新建自定义代码片段' }}
+              </div>
+              <div style="display: flex; gap: 6px; margin-bottom: 6px">
+                <input v-model="snippetDraftTitle" class="field" placeholder="片段标题..." style="flex: 1" />
+                <input v-model="snippetDraftCategory" class="field" placeholder="分组..." style="width: 82px" />
+              </div>
+              <textarea
+                v-model="snippetDraftSql"
+                class="field"
+                rows="4"
+                style="font-family: var(--font-mono); font-size: 11px; margin-bottom: 6px"
+                placeholder="输入 SQL / Redis 模板..."
+              />
+              <div style="display: flex; justify-content: flex-end; gap: 6px">
+                <button class="btn btn-sm" @click="showSnippetEditorForm = false">取消</button>
+                <button class="btn btn-sm btn-primary" @click="saveSnippetDraftForm">保存</button>
+              </div>
+            </div>
             <div v-if="quickLiveTemplates.length > 0" class="live-tpl-strip">
               <div class="live-tpl-strip-title">
                 <span>SQL 缩写快插 (编辑器输入缩写按 Tab)</span>
@@ -5868,6 +6365,13 @@ onBeforeUnmount(() => {
                 "
               >{{ snip.sql }}</pre>
               <div style="display: flex; justify-content: flex-end; gap: 4px">
+                <button
+                  v-if="snip.id.startsWith('custom-')"
+                  class="btn btn-sm"
+                  @click="openEditSnippetForm(snip)"
+                >
+                  编辑
+                </button>
                 <button
                   v-if="snip.id.startsWith('custom-')"
                   class="btn btn-sm"
@@ -6480,6 +6984,10 @@ onBeforeUnmount(() => {
                 handleOpenCommercialTool('data-diff', p, tab.dbName, tab.sourceTable ?? undefined);
               }
             "
+            @export-full-query="handleExportFullQuery"
+            @toggle-history-pin="handleToggleHistoryPin"
+            @delete-history-entry="handleDeleteHistoryEntry"
+            @rerun-history-sql="handleRerunHistorySql"
             @notify="setStatus($event)"
           />
         </section>
@@ -7191,6 +7699,27 @@ onBeforeUnmount(() => {
       @run-statements="handleRunCommercialStatements"
       @notify="setStatus($event)"
     />
+
+    <!-- Redis Prefix Batch TTL Modal -->
+    <div v-if="redisExpireModal.visible" class="modal-backdrop" @click.self="redisExpireModal.visible = false">
+      <div class="modal-card" style="width: 400px">
+        <div class="modal-header">
+          <span>批量设置前缀 TTL 过期时间</span>
+          <button class="icon-btn" @click="redisExpireModal.visible = false">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size: 12px; margin-bottom: 8px">
+            目标前缀: <strong style="font-family: var(--font-mono)">{{ redisExpireModal.prefix || '*' }}*</strong>
+          </div>
+          <label class="form-label">过期时间 (TTL 秒)</label>
+          <input v-model.number="redisExpireModal.ttlSec" type="number" min="1" class="field" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="redisExpireModal.visible = false">取消</button>
+          <button class="btn btn-primary" @click="confirmRedisPrefixExpire">应用 EXPIRE</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Editor Tab Right-Click Context Menu -->
     <div

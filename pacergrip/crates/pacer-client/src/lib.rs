@@ -241,6 +241,7 @@ mod tests {
                     sql: "SELECT id, phone FROM t_customer LIMIT 10".to_string(),
                     limit: Some(10),
                     query_id: None,
+                    timeout_sec: None,
                 },
                 tx,
             )

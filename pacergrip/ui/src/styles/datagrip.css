@@ -3505,3 +3505,123 @@ table.dg-grid-fixed th.virtual-spacer-cell {
   border: 1px dashed var(--border);
   border-radius: 6px;
 }
+
+.range-selected-cell {
+  background: color-mix(in srgb, var(--accent) 18%, transparent) !important;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: -1px;
+}
+
+.watch-row-added {
+  background: color-mix(in srgb, #2ea043 16%, transparent) !important;
+}
+
+.watch-cell-changed {
+  background: color-mix(in srgb, #d29922 24%, transparent) !important;
+  font-weight: 600;
+}
+
+.grid-col-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
+}
+
+.col-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  font-family: var(--font-mono);
+}
+
+.col-filter-chip-close {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 10px;
+}
+
+.viewer-decoder-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-chrome);
+  flex-wrap: wrap;
+}
+
+.viewer-decoder-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.viewer-decoder-tab.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.viewer-decoder-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  background: var(--bg-editor);
+}
+
+.viewer-decoder-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.viewer-img-preview {
+  max-width: 100%;
+  max-height: 210px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: contain;
+}
+
+.snippet-category-pills {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.snippet-editor-card {
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-chrome);
+}
+
+.tree-node-live-pill {
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: color-mix(in srgb, #2ea043 20%, transparent);
+  color: #3fb950;
+  border: 1px solid color-mix(in srgb, #2ea043 45%, transparent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.3px;
+}

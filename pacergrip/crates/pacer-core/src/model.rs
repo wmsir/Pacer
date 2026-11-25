@@ -236,6 +236,8 @@ pub struct ConnectionOptionsConfig {
     pub auto_sync: bool,
     #[serde(default)]
     pub introspection_level: Option<String>,
+    #[serde(default)]
+    pub query_timeout_sec: Option<u32>,
 }
 
 impl Default for ConnectionOptionsConfig {
@@ -252,6 +254,7 @@ impl Default for ConnectionOptionsConfig {
             startup_script: None,
             auto_sync: true,
             introspection_level: Some("auto".to_string()),
+            query_timeout_sec: None,
         }
     }
 }
@@ -527,6 +530,8 @@ pub struct QueryReq {
     pub limit: Option<u32>,
     #[serde(default)]
     pub query_id: Option<String>,
+    #[serde(default)]
+    pub timeout_sec: Option<u32>,
 }
 
 /// Streamed batch of query rows sent via `mpsc` / Tauri `Channel`.
@@ -586,6 +591,8 @@ pub struct QueryHistoryEntry {
     pub affected_rows: Option<u64>,
     pub success: bool,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Table index metadata shown in the Database Explorer & Structure tool window.
@@ -712,4 +719,60 @@ pub struct TransactionStatus {
     pub manual_mode: bool,
     pub in_transaction: bool,
     pub pending_statements: u32,
+}
+
+/// Real-time progress update while executing a local `.sql` script file in streaming mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlScriptProgress {
+    pub executed_statements: usize,
+    pub failed_statements: usize,
+    pub bytes_read: u64,
+    pub total_bytes: u64,
+    pub current_statement_preview: String,
+    pub last_error: Option<String>,
+    pub done: bool,
+}
+
+/// Final summary returned after streaming execution of a local `.sql` file finishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlScriptRunResult {
+    pub total_statements: usize,
+    pub succeeded_statements: usize,
+    pub failed_statements: usize,
+    pub duration_ms: u64,
+    pub cancelled: bool,
+    pub errors: Vec<String>,
+}
+
+/// Progress update emitted while streaming full query results directly to disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryExportProgress {
+    pub exported_rows: usize,
+    pub bytes_written: u64,
+    pub done: bool,
+}
+
+/// Summary returned after direct backend streaming export of full query results finishes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueryExportResult {
+    pub path: String,
+    pub format: String,
+    pub exported_rows: usize,
+    pub duration_ms: u64,
+}
+
+/// Worksheet metadata + bounded row preview parsed cleanly from a native `.xlsx` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct XlsxSheetPreview {
+    pub sheet_names: Vec<String>,
+    pub active_sheet: String,
+    pub headers: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: usize,
+    pub truncated: bool,
 }

@@ -184,8 +184,8 @@ const ENGINE_OPTIONS = [
   { value: 'openGauss', label: 'openGauss', badge: 'OG', defaultPort: 5432, scheme: 'jdbc:opengauss' },
   { value: 'oracle', label: 'Oracle (元数据配置)', badge: 'ORA', defaultPort: 1521, scheme: 'jdbc:oracle:thin:@/' },
   { value: 'dameng', label: '达梦 Dameng DM8 (元数据配置)', badge: 'DM8', defaultPort: 5236, scheme: 'jdbc:dm' },
-  { value: 'sqlServer', label: 'SQL Server (元数据配置)', badge: 'MSSQL', defaultPort: 1433, scheme: 'jdbc:sqlserver' },
-  { value: 'clickHouse', label: 'ClickHouse (元数据配置)', badge: 'CH', defaultPort: 8123, scheme: 'jdbc:clickhouse' },
+  { value: 'sqlServer', label: 'SQL Server (MSSQL 原生直连)', badge: 'MSSQL', defaultPort: 1433, scheme: 'jdbc:sqlserver' },
+  { value: 'clickHouse', label: 'ClickHouse (HTTP 原生直连)', badge: 'CH', defaultPort: 8123, scheme: 'jdbc:clickhouse' },
 ];
 
 const COLOR_OPTIONS = [
@@ -283,6 +283,7 @@ const connForm = reactive<{
   keepAliveSec: string;
   autoDisconnectEnabled: boolean;
   autoDisconnectSec: string;
+  queryTimeoutSec: string;
   startupScript: string;
   autoSync: boolean;
   introspectionLevel: 'auto' | 'level1' | 'level2' | 'level3';
@@ -339,6 +340,7 @@ const connForm = reactive<{
   keepAliveSec: '60',
   autoDisconnectEnabled: false,
   autoDisconnectSec: '300',
+  queryTimeoutSec: '',
   startupScript: '',
   autoSync: true,
   introspectionLevel: 'auto',
@@ -651,6 +653,7 @@ function buildDraftPayload(): ConnectionDraft {
     keepAliveSec: Math.max(5, Number(connForm.keepAliveSec) || 60),
     autoDisconnectEnabled: connForm.autoDisconnectEnabled,
     autoDisconnectSec: Math.max(10, Number(connForm.autoDisconnectSec) || 300),
+    queryTimeoutSec: Number(connForm.queryTimeoutSec) > 0 ? Math.trunc(Number(connForm.queryTimeoutSec)) : null,
     startupScript: connForm.startupScript.trim() || null,
     autoSync: connForm.autoSync,
     introspectionLevel: connForm.introspectionLevel,
@@ -1041,6 +1044,7 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
       connForm.keepAliveSec = String(opt.keepAliveSec ?? 60);
       connForm.autoDisconnectEnabled = Boolean(opt.autoDisconnectEnabled);
       connForm.autoDisconnectSec = String(opt.autoDisconnectSec ?? 300);
+      connForm.queryTimeoutSec = opt.queryTimeoutSec ? String(opt.queryTimeoutSec) : '';
       connForm.startupScript = opt.startupScript ?? '';
       connForm.autoSync = opt.autoSync !== false;
       connForm.introspectionLevel =
@@ -1115,6 +1119,7 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
       connForm.keepAliveSec = '60';
       connForm.autoDisconnectEnabled = false;
       connForm.autoDisconnectSec = '300';
+      connForm.queryTimeoutSec = '';
       connForm.startupScript = '';
       connForm.autoSync = true;
       connForm.introspectionLevel = 'auto';
@@ -2148,6 +2153,20 @@ function runImportLiveTemplates() {
                 :disabled="!connForm.autoDisconnectEnabled"
               />
               <span style="color: var(--text-secondary)">秒 (sec.)</span>
+            </div>
+          </div>
+
+          <div class="conn-row">
+            <label class="conn-row-label">查询执行超时 (Query timeout):</label>
+            <div class="conn-inline-check-num">
+              <input
+                v-model="connForm.queryTimeoutSec"
+                class="field conn-num-input"
+                type="number"
+                min="0"
+                placeholder="不限"
+              />
+              <span style="color: var(--text-secondary)">秒 (0 或留空为不限，超时自动服务端中止)</span>
             </div>
           </div>
 

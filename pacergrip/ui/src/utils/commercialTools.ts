@@ -940,3 +940,351 @@ export function generateDataDictionaryHtml(input: DataDictionaryInput): string {
 </body>
 </html>`;
 }
+
+// ==================== 4. Value Decoders, Matrix Paste, Redis Tree, Filter & Diff ====================
+
+export function decodeBase64Safe(input: string): { ok: boolean; text: string; error?: string } {
+  const clean = input.trim();
+  if (!clean) return { ok: true, text: '' };
+  try {
+    const normalized = clean.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = normalized.length % 4 === 0 ? '' : '='.repeat(4 - (normalized.length % 4));
+    const bin = atob(normalized + pad);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return { ok: true, text: new TextDecoder('utf-8', { fatal: false }).decode(bytes) };
+  } catch (err) {
+    return { ok: false, text: '', error: String(err) };
+  }
+}
+
+export function encodeBase64Safe(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+export function decodeUrlSafe(input: string): { ok: boolean; text: string; error?: string } {
+  try {
+    return { ok: true, text: decodeURIComponent(input.replace(/\+/g, '%20')) };
+  } catch (err) {
+    return { ok: false, text: '', error: String(err) };
+  }
+}
+
+export function decodeHexToUtf8(input: string): { ok: boolean; text: string; bytes: Uint8Array; error?: string } {
+  const clean = input.trim().replace(/^0x/i, '').replace(/[\s:_-]+/g, '');
+  if (!clean || clean.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(clean)) {
+    return { ok: false, text: '', bytes: new Uint8Array(), error: '非合法偶数长度十六进制串' };
+  }
+  const bytes = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  return {
+    ok: true,
+    bytes,
+    text: new TextDecoder('utf-8', { fatal: false }).decode(bytes),
+  };
+}
+
+export function formatHexDump(input: string, maxBytes = 512): string {
+  const hexAttempt = decodeHexToUtf8(input);
+  const bytes = hexAttempt.ok
+    ? hexAttempt.bytes.slice(0, maxBytes)
+    : new TextEncoder().encode(input).slice(0, maxBytes);
+  const lines: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 16) {
+    const chunk = bytes.slice(offset, offset + 16);
+    const addr = offset.toString(16).padStart(8, '0');
+    const hexParts: string[] = [];
+    let ascii = '';
+    for (let i = 0; i < 16; i++) {
+      if (i < chunk.length) {
+        const b = chunk[i];
+        hexParts.push(b.toString(16).padStart(2, '0').toUpperCase());
+        ascii += b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.';
+      } else {
+        hexParts.push('  ');
+        ascii += ' ';
+      }
+    }
+    lines.push(`${addr}  ${hexParts.slice(0, 8).join(' ')}  ${hexParts.slice(8).join(' ')}  |${ascii}|`);
+  }
+  return lines.join('\n');
+}
+
+export function decodeJwtToken(input: string): {
+  valid: boolean;
+  header?: string;
+  payload?: string;
+  signature?: string;
+  expHint?: string;
+} {
+  const parts = input.trim().split('.');
+  if (parts.length !== 3 || parts.some((p) => !p)) return { valid: false };
+  const h = decodeBase64Safe(parts[0]);
+  const p = decodeBase64Safe(parts[1]);
+  if (!h.ok || !p.ok) return { valid: false };
+  try {
+    const hObj = JSON.parse(h.text) as Record<string, unknown>;
+    const pObj = JSON.parse(p.text) as Record<string, unknown>;
+    let expHint: string | undefined;
+    if (typeof pObj.exp === 'number' && Number.isFinite(pObj.exp)) {
+      const dt = new Date(pObj.exp * 1000);
+      const expired = dt.getTime() < Date.now();
+      expHint = `${dt.toLocaleString()} (${expired ? '已过期' : '有效期内'})`;
+    }
+    return {
+      valid: true,
+      header: JSON.stringify(hObj, null, 2),
+      payload: JSON.stringify(pObj, null, 2),
+      signature: parts[2],
+      expHint,
+    };
+  } catch {
+    return { valid: false };
+  }
+}
+
+export function detectImageDataUri(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed;
+  }
+  const hexRes = decodeHexToUtf8(trimmed);
+  if (!hexRes.ok || hexRes.bytes.length < 12) return null;
+  const b = hexRes.bytes;
+  let mime = '';
+  if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) mime = 'image/png';
+  else if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) mime = 'image/jpeg';
+  else if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) mime = 'image/gif';
+  else if (b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && b[8] === 0x57 && b[9] === 0x45) mime = 'image/webp';
+  if (!mime) return null;
+  let bin = '';
+  for (let i = 0; i < b.length; i++) bin += String.fromCharCode(b[i]);
+  return `data:${mime};base64,${btoa(bin)}`;
+}
+
+export function parseSpreadsheetPasteMatrix(text: string): string[][] {
+  const norm = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const trimmed = norm.endsWith('\n') ? norm.slice(0, -1) : norm;
+  if (!trimmed) return [];
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (inQuotes) {
+      if (ch === '"' && trimmed[i + 1] === '"') {
+        cell += '"';
+        i += 1;
+      } else if (ch === '"') {
+        inQuotes = false;
+      } else {
+        cell += ch;
+      }
+      continue;
+    }
+    if (ch === '"' && cell.length === 0) {
+      inQuotes = true;
+    } else if (ch === '\t') {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell);
+  rows.push(row);
+  return rows;
+}
+
+export interface RedisNamespaceNode {
+  id: string;
+  label: string;
+  prefix: string;
+  isFolder: boolean;
+  keyCount: number;
+  fullKey?: string;
+  meta?: TableMeta;
+  children: RedisNamespaceNode[];
+}
+
+export function buildRedisNamespaceTree(
+  tables: TableMeta[],
+  delimiter = ':',
+): RedisNamespaceNode[] {
+  interface MutableNode {
+    id: string;
+    label: string;
+    prefix: string;
+    isFolder: boolean;
+    keyCount: number;
+    fullKey?: string;
+    meta?: TableMeta;
+    folderMap: Map<string, MutableNode>;
+    leaves: MutableNode[];
+  }
+
+  const rootFolders = new Map<string, MutableNode>();
+  const rootLeaves: MutableNode[] = [];
+  const delim = delimiter || ':';
+
+  for (const tbl of tables) {
+    const keyName = tbl.name;
+    const parts = keyName.split(delim);
+    if (parts.length <= 1) {
+      rootLeaves.push({
+        id: `k:${keyName}`,
+        label: keyName,
+        prefix: '',
+        isFolder: false,
+        keyCount: 1,
+        fullKey: keyName,
+        meta: tbl,
+        folderMap: new Map(),
+        leaves: [],
+      });
+      continue;
+    }
+
+    let curMap = rootFolders;
+    let curLeaves = rootLeaves;
+    let runningPrefix = '';
+    for (let i = 0; i < parts.length; i++) {
+      const seg = parts[i] || '(empty)';
+      const isLast = i === parts.length - 1;
+      if (isLast) {
+        curLeaves.push({
+          id: `k:${keyName}`,
+          label: keyName,
+          prefix: runningPrefix,
+          isFolder: false,
+          keyCount: 1,
+          fullKey: keyName,
+          meta: tbl,
+          folderMap: new Map(),
+          leaves: [],
+        });
+      } else {
+        runningPrefix = runningPrefix ? `${runningPrefix}${delim}${seg}` : seg;
+        let folder = curMap.get(seg);
+        if (!folder) {
+          folder = {
+            id: `f:${runningPrefix}`,
+            label: seg,
+            prefix: `${runningPrefix}${delim}`,
+            isFolder: true,
+            keyCount: 0,
+            folderMap: new Map(),
+            leaves: [],
+          };
+          curMap.set(seg, folder);
+        }
+        folder.keyCount += 1;
+        curMap = folder.folderMap;
+        curLeaves = folder.leaves;
+      }
+    }
+  }
+
+  function finalize(folders: Map<string, MutableNode>, leaves: MutableNode[]): RedisNamespaceNode[] {
+    const out: RedisNamespaceNode[] = [];
+    const sortedFolders = [...folders.values()].sort((a, b) => a.label.localeCompare(b.label));
+    for (const f of sortedFolders) {
+      out.push({
+        id: f.id,
+        label: f.label,
+        prefix: f.prefix,
+        isFolder: true,
+        keyCount: f.keyCount,
+        children: finalize(f.folderMap, f.leaves),
+      });
+    }
+    for (const l of leaves) {
+      out.push({
+        id: l.id,
+        label: l.label,
+        prefix: l.prefix,
+        isFolder: false,
+        keyCount: 1,
+        fullKey: l.fullKey,
+        meta: l.meta,
+        children: [],
+      });
+    }
+    return out;
+  }
+
+  return finalize(rootFolders, rootLeaves);
+}
+
+export type ColumnFilterOp = '=' | '!=' | 'contains' | 'not_contains' | '>' | '<' | 'is_null' | 'not_null';
+
+export function matchesColumnFilter(rawVal: unknown, op: ColumnFilterOp, needle: string): boolean {
+  const isNull = rawVal === null || rawVal === undefined;
+  if (op === 'is_null') return isNull;
+  if (op === 'not_null') return !isNull;
+  if (isNull) return op === '!=' || op === 'not_contains';
+  const text = typeof rawVal === 'object' ? JSON.stringify(rawVal) : String(rawVal);
+  const lhsLow = text.toLowerCase();
+  const rhsLow = needle.toLowerCase();
+  if (op === 'contains') return lhsLow.includes(rhsLow);
+  if (op === 'not_contains') return !lhsLow.includes(rhsLow);
+  if (op === '=') return lhsLow === rhsLow;
+  if (op === '!=') return lhsLow !== rhsLow;
+  const ln = Number(text);
+  const rn = Number(needle);
+  if (Number.isFinite(ln) && Number.isFinite(rn) && needle.trim() !== '') {
+    return op === '>' ? ln > rn : ln < rn;
+  }
+  return op === '>' ? text > needle : text < needle;
+}
+
+export function computeWatchResultDiff(
+  prevRows: Array<Record<string, unknown>>,
+  nextRows: Array<Record<string, unknown>>,
+  columns: string[],
+): {
+  addedIndices: Set<number>;
+  changedCells: Set<string>;
+  addedCount: number;
+  changedCount: number;
+} {
+  const addedIndices = new Set<number>();
+  const changedCells = new Set<string>();
+  let changedCount = 0;
+
+  for (let r = 0; r < nextRows.length; r++) {
+    if (r >= prevRows.length) {
+      addedIndices.add(r);
+      continue;
+    }
+    const prev = prevRows[r];
+    const next = nextRows[r];
+    for (const col of columns) {
+      const a = prev[col] === null || prev[col] === undefined ? '' : typeof prev[col] === 'object' ? JSON.stringify(prev[col]) : String(prev[col]);
+      const b = next[col] === null || next[col] === undefined ? '' : typeof next[col] === 'object' ? JSON.stringify(next[col]) : String(next[col]);
+      if (a !== b) {
+        changedCells.add(`${r}:${col}`);
+        changedCount += 1;
+      }
+    }
+  }
+  return {
+    addedIndices,
+    changedCells,
+    addedCount: addedIndices.size,
+    changedCount,
+  };
+}

@@ -1,10 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use aes::Aes128;
-use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -13,20 +11,22 @@ use tokio::sync::{mpsc, oneshot, RwLock as AsyncRwLock};
 use uuid::Uuid;
 
 use pacer_core::{
-    AuditEvent, CapabilityFlags, ColumnMeta, ConnectionFingerprint, ConnectionMode,
-    ConnectionOptionsConfig, ConnectionProfile, CoreError, DatabaseMeta, DbBackend, DbEngineType,
-    DbeaverDiscoveryItem, DirectConfig, EnvLevel, ExplainResult, ExtensionMeta, ExtensionRegistry,
-    FileStatsDto, ForeignKeyMeta, IndexMeta, MarkdownSqlBlock, ObjectSearchHit, OpenedFileDto,
-    PingMetrics, PreExecuteDecision, QueryChunk, QueryHistoryEntry, QueryReq, QuerySummary,
-    RoutineMeta, SshTunnelConfig, SslConfig, TableMeta, TransactionStatus, WorkspaceFileEntry,
-    WorkspaceProject,
+    load_vault_passwords, save_vault_passwords, AuditEvent, CapabilityFlags, ColumnMeta,
+    ConnectionFingerprint, ConnectionMode, ConnectionOptionsConfig, ConnectionProfile, CoreError,
+    DatabaseMeta, DbBackend, DbEngineType, DbeaverDiscoveryItem, DirectConfig, EnvLevel,
+    ExplainResult, ExtensionMeta, ExtensionRegistry, FileStatsDto, ForeignKeyMeta, IndexMeta,
+    MarkdownSqlBlock, ObjectSearchHit, OpenedFileDto, PingMetrics, PreExecuteDecision, QueryChunk,
+    QueryExportProgress, QueryExportResult, QueryHistoryEntry, QueryReq, QuerySummary,
+    RoutineMeta, SqlScriptProgress, SqlScriptRunResult, SshTunnelConfig, SslConfig, TableMeta,
+    TransactionStatus, WorkspaceFileEntry, WorkspaceProject, XlsxSheetPreview,
 };
 use pacer_dbeaver_io::{
     build_jdbc_url, build_limited_select_sql, build_sql_dump_footer, build_sql_dump_header,
     discover_local_dbeaver_files, export_to_dbeaver_dbp_bytes, export_to_dbeaver_folder,
     export_to_dbeaver_json_with_folders, import_dbeaver_from_path, parse_connection_url,
-    parse_dbeaver_text, write_sql_dump_insert_batch, write_sql_dump_table_header, write_xlsx_file,
-    ImportedDbeaverConnection, SqlDumpFormatOptions,
+    parse_dbeaver_text, read_xlsx_sheet_preview, write_csv_row, write_sql_dump_insert_batch,
+    write_sql_dump_table_header, write_xlsx_file, ImportedDbeaverConnection, SqlDumpFormatOptions,
+    SqlScriptStreamReader, StreamingXlsxWriter,
 };
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
 use pacer_sql_ast::{
@@ -41,14 +41,8 @@ use crate::files::{
 #[cfg(feature = "pacer-extension")]
 pub use pacer_client::PacerClient;
 
-const MAX_HISTORY_ENTRIES: usize = 200;
+const MAX_HISTORY_ENTRIES: usize = 2_000;
 const DEFAULT_PROJECT_ID: &str = "default-project";
-const LOCAL_VAULT_KEY: [u8; 16] = [
-    0x50, 0x61, 0x63, 0x65, 0x72, 0x47, 0x72, 0x69, 0x70, 0x56, 0x61, 0x75, 0x6C, 0x74, 0x32, 0x36,
-];
-
-type Aes128CbcEnc = cbc::Encryptor<Aes128>;
-type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
 #[derive(Clone)]
 pub struct CachedBackend {
@@ -110,7 +104,7 @@ impl AppState {
         let fallback_project_id = valid_project_ids[0].clone();
 
         let mut connections = load_connections_from_disk(&storage_dir);
-        let persisted = load_vault_passwords(&storage_dir);
+        let persisted = load_vault_passwords(&storage_dir, is_portable);
         for profile in &mut connections {
             let needs_project = match profile.project_id.as_deref() {
                 Some(pid) => !valid_project_ids.iter().any(|id| id == pid),
@@ -184,7 +178,7 @@ impl AppState {
             .read()
             .map_err(|e| e.to_string())?
             .clone();
-        save_vault_passwords(&self.storage_dir, &snapshot)
+        save_vault_passwords(&self.storage_dir, self.is_portable, &snapshot)
     }
 
     fn get_profile(&self, profile_id: &str) -> Result<ConnectionProfile, String> {
@@ -425,21 +419,30 @@ impl AppState {
         evicted_ids
     }
 
+    fn persist_history_list(&self, list: &[QueryHistoryEntry]) {
+        let _ = std::fs::create_dir_all(&self.storage_dir);
+        if let Ok(json) = serde_json::to_string_pretty(list) {
+            let _ = std::fs::write(self.storage_dir.join("history.json"), json);
+        }
+    }
+
     fn push_history(&self, entry: QueryHistoryEntry) {
         let snapshot = if let Ok(mut guard) = self.history.write() {
             guard.insert(0, entry);
-            if guard.len() > MAX_HISTORY_ENTRIES {
-                guard.truncate(MAX_HISTORY_ENTRIES);
+            while guard.len() > MAX_HISTORY_ENTRIES {
+                if let Some(pos) = guard.iter().rposition(|item| !item.pinned) {
+                    guard.remove(pos);
+                } else {
+                    guard.truncate(MAX_HISTORY_ENTRIES);
+                    break;
+                }
             }
             Some(guard.clone())
         } else {
             None
         };
         if let Some(list) = snapshot {
-            let _ = std::fs::create_dir_all(&self.storage_dir);
-            if let Ok(json) = serde_json::to_string_pretty(&list) {
-                let _ = std::fs::write(self.storage_dir.join("history.json"), json);
-            }
+            self.persist_history_list(&list);
         }
     }
 }
@@ -477,50 +480,6 @@ fn load_connections_from_disk(storage_dir: &Path) -> Vec<ConnectionProfile> {
         return Vec::new();
     };
     serde_json::from_str::<Vec<ConnectionProfile>>(&raw).unwrap_or_default()
-}
-
-fn load_vault_passwords(storage_dir: &Path) -> HashMap<String, String> {
-    let path = storage_dir.join("credentials.dat");
-    let Ok(raw) = std::fs::read(path) else {
-        return HashMap::new();
-    };
-    if raw.len() <= 16 {
-        return HashMap::new();
-    }
-    let (iv, ct) = raw.split_at(16);
-    let mut buf = ct.to_vec();
-    let Ok(dec) = Aes128CbcDec::new_from_slices(&LOCAL_VAULT_KEY, iv) else {
-        return HashMap::new();
-    };
-    let Ok(pt) = dec.decrypt_padded_mut::<Pkcs7>(&mut buf) else {
-        return HashMap::new();
-    };
-    serde_json::from_slice::<HashMap<String, String>>(pt).unwrap_or_default()
-}
-
-fn save_vault_passwords(
-    storage_dir: &Path,
-    map: &HashMap<String, String>,
-) -> Result<(), String> {
-    std::fs::create_dir_all(storage_dir).map_err(|e| e.to_string())?;
-    let path = storage_dir.join("credentials.dat");
-    if map.is_empty() {
-        let _ = std::fs::remove_file(path);
-        return Ok(());
-    }
-    let pt = serde_json::to_vec(map).map_err(|e| e.to_string())?;
-    let iv = *Uuid::new_v4().as_bytes();
-    let mut buf = vec![0u8; pt.len() + 16];
-    buf[..pt.len()].copy_from_slice(&pt);
-    let enc = Aes128CbcEnc::new_from_slices(&LOCAL_VAULT_KEY, &iv).map_err(|e| e.to_string())?;
-    let ct = enc
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, pt.len())
-        .map_err(|_| "vault encrypt error".to_string())?;
-
-    let mut out = Vec::with_capacity(16 + ct.len());
-    out.extend_from_slice(&iv);
-    out.extend_from_slice(ct);
-    std::fs::write(path, out).map_err(|e| e.to_string())
 }
 
 fn map_err(err: CoreError) -> String {
@@ -1059,6 +1018,11 @@ pub async fn disconnect_connection_cmd(
 }
 
 #[tauri::command]
+pub async fn list_active_connections_cmd(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    Ok(state.active_backends.read().await.keys().cloned().collect())
+}
+
+#[tauri::command]
 pub async fn create_demo_sqlite_connection(
     state: State<'_, AppState>,
     project_id: Option<String>,
@@ -1421,6 +1385,7 @@ pub async fn execute_sql_cmd(
     sql: String,
     limit: Option<u32>,
     query_id: Option<String>,
+    timeout_sec: Option<u32>,
     on_chunk: Channel<QueryChunk>,
 ) -> Result<QuerySummary, String> {
     let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
@@ -1440,6 +1405,15 @@ pub async fn execute_sql_cmd(
         }
     }
 
+    let effective_timeout_sec = timeout_sec
+        .or_else(|| match &profile.mode {
+            ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } => {
+                d.options.as_ref().and_then(|o| o.query_timeout_sec)
+            }
+            _ => None,
+        })
+        .filter(|&s| s > 0);
+
     let (tx, mut rx) = mpsc::channel::<QueryChunk>(16);
     let forwarder = tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
@@ -1449,7 +1423,13 @@ pub async fn execute_sql_cmd(
         }
     });
 
-    let cancel_rx_opt = if let Some(ref qid) = query_id {
+    let effective_qid = if query_id.is_some() || effective_timeout_sec.is_some() {
+        Some(query_id.unwrap_or_else(|| format!("q_{}", Uuid::new_v4())))
+    } else {
+        None
+    };
+
+    let cancel_rx_opt = if let Some(ref qid) = effective_qid {
         let (ctx, crx) = oneshot::channel::<()>();
         state.running_queries.write().await.insert(
             qid.clone(),
@@ -1467,10 +1447,31 @@ pub async fn execute_sql_cmd(
         database: db_name.clone(),
         sql: sql.clone(),
         limit,
-        query_id: query_id.clone(),
+        query_id: effective_qid.clone(),
+        timeout_sec: effective_timeout_sec,
     };
-    let exec_result = match cancel_rx_opt {
-        Some(cancel_rx) => {
+
+    let exec_result = match (cancel_rx_opt, effective_timeout_sec) {
+        (Some(cancel_rx), Some(secs)) => {
+            let sleep_fut = tokio::time::sleep(Duration::from_secs(u64::from(secs)));
+            tokio::pin!(sleep_fut);
+            tokio::select! {
+                res = backend.execute_query(req, tx) => res,
+                _ = cancel_rx => Err(CoreError::ExecutionFailed(
+                    "QUERY_CANCELLED: 用户已手动中止当前查询".to_string(),
+                )),
+                _ = &mut sleep_fut => {
+                    if let Some(ref qid) = effective_qid {
+                        let _ = backend.cancel_running_query(qid).await;
+                    }
+                    Err(CoreError::ExecutionFailed(format!(
+                        "QUERY_TIMEOUT: 查询执行超过 {} 秒超时限制，已自动触发终止",
+                        secs
+                    )))
+                }
+            }
+        }
+        (Some(cancel_rx), None) => {
             tokio::select! {
                 res = backend.execute_query(req, tx) => res,
                 _ = cancel_rx => Err(CoreError::ExecutionFailed(
@@ -1478,10 +1479,10 @@ pub async fn execute_sql_cmd(
                 )),
             }
         }
-        None => backend.execute_query(req, tx).await,
+        (None, _) => backend.execute_query(req, tx).await,
     };
 
-    if let Some(ref qid) = query_id {
+    if let Some(ref qid) = effective_qid {
         state.running_queries.write().await.remove(qid);
     }
 
@@ -1503,6 +1504,7 @@ pub async fn execute_sql_cmd(
                 affected_rows: summary.affected_rows,
                 success: summary.success,
                 error_message: summary.error_message.clone(),
+                pinned: false,
             });
             state
                 .extensions
@@ -1535,6 +1537,7 @@ pub async fn execute_sql_cmd(
                 affected_rows: None,
                 success: false,
                 error_message: Some(msg.clone()),
+                pinned: false,
             });
             state
                 .extensions
@@ -2228,6 +2231,7 @@ pub async fn export_sql_dump_cmd(
                         sql: select_sql,
                         limit: Some(row_cap),
                         query_id: None,
+                        timeout_sec: None,
                     },
                     tx,
                 )
@@ -2262,5 +2266,478 @@ pub async fn export_sql_dump_cmd(
         table_count: target_tables.len(),
         row_count: total_rows,
         truncated_tables,
+    })
+}
+
+#[tauri::command]
+pub fn toggle_history_pin_cmd(state: State<'_, AppState>, history_id: String) -> Result<bool, String> {
+    let mut new_pinned = false;
+    let snapshot = {
+        let mut guard = state.history.write().map_err(|e| e.to_string())?;
+        if let Some(entry) = guard.iter_mut().find(|h| h.id == history_id) {
+            entry.pinned = !entry.pinned;
+            new_pinned = entry.pinned;
+        }
+        guard.clone()
+    };
+    state.persist_history_list(&snapshot);
+    Ok(new_pinned)
+}
+
+#[tauri::command]
+pub fn delete_history_entry_cmd(
+    state: State<'_, AppState>,
+    history_id: String,
+) -> Result<bool, String> {
+    let (removed, snapshot) = {
+        let mut guard = state.history.write().map_err(|e| e.to_string())?;
+        let before = guard.len();
+        guard.retain(|h| h.id != history_id);
+        (guard.len() != before, guard.clone())
+    };
+    if removed {
+        state.persist_history_list(&snapshot);
+    }
+    Ok(removed)
+}
+
+#[tauri::command]
+pub async fn read_xlsx_sheet_cmd(
+    path: String,
+    sheet_name: Option<String>,
+    max_rows: Option<usize>,
+) -> Result<XlsxSheetPreview, String> {
+    tokio::task::spawn_blocking(move || {
+        read_xlsx_sheet_preview(
+            Path::new(&path),
+            sheet_name.as_deref(),
+            max_rows.unwrap_or(1000),
+        )
+        .map_err(map_err)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn run_sql_file_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: Option<String>,
+    path: String,
+    continue_on_error: bool,
+    query_id: Option<String>,
+    on_progress: Channel<SqlScriptProgress>,
+) -> Result<SqlScriptRunResult, String> {
+    let started = Instant::now();
+    let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
+    let file_path = PathBuf::from(&path);
+    let total_bytes = std::fs::metadata(&file_path)
+        .map_err(|e| format!("读取 SQL 文件信息失败: {e}"))?
+        .len();
+
+    let (stmt_tx, mut stmt_rx) = mpsc::channel::<Result<(String, u64), String>>(8);
+    let reader_handle = tokio::task::spawn_blocking(move || {
+        let file = match std::fs::File::open(&file_path) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = stmt_tx.blocking_send(Err(format!("打开 SQL 文件失败: {e}")));
+                return;
+            }
+        };
+        let buf = std::io::BufReader::with_capacity(64 * 1024, file);
+        let mut reader = SqlScriptStreamReader::new(buf);
+        loop {
+            match reader.next_statement() {
+                Ok(Some(stmt)) => {
+                    if stmt_tx.blocking_send(Ok((stmt, reader.bytes_read()))).is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = stmt_tx.blocking_send(Err(format!("流式读取 SQL 失败: {e}")));
+                    break;
+                }
+            }
+        }
+    });
+
+    let effective_qid = query_id.clone();
+    let mut cancel_rx_opt = if let Some(ref qid) = effective_qid {
+        let (ctx, crx) = oneshot::channel::<()>();
+        state.running_queries.write().await.insert(
+            qid.clone(),
+            RunningQueryHandle {
+                cancel_tx: ctx,
+                backend: Arc::clone(&backend),
+            },
+        );
+        Some(crx)
+    } else {
+        None
+    };
+
+    let mut total_statements = 0usize;
+    let mut succeeded_statements = 0usize;
+    let mut failed_statements = 0usize;
+    let mut last_bytes_read = 0u64;
+    let mut last_error: Option<String> = None;
+    let mut errors: Vec<String> = Vec::new();
+    let mut cancelled = false;
+
+    while let Some(item) = stmt_rx.recv().await {
+        if cancel_rx_opt
+            .as_mut()
+            .is_some_and(|rx| matches!(rx.try_recv(), Ok(())))
+        {
+            cancelled = true;
+            break;
+        }
+        let (stmt, bytes_read) = item?;
+        last_bytes_read = bytes_read;
+        total_statements += 1;
+
+        match state
+            .extensions
+            .check_before_execute(&profile, db_name.as_deref(), &stmt)
+            .await
+            .map_err(map_err)?
+        {
+            PreExecuteDecision::Allow => {}
+            PreExecuteDecision::RequireApproval { reason } => {
+                return Err(format!("EXTENSION_APPROVAL_REQUIRED: {reason}"));
+            }
+            PreExecuteDecision::Block { reason } => {
+                return Err(format!("EXTENSION_BLOCKED: {reason}"));
+            }
+        }
+
+        let (tx_dummy, mut rx_dummy) = mpsc::channel::<QueryChunk>(4);
+        let drain_task = tokio::spawn(async move { while rx_dummy.recv().await.is_some() {} });
+        let req = QueryReq {
+            database: db_name.clone(),
+            sql: stmt.clone(),
+            limit: None,
+            query_id: effective_qid.clone(),
+            timeout_sec: None,
+        };
+
+        let res = match cancel_rx_opt.as_mut() {
+            Some(crx) => tokio::select! {
+                r = backend.execute_query(req, tx_dummy) => r,
+                _ = crx => {
+                    cancelled = true;
+                    Err(CoreError::ExecutionFailed("QUERY_CANCELLED".to_string()))
+                }
+            },
+            None => backend.execute_query(req, tx_dummy).await,
+        };
+        let _ = drain_task.await;
+
+        if cancelled {
+            break;
+        }
+
+        match res {
+            Ok(_) => succeeded_statements += 1,
+            Err(err) => {
+                failed_statements += 1;
+                let msg = format!("#{total_statements}: {err}");
+                last_error = Some(msg.clone());
+                if errors.len() < 30 {
+                    errors.push(msg);
+                }
+                if !continue_on_error {
+                    let preview: String = stmt.chars().take(120).collect();
+                    let _ = on_progress.send(SqlScriptProgress {
+                        executed_statements: total_statements,
+                        failed_statements,
+                        bytes_read: last_bytes_read,
+                        total_bytes,
+                        current_statement_preview: preview,
+                        last_error: last_error.clone(),
+                        done: true,
+                    });
+                    if let Some(ref qid) = effective_qid {
+                        state.running_queries.write().await.remove(qid);
+                    }
+                    drop(stmt_rx);
+                    let _ = reader_handle.await;
+                    return Ok(SqlScriptRunResult {
+                        total_statements,
+                        succeeded_statements,
+                        failed_statements,
+                        duration_ms: started.elapsed().as_millis() as u64,
+                        cancelled: false,
+                        errors,
+                    });
+                }
+            }
+        }
+
+        if total_statements <= 5 || total_statements.is_multiple_of(5) {
+            let preview: String = stmt.chars().take(120).collect();
+            let _ = on_progress.send(SqlScriptProgress {
+                executed_statements: total_statements,
+                failed_statements,
+                bytes_read: last_bytes_read,
+                total_bytes,
+                current_statement_preview: preview,
+                last_error: last_error.clone(),
+                done: false,
+            });
+        }
+    }
+
+    if let Some(ref qid) = effective_qid {
+        state.running_queries.write().await.remove(qid);
+    }
+    drop(stmt_rx);
+    let _ = reader_handle.await;
+
+    let _ = on_progress.send(SqlScriptProgress {
+        executed_statements: total_statements,
+        failed_statements,
+        bytes_read: if cancelled { last_bytes_read } else { total_bytes },
+        total_bytes,
+        current_statement_preview: String::new(),
+        last_error,
+        done: true,
+    });
+
+    Ok(SqlScriptRunResult {
+        total_statements,
+        succeeded_statements,
+        failed_statements,
+        duration_ms: started.elapsed().as_millis() as u64,
+        cancelled,
+        errors,
+    })
+}
+
+enum QueryExportWriteMsg {
+    Chunk {
+        columns: Vec<String>,
+        rows: Vec<BTreeMap<String, serde_json::Value>>,
+    },
+    Finish,
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn export_query_to_file_cmd(
+    state: State<'_, AppState>,
+    profile_id: String,
+    db_name: Option<String>,
+    sql: String,
+    format: String,
+    path: String,
+    sheet_name: Option<String>,
+    query_id: Option<String>,
+    on_progress: Channel<QueryExportProgress>,
+) -> Result<QueryExportResult, String> {
+    let started = Instant::now();
+    let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
+    let fmt = format.trim().to_ascii_lowercase();
+    if !matches!(fmt.as_str(), "csv" | "xlsx" | "json") {
+        return Err(format!("不支持的导出格式: {format}"));
+    }
+
+    let out_path = PathBuf::from(&path);
+    let sheet_title = sheet_name.unwrap_or_else(|| "QueryResult".to_string());
+    let fmt_writer = fmt.clone();
+    let (write_tx, mut write_rx) = mpsc::channel::<QueryExportWriteMsg>(8);
+
+    let writer_handle = tokio::task::spawn_blocking(move || -> Result<(usize, u64), String> {
+        use std::io::Write as _;
+        if let Some(parent) = out_path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|e| format!("创建导出目录失败: {e}"))?;
+            }
+        }
+        let mut total_rows = 0usize;
+        let mut active_cols: Vec<String> = Vec::new();
+
+        match fmt_writer.as_str() {
+            "xlsx" => {
+                let mut writer =
+                    StreamingXlsxWriter::create(&out_path, &sheet_title).map_err(map_err)?;
+                while let Some(msg) = write_rx.blocking_recv() {
+                    match msg {
+                        QueryExportWriteMsg::Chunk { columns, rows } => {
+                            if !columns.is_empty() {
+                                active_cols = columns;
+                            }
+                            if !active_cols.is_empty() || !rows.is_empty() {
+                                let _ = writer
+                                    .write_chunk(&active_cols, &rows)
+                                    .map_err(map_err)?;
+                            }
+                        }
+                        QueryExportWriteMsg::Finish => break,
+                    }
+                }
+                let count = writer.finish().map_err(map_err)?;
+                let sz = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+                Ok((count, sz))
+            }
+            "csv" => {
+                let file = std::fs::File::create(&out_path)
+                    .map_err(|e| format!("创建 CSV 文件失败: {e}"))?;
+                let mut bw = std::io::BufWriter::with_capacity(64 * 1024, file);
+                bw.write_all(b"\xEF\xBB\xBF").map_err(|e| e.to_string())?;
+                let mut wrote_header = false;
+                while let Some(msg) = write_rx.blocking_recv() {
+                    match msg {
+                        QueryExportWriteMsg::Chunk { columns, rows } => {
+                            if !columns.is_empty() {
+                                active_cols = columns;
+                            }
+                            if !wrote_header && !active_cols.is_empty() {
+                                let hdr_refs: Vec<&str> =
+                                    active_cols.iter().map(String::as_str).collect();
+                                write_csv_row(&mut bw, &hdr_refs).map_err(|e| e.to_string())?;
+                                wrote_header = true;
+                            }
+                            let mut cell_bufs: Vec<String> = Vec::with_capacity(active_cols.len());
+                            for row in rows {
+                                cell_bufs.clear();
+                                for col in &active_cols {
+                                    let s = match row.get(col) {
+                                        None | Some(serde_json::Value::Null) => String::new(),
+                                        Some(serde_json::Value::String(s)) => s.clone(),
+                                        Some(v) => v.to_string(),
+                                    };
+                                    cell_bufs.push(s);
+                                }
+                                let refs: Vec<&str> =
+                                    cell_bufs.iter().map(String::as_str).collect();
+                                write_csv_row(&mut bw, &refs).map_err(|e| e.to_string())?;
+                                total_rows += 1;
+                            }
+                        }
+                        QueryExportWriteMsg::Finish => break,
+                    }
+                }
+                bw.flush().map_err(|e| e.to_string())?;
+                let sz = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+                Ok((total_rows, sz))
+            }
+            _ => {
+                let file = std::fs::File::create(&out_path)
+                    .map_err(|e| format!("创建 JSON 文件失败: {e}"))?;
+                let mut bw = std::io::BufWriter::with_capacity(64 * 1024, file);
+                bw.write_all(b"[\n").map_err(|e| e.to_string())?;
+                let mut first_row = true;
+                while let Some(msg) = write_rx.blocking_recv() {
+                    match msg {
+                        QueryExportWriteMsg::Chunk { rows, .. } => {
+                            for row in rows {
+                                if !first_row {
+                                    bw.write_all(b",\n").map_err(|e| e.to_string())?;
+                                }
+                                first_row = false;
+                                let line = serde_json::to_string(&row).map_err(|e| e.to_string())?;
+                                bw.write_all(b"  ").map_err(|e| e.to_string())?;
+                                bw.write_all(line.as_bytes()).map_err(|e| e.to_string())?;
+                                total_rows += 1;
+                            }
+                        }
+                        QueryExportWriteMsg::Finish => break,
+                    }
+                }
+                bw.write_all(b"\n]\n").map_err(|e| e.to_string())?;
+                bw.flush().map_err(|e| e.to_string())?;
+                let sz = std::fs::metadata(&out_path).map(|m| m.len()).unwrap_or(0);
+                Ok((total_rows, sz))
+            }
+        }
+    });
+
+    let effective_qid = query_id.clone();
+    let cancel_rx_opt = if let Some(ref qid) = effective_qid {
+        let (ctx, crx) = oneshot::channel::<()>();
+        state.running_queries.write().await.insert(
+            qid.clone(),
+            RunningQueryHandle {
+                cancel_tx: ctx,
+                backend: Arc::clone(&backend),
+            },
+        );
+        Some(crx)
+    } else {
+        None
+    };
+
+    let (tx, mut rx) = mpsc::channel::<QueryChunk>(8);
+    let write_tx_fwd = write_tx.clone();
+    let progress_ch = on_progress.clone();
+    let forwarder = tokio::spawn(async move {
+        let mut streamed_rows = 0usize;
+        while let Some(chunk) = rx.recv().await {
+            let chunk_rows = chunk.rows.len();
+            if chunk.columns.is_empty() && chunk_rows == 0 {
+                continue;
+            }
+            streamed_rows += chunk_rows;
+            if write_tx_fwd
+                .send(QueryExportWriteMsg::Chunk {
+                    columns: chunk.columns,
+                    rows: chunk.rows,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+            let _ = progress_ch.send(QueryExportProgress {
+                exported_rows: streamed_rows,
+                bytes_written: 0,
+                done: false,
+            });
+        }
+    });
+
+    let req = QueryReq {
+        database: db_name.clone(),
+        sql: sql.clone(),
+        limit: None,
+        query_id: effective_qid.clone(),
+        timeout_sec: None,
+    };
+    let exec_res = match cancel_rx_opt {
+        Some(cancel_rx) => tokio::select! {
+            r = backend.execute_query(req, tx) => r,
+            _ = cancel_rx => Err(CoreError::ExecutionFailed("QUERY_CANCELLED: 用户已取消流式导出".to_string())),
+        },
+        None => backend.execute_query(req, tx).await,
+    };
+
+    if let Some(ref qid) = effective_qid {
+        state.running_queries.write().await.remove(qid);
+    }
+    let _ = forwarder.await;
+    let _ = write_tx.send(QueryExportWriteMsg::Finish).await;
+    drop(write_tx);
+
+    let (exported_rows, bytes_written) = writer_handle
+        .await
+        .map_err(|e| format!("等待流式导出线程失败: {e}"))??;
+    exec_res.map_err(map_err)?;
+
+    let _ = profile;
+    let _ = on_progress.send(QueryExportProgress {
+        exported_rows,
+        bytes_written,
+        done: true,
+    });
+
+    Ok(QueryExportResult {
+        path,
+        format: fmt,
+        exported_rows,
+        duration_ms: started.elapsed().as_millis() as u64,
     })
 }
