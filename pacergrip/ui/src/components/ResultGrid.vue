@@ -230,6 +230,7 @@ const watchDiffByTab = reactive<
       changedCells: Set<string>;
       addedCount: number;
       changedCount: number;
+      truncated?: boolean;
     }
   >
 >({});
@@ -273,6 +274,12 @@ function pruneTabState(validTabIds: string[]) {
   }
   for (const key of Object.keys(pinnedColsByTab)) {
     if (!valid.has(key)) delete pinnedColsByTab[key];
+  }
+  for (const key of Object.keys(watchPrevRowsByTab)) {
+    if (!valid.has(key)) delete watchPrevRowsByTab[key];
+  }
+  for (const key of Object.keys(watchDiffByTab)) {
+    if (!valid.has(key)) delete watchDiffByTab[key];
   }
   for (const key of Object.keys(colWidths)) {
     if (!validTabIds.some((id) => key.startsWith(`${id}:`))) {
@@ -1035,6 +1042,16 @@ function handleGridPaste(ev: ClipboardEvent) {
   const clipText = ev.clipboardData?.getData('text/plain') ?? '';
   const matrix = parseSpreadsheetPasteMatrix(clipText);
   if (matrix.length === 0) return;
+  const MAX_PASTE_ROWS = 2_000;
+  const MAX_PASTE_CELLS = 20_000;
+  const totalRawCells = matrix.reduce((acc, row) => acc + row.length, 0);
+  if (matrix.length > MAX_PASTE_ROWS || totalRawCells > MAX_PASTE_CELLS) {
+    emit(
+      'notify',
+      `安全限制：单次网格粘贴最多允许 ${MAX_PASTE_ROWS} 行 / ${MAX_PASTE_CELLS} 个单元格（当前剪贴板含 ${matrix.length} 行 / ${totalRawCells} 格）`,
+    );
+    return;
+  }
   ev.preventDefault();
 
   const b = selectionBounds.value;
@@ -1098,7 +1115,12 @@ function restartWatchTimer() {
     watchTimerHandle = null;
   }
   const sec = watchIntervalSec.value;
-  if (sec <= 0) return;
+  if (sec <= 0) {
+    for (const key of Object.keys(watchPrevRowsByTab)) {
+      delete watchPrevRowsByTab[key];
+    }
+    return;
+  }
   watchTimerHandle = window.setInterval(() => {
     const res = currentResult.value;
     if (!res || props.executing || props.activeServiceTab !== 'result') return;

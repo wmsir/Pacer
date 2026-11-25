@@ -353,6 +353,11 @@ pub fn write_csv_row<W: Write>(writer: &mut W, fields: &[&str]) -> std::io::Resu
     writer.write_all(b"\r\n")
 }
 
+const MAX_XLSX_META_XML_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_XLSX_DATA_XML_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_XLSX_SHARED_STRINGS: usize = 200_000;
+const MAX_XLSX_COLS_PER_ROW: usize = 1_024;
+
 /// Reads an `.xlsx` workbook in pure Rust and returns worksheet names plus a bounded row preview.
 pub fn read_xlsx_sheet_preview(
     path: &Path,
@@ -378,10 +383,10 @@ pub fn read_xlsx_sheet_preview(
     };
 
     let rels = parse_workbook_rels(&mut archive);
-    let target_entry = rels
-        .get(&rid)
-        .map(|t| normalize_xl_entry(t))
-        .unwrap_or_else(|| "xl/worksheets/sheet1.xml".to_string());
+    let target_entry = match rels.get(&rid) {
+        Some(t) => normalize_xl_entry(t)?,
+        None => "xl/worksheets/sheet1.xml".to_string(),
+    };
 
     let shared_strings = parse_shared_strings(&mut archive);
     let (headers, rows, total_rows, truncated) =
@@ -409,12 +414,18 @@ fn xml_attr_str(e: &BytesStart<'_>, wanted: &[&[u8]]) -> Option<String> {
     None
 }
 
-fn normalize_xl_entry(target: &str) -> String {
-    let clean = target.trim().trim_start_matches('/');
+fn normalize_xl_entry(target: &str) -> CoreResult<String> {
+    let trimmed = target.trim();
+    if trimmed.contains('\\') || trimmed.split('/').any(|seg| seg == "..") {
+        return Err(CoreError::ParseError(format!(
+            "非法 Excel 工作表路径: {trimmed}"
+        )));
+    }
+    let clean = trimmed.trim_start_matches('/');
     if clean.starts_with("xl/") {
-        clean.to_string()
+        Ok(clean.to_string())
     } else {
-        format!("xl/{clean}")
+        Ok(format!("xl/{clean}"))
     }
 }
 
@@ -424,7 +435,7 @@ fn parse_workbook_sheets<R: std::io::Read + Seek>(
     let entry = archive
         .by_name("xl/workbook.xml")
         .map_err(|e| CoreError::ParseError(format!("缺少 xl/workbook.xml: {e}")))?;
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut reader = Reader::from_reader(BufReader::new(std::io::Read::take(entry, MAX_XLSX_META_XML_BYTES)));
     let mut buf = Vec::new();
     let mut sheets = Vec::new();
     loop {
@@ -454,7 +465,7 @@ fn parse_workbook_rels<R: std::io::Read + Seek>(
     let Ok(entry) = archive.by_name("xl/_rels/workbook.xml.rels") else {
         return rels;
     };
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut reader = Reader::from_reader(BufReader::new(std::io::Read::take(entry, MAX_XLSX_META_XML_BYTES)));
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
@@ -480,7 +491,7 @@ fn parse_shared_strings<R: std::io::Read + Seek>(archive: &mut ZipArchive<R>) ->
     let Ok(entry) = archive.by_name("xl/sharedStrings.xml") else {
         return out;
     };
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut reader = Reader::from_reader(BufReader::new(std::io::Read::take(entry, MAX_XLSX_DATA_XML_BYTES)));
     let mut buf = Vec::new();
     let mut in_si = false;
     let mut in_t = false;
@@ -501,6 +512,9 @@ fn parse_shared_strings<R: std::io::Read + Seek>(archive: &mut ZipArchive<R>) ->
             Ok(Event::End(ref e)) => match e.local_name().as_ref() {
                 b"t" => in_t = false,
                 b"si" if in_si => {
+                    if out.len() >= MAX_XLSX_SHARED_STRINGS {
+                        break;
+                    }
                     out.push(std::mem::take(&mut cur));
                     in_si = false;
                 }
@@ -552,7 +566,7 @@ fn parse_worksheet_rows<R: std::io::Read + Seek>(
     let entry = archive
         .by_name(entry_name)
         .map_err(|e| CoreError::ParseError(format!("缺少工作表 {entry_name}: {e}")))?;
-    let mut reader = Reader::from_reader(BufReader::new(entry));
+    let mut reader = Reader::from_reader(BufReader::new(std::io::Read::take(entry, MAX_XLSX_DATA_XML_BYTES)));
     let mut buf = Vec::new();
 
     let mut headers: Vec<String> = Vec::new();
@@ -590,7 +604,7 @@ fn parse_worksheet_rows<R: std::io::Read + Seek>(
                 let col_idx = xml_attr_str(e, &[b"r"])
                     .and_then(|r| excel_col_ref_to_index(&r))
                     .unwrap_or(current_row.len());
-                if col_idx >= current_row.len() {
+                if col_idx < MAX_XLSX_COLS_PER_ROW && col_idx >= current_row.len() {
                     current_row.resize(col_idx + 1, String::new());
                 }
             }
@@ -625,10 +639,12 @@ fn parse_worksheet_rows<R: std::io::Read + Seek>(
                         _ => std::mem::take(&mut cell_val),
                     };
                     let idx = cell_col.unwrap_or(current_row.len());
-                    if idx >= current_row.len() {
-                        current_row.resize(idx + 1, String::new());
+                    if idx < MAX_XLSX_COLS_PER_ROW {
+                        if idx >= current_row.len() {
+                            current_row.resize(idx + 1, String::new());
+                        }
+                        current_row[idx] = resolved;
                     }
-                    current_row[idx] = resolved;
                     in_cell = false;
                     capture_text = false;
                 }
@@ -1105,6 +1121,13 @@ mod tests {
         write_csv_row(&mut csv_buf, &["1", "hello, \"world\""]).unwrap();
         let csv_str = String::from_utf8(csv_buf).unwrap();
         assert_eq!(csv_str, "id,note\r\n1,\"hello, \"\"world\"\"\"\r\n");
+
+        assert!(normalize_xl_entry("../../etc/passwd").is_err());
+        assert!(normalize_xl_entry("..\\worksheets\\sheet1.xml").is_err());
+        assert_eq!(
+            normalize_xl_entry("worksheets/sheet2.xml").unwrap(),
+            "xl/worksheets/sheet2.xml"
+        );
 
         let _ = std::fs::remove_file(&tmp);
     }

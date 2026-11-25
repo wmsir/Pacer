@@ -228,12 +228,17 @@ pub fn run() {
             app.manage(AppState::new(workspace_dir, is_portable));
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                let mut ticks: u32 = 0;
                 loop {
                     interval.tick().await;
+                    ticks = ticks.wrapping_add(1);
                     let st = handle.state::<AppState>();
-                    let _ = st.evict_idle_backends().await;
+                    st.flush_dirty_history().await;
+                    if ticks.is_multiple_of(30) {
+                        let _ = st.evict_idle_backends().await;
+                    }
                 }
             });
             Ok(())

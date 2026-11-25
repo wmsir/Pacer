@@ -15,7 +15,7 @@ use pacer_core::{
 };
 use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
-use crate::sqlite::{adaptive_chunk_size, stream_chunks};
+use crate::sqlite::adaptive_chunk_size;
 use crate::ssh_tunnel::{open_ssh_tunnel, SshTunnelHandle};
 use crate::{i64_to_json, u64_to_json};
 
@@ -87,15 +87,34 @@ impl ClickHouseBackend {
 
         let scheme = if use_ssl { "https" } else { "http" };
         let base_url = format!("{scheme}://{connect_host}:{connect_port}/");
-        let allow_insecure = config
+        let ssl_mode_low = config
             .ssl
             .as_ref()
             .and_then(|s| s.mode.as_deref())
-            .is_none_or(|m| !matches!(m.to_ascii_lowercase().as_str(), "verify-full" | "verify-ca"));
+            .map(|m| m.trim().to_ascii_lowercase());
+        let ca_path = config
+            .ssl
+            .as_ref()
+            .and_then(|s| s.ca_cert.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
         let mut builder = Client::builder().connect_timeout(Duration::from_secs(8));
-        if use_ssl && allow_insecure {
-            builder = builder.danger_accept_invalid_certs(true);
+        if use_ssl {
+            if let Some(ca) = ca_path {
+                let pem = std::fs::read(ca).map_err(|e| {
+                    CoreError::InvalidConfig(format!("读取 ClickHouse CA 证书失败 ({ca}): {e}"))
+                })?;
+                let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| {
+                    CoreError::InvalidConfig(format!("解析 ClickHouse PEM 证书失败 ({ca}): {e}"))
+                })?;
+                builder = builder.add_root_certificate(cert);
+            } else if matches!(
+                ssl_mode_low.as_deref(),
+                Some("require" | "required" | "prefer" | "preferred" | "allow" | "insecure" | "skip-verify")
+            ) {
+                builder = builder.danger_accept_invalid_certs(true);
+            }
         }
         let client = builder
             .build()
@@ -133,17 +152,17 @@ impl ClickHouseBackend {
         Ok(backend)
     }
 
-    async fn post_raw(
+    fn build_post_request(
         &self,
         sql: &str,
         database: Option<&str>,
-        with_json_compact: bool,
+        format_name: Option<&str>,
         ch_query_id: Option<&str>,
         timeout_sec: Option<u32>,
-    ) -> CoreResult<String> {
+    ) -> reqwest::RequestBuilder {
         let mut params: Vec<(&str, String)> = Vec::new();
-        if with_json_compact {
-            params.push(("default_format", "JSONCompact".to_string()));
+        if let Some(fmt) = format_name {
+            params.push(("default_format", fmt.to_string()));
         }
         if let Some(ch_qid) = ch_query_id {
             params.push(("query_id", ch_qid.to_string()));
@@ -171,16 +190,46 @@ impl ClickHouseBackend {
             req = req.header("X-ClickHouse-Database", db_hdr);
         }
 
-        let resp = req
-            .body(sql.to_string())
+        req.body(sql.to_string())
+    }
+
+    async fn post_raw(
+        &self,
+        sql: &str,
+        database: Option<&str>,
+        with_json_compact: bool,
+        ch_query_id: Option<&str>,
+        timeout_sec: Option<u32>,
+    ) -> CoreResult<String> {
+        const MAX_META_BODY_BYTES: usize = 32 * 1024 * 1024;
+        let mut resp = self
+            .build_post_request(
+                sql,
+                database,
+                if with_json_compact { Some("JSONCompact") } else { None },
+                ch_query_id,
+                timeout_sec,
+            )
             .send()
             .await
             .map_err(|e| CoreError::Transport(format!("ClickHouse 请求失败: {e}")))?;
         let status = resp.status();
-        let body = resp
-            .text()
+        let mut raw = Vec::new();
+        while let Some(chunk) = resp
+            .chunk()
             .await
-            .map_err(|e| CoreError::ExecutionFailed(format!("读取 ClickHouse 响应失败: {e}")))?;
+            .map_err(|e| CoreError::ExecutionFailed(format!("读取 ClickHouse 响应失败: {e}")))?
+        {
+            if raw.len().saturating_add(chunk.len()) > MAX_META_BODY_BYTES {
+                return Err(CoreError::ExecutionFailed(
+                    "ClickHouse 元数据响应体超过 32MB 安全上限".to_string(),
+                ));
+            }
+            raw.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8(raw).map_err(|e| {
+            CoreError::ParseError(format!("ClickHouse 响应非有效 UTF-8: {e}"))
+        })?;
         if !status.is_success() {
             return Err(CoreError::ExecutionFailed(body.trim().to_string()));
         }
@@ -632,22 +681,148 @@ impl DbBackend for ClickHouseBackend {
             });
         }
 
-        let (cols, mut rows) = self
-            .query_compact(
+        const MAX_CH_STREAM_LINE_BYTES: usize = 32 * 1024 * 1024;
+        let mut resp = self
+            .build_post_request(
                 &req.sql,
                 Some(&target_db),
+                Some("JSONCompactEachRowWithNames"),
                 ch_qid.as_deref(),
                 req.timeout_sec,
             )
-            .await?;
-        if let Some(lim) = req.limit.map(|l| l as usize) {
-            if rows.len() > lim {
-                rows.truncate(lim);
+            .send()
+            .await
+            .map_err(|e| CoreError::Transport(format!("ClickHouse 流式请求失败: {e}")))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let mut err_buf = Vec::new();
+            while let Some(chunk) = resp
+                .chunk()
+                .await
+                .map_err(|e| CoreError::ExecutionFailed(format!("读取 ClickHouse 错误失败: {e}")))?
+            {
+                let remaining = 64 * 1024usize.saturating_sub(err_buf.len());
+                if remaining == 0 {
+                    break;
+                }
+                err_buf.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            }
+            let err_msg = String::from_utf8_lossy(&err_buf).trim().to_string();
+            return Err(CoreError::ExecutionFailed(err_msg));
+        }
+
+        let max_rows = req.limit.map(|l| l as usize).unwrap_or(usize::MAX);
+        let mut columns: Vec<String> = Vec::new();
+        let mut batch: Vec<BTreeMap<String, Value>> = Vec::new();
+        let mut batch_index: usize = 0;
+        let mut total_rows: usize = 0;
+        let mut line_buf: Vec<u8> = Vec::new();
+        let mut header_parsed = false;
+        let mut hit_limit = false;
+
+        'stream: while let Some(chunk) = resp
+            .chunk()
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(format!("读取 ClickHouse 流失败: {e}")))?
+        {
+            for &b in chunk.iter() {
+                if b != b'\n' {
+                    if line_buf.len() >= MAX_CH_STREAM_LINE_BYTES {
+                        return Err(CoreError::ExecutionFailed(
+                            "ClickHouse 单行响应超过 32MB 安全上限".to_string(),
+                        ));
+                    }
+                    line_buf.push(b);
+                    continue;
+                }
+                let line = std::mem::take(&mut line_buf);
+                let trimmed = String::from_utf8_lossy(&line).trim().to_string();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if !header_parsed {
+                    columns = serde_json::from_str::<Vec<String>>(&trimmed).map_err(|e| {
+                        CoreError::ParseError(format!("解析 ClickHouse 列头失败: {e}"))
+                    })?;
+                    header_parsed = true;
+                    continue;
+                }
+                if total_rows >= max_rows {
+                    hit_limit = true;
+                    break 'stream;
+                }
+                let raw_row = serde_json::from_str::<Vec<Value>>(&trimmed).map_err(|e| {
+                    CoreError::ParseError(format!("解析 ClickHouse 行数据失败: {e}"))
+                })?;
+                let mut map = BTreeMap::new();
+                for (idx, col) in columns.iter().enumerate() {
+                    let v = raw_row.get(idx).cloned().unwrap_or(Value::Null);
+                    map.insert(col.clone(), normalize_ch_value(v));
+                }
+                batch.push(map);
+                total_rows += 1;
+
+                let flush_sz = adaptive_chunk_size(columns.len());
+                if batch.len() >= flush_sz {
+                    let send_rows = std::mem::take(&mut batch);
+                    let _ = tx
+                        .send(QueryChunk {
+                            columns: if batch_index == 0 {
+                                columns.clone()
+                            } else {
+                                Vec::new()
+                            },
+                            rows: send_rows,
+                            batch_index,
+                            is_last: false,
+                            masked_columns: BTreeMap::new(),
+                        })
+                        .await;
+                    batch_index += 1;
+                }
+                if total_rows >= max_rows {
+                    hit_limit = true;
+                    break 'stream;
+                }
             }
         }
-        let total_rows = rows.len();
-        let _chunk_hint = adaptive_chunk_size(cols.len());
-        stream_chunks(&cols, rows, &tx).await;
+
+        if !hit_limit && !line_buf.is_empty() {
+            let trimmed = String::from_utf8_lossy(&line_buf).trim().to_string();
+            if !trimmed.is_empty() {
+                if !header_parsed {
+                    columns = serde_json::from_str::<Vec<String>>(&trimmed).map_err(|e| {
+                        CoreError::ParseError(format!("解析 ClickHouse 列头失败: {e}"))
+                    })?;
+                } else if total_rows < max_rows {
+                    let raw_row = serde_json::from_str::<Vec<Value>>(&trimmed).map_err(|e| {
+                        CoreError::ParseError(format!("解析 ClickHouse 行数据失败: {e}"))
+                    })?;
+                    let mut map = BTreeMap::new();
+                    for (idx, col) in columns.iter().enumerate() {
+                        let v = raw_row.get(idx).cloned().unwrap_or(Value::Null);
+                        map.insert(col.clone(), normalize_ch_value(v));
+                    }
+                    batch.push(map);
+                    total_rows += 1;
+                }
+            }
+        }
+
+        let _ = tx
+            .send(QueryChunk {
+                columns: if batch_index == 0 {
+                    columns.clone()
+                } else {
+                    Vec::new()
+                },
+                rows: batch,
+                batch_index,
+                is_last: true,
+                masked_columns: BTreeMap::new(),
+            })
+            .await;
 
         Ok(QuerySummary {
             success: true,
@@ -657,7 +832,7 @@ impl DbBackend for ClickHouseBackend {
             is_dml_or_ddl: false,
             duration_ms: started.elapsed().as_millis() as u64,
             route_node: None,
-            route_description: Some("ClickHouse Native HTTP".to_string()),
+            route_description: Some("ClickHouse Native HTTP Stream".to_string()),
             masked_columns: BTreeMap::new(),
             error_message: None,
         })
@@ -766,8 +941,10 @@ mod tests {
                     break;
                 };
                 tokio::spawn(async move {
-                    let (_head, body) = read_http_request(&mut sock).await;
-                    let json_resp = if body.contains("SELECT version()") {
+                    let (head, body) = read_http_request(&mut sock).await;
+                    let json_resp = if head.contains("JSONCompactEachRowWithNames") && body.contains("SELECT id, label") {
+                        "[\"id\",\"label\"]\n[9007199254740995,\"big\"]\n[1,\"ok\"]\n[2,\"extra\"]\n".to_string()
+                    } else if body.contains("SELECT version()") {
                         serde_json::json!({
                             "meta": [{"name": "ver", "type": "String"}],
                             "data": [["24.8.1.1"]]
@@ -793,15 +970,6 @@ mod tests {
                                 {"name": "comment", "type": "String"}
                             ],
                             "data": [["events", "MergeTree", "5000", 128.5, "Event stream"]]
-                        })
-                        .to_string()
-                    } else if body.contains("SELECT id, label") {
-                        serde_json::json!({
-                            "meta": [
-                                {"name": "id", "type": "Int64"},
-                                {"name": "label", "type": "String"}
-                            ],
-                            "data": [[9007199254740995i64, "big"], [1, "ok"], [2, "extra"]]
                         })
                         .to_string()
                     } else {

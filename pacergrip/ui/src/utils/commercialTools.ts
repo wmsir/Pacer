@@ -1255,15 +1255,19 @@ export function computeWatchResultDiff(
   prevRows: Array<Record<string, unknown>>,
   nextRows: Array<Record<string, unknown>>,
   columns: string[],
+  maxComparedCells = 100_000,
 ): {
   addedIndices: Set<number>;
   changedCells: Set<string>;
   addedCount: number;
   changedCount: number;
+  truncated: boolean;
 } {
   const addedIndices = new Set<number>();
   const changedCells = new Set<string>();
   let changedCount = 0;
+  let comparedCells = 0;
+  let truncated = false;
 
   for (let r = 0; r < nextRows.length; r++) {
     if (r >= prevRows.length) {
@@ -1273,18 +1277,39 @@ export function computeWatchResultDiff(
     const prev = prevRows[r];
     const next = nextRows[r];
     for (const col of columns) {
-      const a = prev[col] === null || prev[col] === undefined ? '' : typeof prev[col] === 'object' ? JSON.stringify(prev[col]) : String(prev[col]);
-      const b = next[col] === null || next[col] === undefined ? '' : typeof next[col] === 'object' ? JSON.stringify(next[col]) : String(next[col]);
+      comparedCells += 1;
+      if (comparedCells > maxComparedCells) {
+        truncated = true;
+        break;
+      }
+      const aRaw = prev[col];
+      const bRaw = next[col];
+      if (aRaw === bRaw) continue;
+      if ((aRaw === null || aRaw === undefined) && (bRaw === null || bRaw === undefined)) continue;
+      const a =
+        aRaw === null || aRaw === undefined
+          ? ''
+          : typeof aRaw === 'object'
+            ? JSON.stringify(aRaw)
+            : String(aRaw);
+      const b =
+        bRaw === null || bRaw === undefined
+          ? ''
+          : typeof bRaw === 'object'
+            ? JSON.stringify(bRaw)
+            : String(bRaw);
       if (a !== b) {
         changedCells.add(`${r}:${col}`);
         changedCount += 1;
       }
     }
+    if (truncated) break;
   }
   return {
     addedIndices,
     changedCells,
     addedCount: addedIndices.size,
     changedCount,
+    truncated,
   };
 }

@@ -806,6 +806,7 @@ export async function executeSql(
   onData: (chunk: QueryChunk) => void,
   queryId?: string,
   timeoutSec?: number | null,
+  skipHistory?: boolean,
 ): Promise<QuerySummary> {
   assertTauri();
   const onChunk = new Channel<QueryChunk>();
@@ -832,6 +833,7 @@ export async function executeSql(
     limit,
     queryId: queryId ?? null,
     timeoutSec: timeoutSec ?? null,
+    skipHistory: skipHistory ?? false,
     onChunk,
   });
 

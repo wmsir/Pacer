@@ -223,6 +223,27 @@ pub fn import_dbeaver_from_path(
     )))
 }
 
+const MAX_DBP_ENTRIES: usize = 256;
+const MAX_DBP_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_DBP_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+
+fn read_zip_entry_bounded<R: Read>(
+    entry: &mut zip::read::ZipFile<'_, R>,
+    limit: u64,
+) -> CoreResult<Vec<u8>> {
+    let mut raw = Vec::new();
+    entry
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut raw)
+        .map_err(|e| CoreError::ParseError(format!("读取 DBeaver 归档内容失败: {e}")))?;
+    if raw.len() as u64 > limit {
+        return Err(CoreError::ParseError(
+            "DBeaver .dbp / .zip 归档单个条目解压体积过大（超过 16MB 安全上限）".to_string(),
+        ));
+    }
+    Ok(raw)
+}
+
 /// Imports DBeaver connections from an in-memory `.dbp` or `.zip` project export archive.
 pub fn import_dbeaver_zip(
     bytes: &[u8],
@@ -232,9 +253,17 @@ pub fn import_dbeaver_zip(
     let mut archive = ZipArchive::new(reader)
         .map_err(|e| CoreError::ParseError(format!("无效的 DBeaver .dbp / .zip 归档: {e}")))?;
 
+    if archive.len() > MAX_DBP_ENTRIES {
+        return Err(CoreError::ParseError(format!(
+            "DBeaver 归档条目数量过多（{}），超过 {MAX_DBP_ENTRIES} 安全上限",
+            archive.len()
+        )));
+    }
+
     let mut json_contents: Vec<String> = Vec::new();
     let mut xml_contents: Vec<String> = Vec::new();
     let mut creds_map: HashMap<String, DbeaverCredentialPair> = HashMap::new();
+    let mut cumulative_bytes: u64 = 0;
 
     for i in 0..archive.len() {
         let Ok(mut entry) = archive.by_index(i) else {
@@ -245,24 +274,40 @@ pub fn import_dbeaver_zip(
         }
         let lower = entry.name().replace('\\', "/").to_ascii_lowercase();
         if lower.ends_with("credentials-config.json") && include_passwords {
-            let mut raw = Vec::new();
-            if entry.read_to_end(&mut raw).is_ok() {
-                if let Ok(parsed) = decrypt_dbeaver_credentials(&raw) {
-                    creds_map.extend(parsed);
-                }
+            let raw = read_zip_entry_bounded(&mut entry, MAX_DBP_ENTRY_BYTES)?;
+            cumulative_bytes = cumulative_bytes.saturating_add(raw.len() as u64);
+            if cumulative_bytes > MAX_DBP_TOTAL_BYTES {
+                return Err(CoreError::ParseError(
+                    "DBeaver 归档总解压体积超过 32MB 安全上限".to_string(),
+                ));
+            }
+            if let Ok(parsed) = decrypt_dbeaver_credentials(&raw) {
+                creds_map.extend(parsed);
             }
         } else if lower.ends_with("data-sources.json") {
-            let mut s = String::new();
-            if entry.read_to_string(&mut s).is_ok() {
-                json_contents.push(s);
+            let raw = read_zip_entry_bounded(&mut entry, MAX_DBP_ENTRY_BYTES)?;
+            cumulative_bytes = cumulative_bytes.saturating_add(raw.len() as u64);
+            if cumulative_bytes > MAX_DBP_TOTAL_BYTES {
+                return Err(CoreError::ParseError(
+                    "DBeaver 归档总解压体积超过 32MB 安全上限".to_string(),
+                ));
             }
+            let s = String::from_utf8(raw)
+                .map_err(|e| CoreError::ParseError(format!("data-sources.json 非 UTF-8: {e}")))?;
+            json_contents.push(s);
         } else if lower.ends_with(".dbeaver-data-sources.xml")
             || lower.ends_with("data-sources.xml")
         {
-            let mut s = String::new();
-            if entry.read_to_string(&mut s).is_ok() {
-                xml_contents.push(s);
+            let raw = read_zip_entry_bounded(&mut entry, MAX_DBP_ENTRY_BYTES)?;
+            cumulative_bytes = cumulative_bytes.saturating_add(raw.len() as u64);
+            if cumulative_bytes > MAX_DBP_TOTAL_BYTES {
+                return Err(CoreError::ParseError(
+                    "DBeaver 归档总解压体积超过 32MB 安全上限".to_string(),
+                ));
             }
+            let s = String::from_utf8(raw)
+                .map_err(|e| CoreError::ParseError(format!("data-sources.xml 非 UTF-8: {e}")))?;
+            xml_contents.push(s);
         }
     }
 
@@ -1568,5 +1613,22 @@ mod tests {
         } else {
             panic!("expected Direct connection");
         }
+    }
+
+    #[test]
+    fn test_import_dbeaver_zip_rejects_oversized_entry_bomb() {
+        use std::io::Write as _;
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut zw = zip::ZipWriter::new(&mut cursor);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zw.start_file("data-sources.json", opts).unwrap();
+            let oversized = vec![b' '; (MAX_DBP_ENTRY_BYTES as usize) + 64];
+            zw.write_all(&oversized).unwrap();
+            zw.finish().unwrap();
+        }
+        let err = import_dbeaver_zip(&cursor.into_inner(), false).unwrap_err();
+        assert!(err.to_string().contains("16MB"));
     }
 }

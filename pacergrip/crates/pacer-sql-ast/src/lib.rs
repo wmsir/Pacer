@@ -164,8 +164,21 @@ fn classify_ast_statement(
 ) -> (SqlAccessKind, String) {
     match stmt {
         Statement::Query(query) => {
+            if let Some(ref with_clause) = query.with {
+                for cte in &with_clause.cte_tables {
+                    if let Some(inner_stmt) = unwrap_write_set_expr(cte.query.body.as_ref()) {
+                        return classify_ast_statement(index, inner_stmt, warnings);
+                    }
+                    if query_has_into(cte.query.body.as_ref()) {
+                        return (SqlAccessKind::WriteDml, "SELECT_INTO".to_string());
+                    }
+                }
+            }
             if let Some(inner_stmt) = unwrap_write_set_expr(query.body.as_ref()) {
                 return classify_ast_statement(index, inner_stmt, warnings);
+            }
+            if query_has_into(query.body.as_ref()) {
+                return (SqlAccessKind::WriteDml, "SELECT_INTO".to_string());
             }
             let has_limit = query.limit.is_some() || query.fetch.is_some();
             if !has_limit && query_has_wildcard(query.body.as_ref()) {
@@ -241,6 +254,39 @@ fn classify_ast_statement(
         Statement::Grant { .. } | Statement::Revoke { .. } | Statement::CreateRole { .. } => {
             (SqlAccessKind::AdminOrDcl, "DCL".to_string())
         }
+        Statement::Pragma { name, value, is_eq } => {
+            let pname = name.to_string().to_ascii_lowercase();
+            let is_readonly_query_pragma = !*is_eq
+                && (value.is_none()
+                    || matches!(
+                        pname.as_str(),
+                        "table_info"
+                            | "table_xinfo"
+                            | "index_list"
+                            | "index_info"
+                            | "index_xinfo"
+                            | "foreign_key_list"
+                            | "database_list"
+                            | "collation_list"
+                            | "function_list"
+                            | "module_list"
+                            | "pragma_list"
+                    ));
+            if is_readonly_query_pragma {
+                (SqlAccessKind::ReadOnly, "PRAGMA".to_string())
+            } else {
+                (SqlAccessKind::AdminOrDcl, "PRAGMA_SET".to_string())
+            }
+        }
+        Statement::Copy { .. }
+        | Statement::AttachDatabase { .. }
+        | Statement::AttachDuckDBDatabase { .. }
+        | Statement::DetachDuckDBDatabase { .. }
+        | Statement::Load { .. }
+        | Statement::Unload { .. }
+        | Statement::Call(_)
+        | Statement::Execute { .. }
+        | Statement::SetVariable { .. } => (SqlAccessKind::AdminOrDcl, "ADMIN_EXEC".to_string()),
         other => {
             let debug_head = format!("{other:?}");
             let upper = debug_head.to_ascii_uppercase();
@@ -259,7 +305,21 @@ fn unwrap_write_set_expr(body: &SetExpr) -> Option<&Statement> {
     match body {
         SetExpr::Insert(stmt) | SetExpr::Update(stmt) => Some(stmt),
         SetExpr::Query(inner) => unwrap_write_set_expr(inner.body.as_ref()),
+        SetExpr::SetOperation { left, right, .. } => {
+            unwrap_write_set_expr(left.as_ref()).or_else(|| unwrap_write_set_expr(right.as_ref()))
+        }
         _ => None,
+    }
+}
+
+fn query_has_into(body: &SetExpr) -> bool {
+    match body {
+        SetExpr::Select(select) => select.into.is_some(),
+        SetExpr::Query(inner) => query_has_into(inner.body.as_ref()),
+        SetExpr::SetOperation { left, right, .. } => {
+            query_has_into(left.as_ref()) || query_has_into(right.as_ref())
+        }
+        _ => false,
     }
 }
 
@@ -294,8 +354,29 @@ fn classify_lexically(
 
     let (access_kind, statement_type) = match first {
         "WITH" => classify_cte_lexically(index, clean_body, &mut warnings),
-        "SELECT" | "EXPLAIN" | "SHOW" | "DESC" | "DESCRIBE" | "PRAGMA" => {
-            (SqlAccessKind::ReadOnly, first.to_string())
+        "SELECT" => {
+            if contains_word_ci(&upper_body, "INTO")
+                && (contains_word_ci(&upper_body, "OUTFILE")
+                    || contains_word_ci(&upper_body, "DUMPFILE"))
+            {
+                warnings.push(SqlRiskWarning {
+                    code: "SELECT_INTO_FILE".to_string(),
+                    level: RiskLevel::Critical,
+                    message: "SELECT INTO OUTFILE/DUMPFILE may write server files and is blocked in read-only mode".to_string(),
+                    statement_index: index,
+                });
+                (SqlAccessKind::AdminOrDcl, "SELECT_INTO_FILE".to_string())
+            } else {
+                (SqlAccessKind::ReadOnly, "SELECT".to_string())
+            }
+        }
+        "EXPLAIN" | "SHOW" | "DESC" | "DESCRIBE" => (SqlAccessKind::ReadOnly, first.to_string()),
+        "PRAGMA" => {
+            if clean_body.contains('=') {
+                (SqlAccessKind::AdminOrDcl, "PRAGMA_SET".to_string())
+            } else {
+                (SqlAccessKind::ReadOnly, "PRAGMA".to_string())
+            }
         }
         "INSERT" | "REPLACE" | "MERGE" => (SqlAccessKind::WriteDml, first.to_string()),
         "UPDATE" | "DELETE" => {
@@ -319,7 +400,8 @@ fn classify_lexically(
             (SqlAccessKind::WriteDdl, first.to_string())
         }
         "CREATE" | "ALTER" | "RENAME" | "COMMENT" => (SqlAccessKind::WriteDdl, first.to_string()),
-        "GRANT" | "REVOKE" => (SqlAccessKind::AdminOrDcl, first.to_string()),
+        "GRANT" | "REVOKE" | "ATTACH" | "DETACH" | "COPY" | "CALL" | "EXEC" | "EXECUTE"
+        | "LOAD" | "IMPORT" | "VACUUM" => (SqlAccessKind::AdminOrDcl, first.to_string()),
         _ => (
             SqlAccessKind::Unknown,
             if first.is_empty() {
@@ -358,6 +440,7 @@ fn classify_cte_lexically(
     let mut in_double = false;
     let mut i = 0usize;
     let mut top_words = Vec::new();
+    let mut all_words = Vec::new();
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -399,37 +482,45 @@ fn classify_cte_lexically(
             i += 1;
             continue;
         }
-        if depth == 0 && (b.is_ascii_alphabetic() || b == b'_') {
+        if b.is_ascii_alphabetic() || b == b'_' {
             let start = i;
             while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
                 i += 1;
             }
-            top_words.push(clean_body[start..i].to_ascii_uppercase());
+            let w = clean_body[start..i].to_ascii_uppercase();
+            if depth == 0 {
+                top_words.push(w.clone());
+            }
+            all_words.push(w);
             continue;
         }
         i += 1;
     }
 
-    for word in &top_words[1..] {
+    for word in all_words.iter().skip(1) {
         match word.as_str() {
-            "INSERT" | "REPLACE" | "MERGE" => {
-                return (SqlAccessKind::WriteDml, word.clone());
-            }
+            "INSERT" | "REPLACE" | "MERGE" => return (SqlAccessKind::WriteDml, word.clone()),
             "UPDATE" | "DELETE" => {
-                if !top_words.iter().any(|w| w == "WHERE") {
+                if !all_words.iter().any(|w| w == "WHERE") {
                     warnings.push(SqlRiskWarning {
                         code: "DML_NO_WHERE".to_string(),
                         level: RiskLevel::High,
-                        message: format!("{word} CTE statement lacks a top-level WHERE clause"),
+                        message: format!("{word} CTE statement lacks a WHERE clause"),
                         statement_index: index,
                     });
                 }
                 return (SqlAccessKind::WriteDml, word.clone());
             }
-            "SELECT" | "VALUES" => {
-                return (SqlAccessKind::ReadOnly, "SELECT".to_string());
+            "DROP" | "TRUNCATE" | "CREATE" | "ALTER" => {
+                return (SqlAccessKind::WriteDdl, word.clone());
             }
             _ => {}
+        }
+    }
+
+    for word in top_words.iter().skip(1) {
+        if matches!(word.as_str(), "SELECT" | "VALUES") {
+            return (SqlAccessKind::ReadOnly, "SELECT".to_string());
         }
     }
 
@@ -1612,5 +1703,32 @@ GROUP BY customer_id;
             toks,
             vec!["SET", "my:key", "hello \"redis\"", "EX", "60"]
         );
+    }
+
+    #[test]
+    fn test_read_only_guard_blocks_writable_cte_pragma_set_attach_and_outfile() {
+        let wcte = "WITH d AS (DELETE FROM orders WHERE id = 1 RETURNING *) SELECT * FROM d;";
+        let r1 = analyze_sql(wcte, &DbEngineType::PostgreSql);
+        assert_ne!(r1.overall_kind, SqlAccessKind::ReadOnly);
+        assert!(r1.requires_ticket);
+
+        let pragma_set = analyze_sql("PRAGMA writable_schema = ON;", &DbEngineType::Sqlite);
+        assert_eq!(pragma_set.overall_kind, SqlAccessKind::AdminOrDcl);
+        assert!(pragma_set.requires_ticket);
+
+        let pragma_get = analyze_sql("PRAGMA table_info('orders');", &DbEngineType::Sqlite);
+        assert_eq!(pragma_get.overall_kind, SqlAccessKind::ReadOnly);
+
+        let attach = analyze_sql("ATTACH DATABASE '/tmp/x.db' AS x;", &DbEngineType::Sqlite);
+        assert_eq!(attach.overall_kind, SqlAccessKind::AdminOrDcl);
+
+        let outfile = analyze_sql(
+            "SELECT * FROM users INTO OUTFILE '/tmp/dump.txt';",
+            &DbEngineType::MySql,
+        );
+        assert_ne!(outfile.overall_kind, SqlAccessKind::ReadOnly);
+
+        let sel_into = analyze_sql("SELECT * INTO backup_users FROM users;", &DbEngineType::SqlServer);
+        assert_ne!(sel_into.overall_kind, SqlAccessKind::ReadOnly);
     }
 }

@@ -416,6 +416,22 @@ const columnsByKey = reactive<Record<string, ColumnMeta[]>>({});
 const indexesByKey = reactive<Record<string, IndexMeta[]>>({});
 const foreignKeysByKey = reactive<Record<string, ForeignKeyMeta[]>>({});
 const routinesByKey = reactive<Record<string, RoutineMeta[]>>({});
+const MAX_META_CACHE_KEYS = 400;
+
+function setBoundedCacheEntry<T>(cache: Record<string, T>, key: string, value: T) {
+  if (Object.prototype.hasOwnProperty.call(cache, key)) {
+    delete cache[key];
+  } else {
+    const keys = Object.keys(cache);
+    if (keys.length >= MAX_META_CACHE_KEYS) {
+      const overflow = keys.length - MAX_META_CACHE_KEYS + 1;
+      for (let i = 0; i < overflow; i++) {
+        delete cache[keys[i]];
+      }
+    }
+  }
+  cache[key] = value;
+}
 const txStatusByProfile = reactive<Record<string, TransactionStatus>>({});
 const expandedProfiles = reactive<Record<string, boolean>>({});
 const expandedDatabases = reactive<Record<string, boolean>>({});
@@ -1281,7 +1297,7 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
     if (!isRedisProfile(profile)) {
       listRoutines(profile.id, dbName)
         .then((rts) => {
-          routinesByKey[key] = rts;
+          setBoundedCacheEntry(routinesByKey, key, rts);
         })
         .catch(() => {});
     }
@@ -1300,7 +1316,7 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
       ).then((results) => {
         for (const r of results) {
           if (r.status === 'fulfilled') {
-            columnsByKey[r.value.key] = r.value.cols;
+            setBoundedCacheEntry(columnsByKey, r.value.key, r.value.cols);
           }
         }
       });
@@ -1522,9 +1538,9 @@ async function loadTableMetadata(profile: ConnectionProfile, dbName: string, tab
         ? Promise.resolve([] as ForeignKeyMeta[])
         : listForeignKeys(profile.id, dbName, tableName).catch(() => [] as ForeignKeyMeta[]),
     ]);
-    columnsByKey[key] = cols;
-    indexesByKey[key] = idxs;
-    foreignKeysByKey[key] = fks;
+    setBoundedCacheEntry(columnsByKey, key, cols);
+    setBoundedCacheEntry(indexesByKey, key, idxs);
+    setBoundedCacheEntry(foreignKeysByKey, key, fks);
   } catch (err) {
     setStatus(`读取表元数据失败 (${tableName}): ${String(err)}`, true);
   }
@@ -2746,8 +2762,8 @@ async function handleOpenErDiagram(profile?: ConnectionProfile, dbName?: string)
               ? Promise.resolve(foreignKeysByKey[ck])
               : listForeignKeys(target.profile.id, target.dbName, tb.name).catch(() => [] as ForeignKeyMeta[]),
           ]);
-          columnsByKey[ck] = colsRes;
-          foreignKeysByKey[ck] = fksRes;
+          setBoundedCacheEntry(columnsByKey, ck, colsRes);
+          setBoundedCacheEntry(foreignKeysByKey, ck, fksRes);
         }),
       );
     }
@@ -3076,7 +3092,7 @@ async function resolveTablePrimaryKeys(
   if (!cols && dbName) {
     try {
       cols = await listColumns(profile.id, dbName, tableName);
-      columnsByKey[cKey] = cols;
+      setBoundedCacheEntry(columnsByKey, cKey, cols);
     } catch {
       cols = [];
     }
@@ -3094,7 +3110,7 @@ async function resolveTableForeignKeys(
   if (!fks && dbName) {
     try {
       fks = await listForeignKeys(profile.id, dbName, tableName);
-      foreignKeysByKey[k] = fks;
+      setBoundedCacheEntry(foreignKeysByKey, k, fks);
     } catch {
       fks = [];
     }
@@ -3240,7 +3256,7 @@ async function executeStatementsBatch(
         if (!metaCols) {
           try {
             metaCols = await listColumns(profile.id, effectiveDb, sourceTable);
-            columnsByKey[cKey] = metaCols;
+            setBoundedCacheEntry(columnsByKey, cKey, metaCols);
           } catch {
             metaCols = [];
           }
@@ -3773,6 +3789,7 @@ async function handleRerunResultTab(tab: ResultTabItem, silent = false) {
       },
       undefined,
       queryTimeoutSec.value > 0 ? queryTimeoutSec.value : undefined,
+      true,
     );
     const target = resultTabs.value.find((r) => r.id === tab.id);
     if (target && summary.success) {

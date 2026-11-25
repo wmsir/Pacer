@@ -66,6 +66,23 @@ pub fn expand_tilde(raw: &str) -> String {
     trimmed.to_string()
 }
 
+fn validate_ssh_token(value: &str, label: &str) -> CoreResult<()> {
+    if value.is_empty() {
+        return Err(CoreError::InvalidConfig(format!("{label}不能为空")));
+    }
+    if value.starts_with('-') {
+        return Err(CoreError::InvalidConfig(format!(
+            "{label} 不能以 '-' 开头"
+        )));
+    }
+    if value.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(CoreError::InvalidConfig(format!(
+            "{label} 包含非法空白或控制字符"
+        )));
+    }
+    Ok(())
+}
+
 /// Builds clean OpenSSH CLI arguments for local port forwarding.
 pub fn build_ssh_args(
     ssh: &SshTunnelConfig,
@@ -80,12 +97,15 @@ pub fn build_ssh_args(
             "SSH 隧道需要填写 SSH 主机和用户名".to_string(),
         ));
     }
+    validate_ssh_token(host, "SSH 主机")?;
+    validate_ssh_token(user, "SSH 用户名")?;
     let target_host = remote_host.trim();
     if target_host.is_empty() || remote_port == 0 {
         return Err(CoreError::InvalidConfig(
             "SSH 隧道目标数据库主机或端口无效".to_string(),
         ));
     }
+    validate_ssh_token(target_host, "目标数据库主机")?;
 
     let ssh_port = if ssh.port == 0 { 22 } else { ssh.port };
     let auth_norm = ssh.auth_type.trim().to_ascii_uppercase();
@@ -132,6 +152,7 @@ pub fn build_ssh_args(
         }
     }
 
+    args.push("--".to_string());
     args.push(format!("{user}@{host}"));
     Ok(args)
 }
@@ -159,11 +180,11 @@ fn configure_subprocess_platform(_cmd: &mut Command) {}
 
 fn create_askpass_script(env_var: &str) -> CoreResult<PathBuf> {
     let seq = ASKPASS_SEQ.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
+    let rand_id = uuid::Uuid::new_v4();
     #[cfg(target_os = "windows")]
     let path = {
-        let p = std::env::temp_dir().join(format!("pacer_askpass_{pid}_{seq}.cmd"));
-        let body = format!("@echo off\r\necho %{env_var}%\r\n");
+        let p = std::env::temp_dir().join(format!("pacer_askpass_{seq}_{rand_id}.cmd"));
+        let body = format!("@echo off\r\nsetlocal EnableDelayedExpansion\r\necho(!{env_var}!\r\n");
         std::fs::write(&p, body.as_bytes()).map_err(|e| {
             CoreError::Transport(format!("Failed writing temporary SSH askpass helper: {e}"))
         })?;
@@ -171,7 +192,7 @@ fn create_askpass_script(env_var: &str) -> CoreResult<PathBuf> {
     };
     #[cfg(not(target_os = "windows"))]
     let path = {
-        let p = std::env::temp_dir().join(format!("pacer_askpass_{pid}_{seq}.sh"));
+        let p = std::env::temp_dir().join(format!("pacer_askpass_{seq}_{rand_id}.sh"));
         let body = format!("#!/bin/sh\nprintf '%s\\n' \"${env_var}\"\n");
         std::fs::write(&p, body.as_bytes()).map_err(|e| {
             CoreError::Transport(format!("Failed writing temporary SSH askpass helper: {e}"))
@@ -352,6 +373,24 @@ mod tests {
             passphrase: None,
         };
         assert!(build_ssh_args(&bad, 15000, "127.0.0.1", 3306).is_err());
+
+        let injected_user = SshTunnelConfig {
+            host: "bastion.internal".to_string(),
+            username: "-oProxyCommand=calc".to_string(),
+            ..bad.clone()
+        };
+        assert!(build_ssh_args(&injected_user, 15000, "127.0.0.1", 3306).is_err());
+
+        let injected_target = SshTunnelConfig {
+            host: "bastion.internal".to_string(),
+            username: "ops".to_string(),
+            ..bad
+        };
+        assert!(build_ssh_args(&injected_target, 15000, "-oBadOpt", 3306).is_err());
+        let ok_args = build_ssh_args(&injected_target, 15000, "10.0.0.1", 3306).unwrap();
+        let len = ok_args.len();
+        assert_eq!(ok_args[len - 2], "--");
+        assert_eq!(ok_args[len - 1], "ops@bastion.internal");
 
         let free_port = allocate_local_port(None).unwrap();
         assert!(free_port > 0);

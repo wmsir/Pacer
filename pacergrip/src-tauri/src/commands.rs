@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,7 @@ use pacer_dbeaver_io::{
 use pacer_drivers::{connect_direct, create_demo_sqlite_db};
 use pacer_sql_ast::{
     analyze_sql, extract_markdown_sql_blocks, extract_statement_at_cursor, format_sql,
-    ScriptAnalysis,
+    ScriptAnalysis, SqlAccessKind,
 };
 
 use crate::files::{
@@ -89,6 +90,7 @@ pub struct AppState {
     pub active_backends: AsyncRwLock<HashMap<String, CachedBackend>>,
     pub running_queries: AsyncRwLock<HashMap<String, RunningQueryHandle>>,
     pub history: RwLock<Vec<QueryHistoryEntry>>,
+    pub history_dirty: Arc<AtomicBool>,
     pub extensions: ExtensionRegistry,
     pub storage_dir: PathBuf,
     pub is_portable: bool,
@@ -132,6 +134,7 @@ impl AppState {
             active_backends: AsyncRwLock::new(HashMap::new()),
             running_queries: AsyncRwLock::new(HashMap::new()),
             history: RwLock::new(history),
+            history_dirty: Arc::new(AtomicBool::new(false)),
             extensions: ExtensionRegistry::new(),
             storage_dir,
             is_portable,
@@ -419,15 +422,9 @@ impl AppState {
         evicted_ids
     }
 
-    fn persist_history_list(&self, list: &[QueryHistoryEntry]) {
-        let _ = std::fs::create_dir_all(&self.storage_dir);
-        if let Ok(json) = serde_json::to_string_pretty(list) {
-            let _ = std::fs::write(self.storage_dir.join("history.json"), json);
-        }
-    }
-
-    fn push_history(&self, entry: QueryHistoryEntry) {
-        let snapshot = if let Ok(mut guard) = self.history.write() {
+    fn push_history(&self, mut entry: QueryHistoryEntry) {
+        entry.sql = sanitize_sql_for_history(&entry.sql);
+        if let Ok(mut guard) = self.history.write() {
             guard.insert(0, entry);
             while guard.len() > MAX_HISTORY_ENTRIES {
                 if let Some(pos) = guard.iter().rposition(|item| !item.pinned) {
@@ -437,14 +434,145 @@ impl AppState {
                     break;
                 }
             }
-            Some(guard.clone())
-        } else {
-            None
-        };
-        if let Some(list) = snapshot {
-            self.persist_history_list(&list);
+            self.history_dirty.store(true, Ordering::Release);
         }
     }
+
+    pub async fn flush_dirty_history(&self) {
+        if !self.history_dirty.swap(false, Ordering::AcqRel) {
+            return;
+        }
+        let snapshot = match self.history.read() {
+            Ok(g) => g.clone(),
+            Err(_) => return,
+        };
+        let storage_dir = self.storage_dir.clone();
+        let dirty_flag = Arc::clone(&self.history_dirty);
+        let _ = tokio::task::spawn_blocking(move || {
+            if write_history_snapshot_atomic(&storage_dir, &snapshot).is_err() {
+                dirty_flag.store(true, Ordering::Release);
+            }
+        })
+        .await;
+    }
+}
+
+fn write_history_snapshot_atomic(storage_dir: &Path, list: &[QueryHistoryEntry]) -> Result<(), String> {
+    std::fs::create_dir_all(storage_dir).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string(list).map_err(|e| e.to_string())?;
+    let target = storage_dir.join("history.json");
+    let tmp = storage_dir.join(format!(".history.json.{}.tmp", Uuid::new_v4()));
+    std::fs::write(&tmp, json.as_bytes()).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+    }
+    if let Err(err) = std::fs::rename(&tmp, &target) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err.to_string());
+    }
+    Ok(())
+}
+
+fn redact_uri_passwords(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(scheme_pos) = rest.find("://") {
+        let prefix_end = scheme_pos + 3;
+        out.push_str(&rest[..prefix_end]);
+        rest = &rest[prefix_end..];
+        let seg_end = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, '\'' | '"' | ';' | ')' | ','))
+            .unwrap_or(rest.len());
+        let segment = &rest[..seg_end];
+        if let Some(at_pos) = segment.rfind('@') {
+            let auth = &segment[..at_pos];
+            if let Some(colon_pos) = auth.find(':') {
+                out.push_str(&auth[..colon_pos + 1]);
+                out.push_str("***");
+                out.push_str(&segment[at_pos..]);
+            } else {
+                out.push_str(segment);
+            }
+        } else {
+            out.push_str(segment);
+        }
+        rest = &rest[seg_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn redact_quoted_keyword_secret(sql: &str, keyword: &str) -> String {
+    let upper = sql.to_ascii_uppercase();
+    let mut out = String::with_capacity(sql.len());
+    let mut cursor = 0usize;
+    while let Some(rel) = upper[cursor..].find(keyword) {
+        let kw_start = cursor + rel;
+        let kw_end = kw_start + keyword.len();
+        out.push_str(&sql[cursor..kw_end]);
+        let mut idx = kw_end;
+        let bytes = sql.as_bytes();
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            out.push(bytes[idx] as char);
+            idx += 1;
+        }
+        if idx < bytes.len() && bytes[idx] == b'=' {
+            out.push('=');
+            idx += 1;
+            while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+                out.push(bytes[idx] as char);
+                idx += 1;
+            }
+        }
+        if idx < bytes.len() && (bytes[idx] == b'\'' || bytes[idx] == b'"') {
+            let quote = bytes[idx];
+            out.push(quote as char);
+            out.push_str("***");
+            idx += 1;
+            while idx < bytes.len() {
+                if bytes[idx] == b'\\' && idx + 1 < bytes.len() {
+                    idx += 2;
+                    continue;
+                }
+                if bytes[idx] == quote {
+                    if bytes.get(idx + 1) == Some(&quote) {
+                        idx += 2;
+                        continue;
+                    }
+                    out.push(quote as char);
+                    idx += 1;
+                    break;
+                }
+                idx += 1;
+            }
+        }
+        cursor = idx;
+    }
+    out.push_str(&sql[cursor..]);
+    out
+}
+
+pub(crate) fn sanitize_sql_for_history(sql: &str) -> String {
+    let trimmed = sql.trim();
+    let redacted_uri = redact_uri_passwords(trimmed);
+    let redacted_id = redact_quoted_keyword_secret(&redacted_uri, "IDENTIFIED BY");
+    let mut cleaned = redact_quoted_keyword_secret(&redacted_id, "PASSWORD");
+    let first_tok = cleaned
+        .split_whitespace()
+        .next()
+        .map(str::to_ascii_uppercase)
+        .unwrap_or_default();
+    if first_tok == "AUTH" {
+        cleaned = "AUTH ***".to_string();
+    }
+    const MAX_HISTORY_SQL_CHARS: usize = 16_384;
+    if let Some((byte_idx, _)) = cleaned.char_indices().nth(MAX_HISTORY_SQL_CHARS) {
+        cleaned.truncate(byte_idx);
+        cleaned.push_str(" ... [truncated]");
+    }
+    cleaned
 }
 
 fn load_history_from_disk(storage_dir: &Path) -> Vec<QueryHistoryEntry> {
@@ -1386,6 +1514,7 @@ pub async fn execute_sql_cmd(
     limit: Option<u32>,
     query_id: Option<String>,
     timeout_sec: Option<u32>,
+    skip_history: Option<bool>,
     on_chunk: Channel<QueryChunk>,
 ) -> Result<QuerySummary, String> {
     let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
@@ -1489,23 +1618,26 @@ pub async fn execute_sql_cmd(
     let _ = forwarder.await;
     let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
+    let record_history = !skip_history.unwrap_or(false);
     match exec_result {
         Ok(summary) => {
-            state.push_history(QueryHistoryEntry {
-                id: Uuid::new_v4().to_string(),
-                timestamp,
-                project_id: profile.project_id.clone(),
-                profile_id: profile.id.clone(),
-                profile_name: profile.name.clone(),
-                database: db_name.clone(),
-                sql: sql.clone(),
-                duration_ms: summary.duration_ms,
-                row_count: summary.total_rows,
-                affected_rows: summary.affected_rows,
-                success: summary.success,
-                error_message: summary.error_message.clone(),
-                pinned: false,
-            });
+            if record_history {
+                state.push_history(QueryHistoryEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp,
+                    project_id: profile.project_id.clone(),
+                    profile_id: profile.id.clone(),
+                    profile_name: profile.name.clone(),
+                    database: db_name.clone(),
+                    sql: sql.clone(),
+                    duration_ms: summary.duration_ms,
+                    row_count: summary.total_rows,
+                    affected_rows: summary.affected_rows,
+                    success: summary.success,
+                    error_message: summary.error_message.clone(),
+                    pinned: false,
+                });
+            }
             state
                 .extensions
                 .emit_audit(&AuditEvent {
@@ -1524,21 +1656,23 @@ pub async fn execute_sql_cmd(
         }
         Err(err) => {
             let msg = err.to_string();
-            state.push_history(QueryHistoryEntry {
-                id: Uuid::new_v4().to_string(),
-                timestamp,
-                project_id: profile.project_id.clone(),
-                profile_id: profile.id.clone(),
-                profile_name: profile.name.clone(),
-                database: db_name.clone(),
-                sql: sql.clone(),
-                duration_ms: 0,
-                row_count: 0,
-                affected_rows: None,
-                success: false,
-                error_message: Some(msg.clone()),
-                pinned: false,
-            });
+            if record_history {
+                state.push_history(QueryHistoryEntry {
+                    id: Uuid::new_v4().to_string(),
+                    timestamp,
+                    project_id: profile.project_id.clone(),
+                    profile_id: profile.id.clone(),
+                    profile_name: profile.name.clone(),
+                    database: db_name.clone(),
+                    sql: sql.clone(),
+                    duration_ms: 0,
+                    row_count: 0,
+                    affected_rows: None,
+                    success: false,
+                    error_message: Some(msg.clone()),
+                    pinned: false,
+                });
+            }
             state
                 .extensions
                 .emit_audit(&AuditEvent {
@@ -2280,7 +2414,8 @@ pub fn toggle_history_pin_cmd(state: State<'_, AppState>, history_id: String) ->
         }
         guard.clone()
     };
-    state.persist_history_list(&snapshot);
+    state.history_dirty.store(false, Ordering::Release);
+    let _ = write_history_snapshot_atomic(&state.storage_dir, &snapshot);
     Ok(new_pinned)
 }
 
@@ -2296,7 +2431,8 @@ pub fn delete_history_entry_cmd(
         (guard.len() != before, guard.clone())
     };
     if removed {
-        state.persist_history_list(&snapshot);
+        state.history_dirty.store(false, Ordering::Release);
+        let _ = write_history_snapshot_atomic(&state.storage_dir, &snapshot);
     }
     Ok(removed)
 }
@@ -2540,12 +2676,34 @@ pub async fn export_query_to_file_cmd(
 ) -> Result<QueryExportResult, String> {
     let started = Instant::now();
     let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
+    let analysis = analyze_sql(&sql, &profile.db_type);
+    if !matches!(analysis.overall_kind, SqlAccessKind::ReadOnly) {
+        return Err(
+            "安全限制：流式结果导出仅允许只读查询语句（已拦截 DML/DDL 或潜在写操作）".to_string(),
+        );
+    }
+    match state
+        .extensions
+        .check_before_execute(&profile, db_name.as_deref(), &sql)
+        .await
+        .map_err(map_err)?
+    {
+        PreExecuteDecision::Allow => {}
+        PreExecuteDecision::RequireApproval { reason } => {
+            return Err(format!("EXTENSION_APPROVAL_REQUIRED: {reason}"));
+        }
+        PreExecuteDecision::Block { reason } => {
+            return Err(format!("EXTENSION_BLOCKED: {reason}"));
+        }
+    }
+
     let fmt = format.trim().to_ascii_lowercase();
     if !matches!(fmt.as_str(), "csv" | "xlsx" | "json") {
         return Err(format!("不支持的导出格式: {format}"));
     }
 
     let out_path = PathBuf::from(&path);
+    let cleanup_path = out_path.clone();
     let sheet_title = sheet_name.unwrap_or_else(|| "QueryResult".to_string());
     let fmt_writer = fmt.clone();
     let (write_tx, mut write_rx) = mpsc::channel::<QueryExportWriteMsg>(8);
@@ -2676,6 +2834,8 @@ pub async fn export_query_to_file_cmd(
     let progress_ch = on_progress.clone();
     let forwarder = tokio::spawn(async move {
         let mut streamed_rows = 0usize;
+        let mut last_emit_rows = 0usize;
+        let mut last_emit_at = Instant::now();
         while let Some(chunk) = rx.recv().await {
             let chunk_rows = chunk.rows.len();
             if chunk.columns.is_empty() && chunk_rows == 0 {
@@ -2692,11 +2852,17 @@ pub async fn export_query_to_file_cmd(
             {
                 break;
             }
-            let _ = progress_ch.send(QueryExportProgress {
-                exported_rows: streamed_rows,
-                bytes_written: 0,
-                done: false,
-            });
+            if streamed_rows.saturating_sub(last_emit_rows) >= 500
+                || last_emit_at.elapsed() >= Duration::from_millis(200)
+            {
+                last_emit_rows = streamed_rows;
+                last_emit_at = Instant::now();
+                let _ = progress_ch.send(QueryExportProgress {
+                    exported_rows: streamed_rows,
+                    bytes_written: 0,
+                    done: false,
+                });
+            }
         }
     });
 
@@ -2710,7 +2876,12 @@ pub async fn export_query_to_file_cmd(
     let exec_res = match cancel_rx_opt {
         Some(cancel_rx) => tokio::select! {
             r = backend.execute_query(req, tx) => r,
-            _ = cancel_rx => Err(CoreError::ExecutionFailed("QUERY_CANCELLED: 用户已取消流式导出".to_string())),
+            _ = cancel_rx => {
+                if let Some(ref qid) = effective_qid {
+                    let _ = backend.cancel_running_query(qid).await;
+                }
+                Err(CoreError::ExecutionFailed("QUERY_CANCELLED: 用户已取消流式导出".to_string()))
+            }
         },
         None => backend.execute_query(req, tx).await,
     };
@@ -2725,7 +2896,10 @@ pub async fn export_query_to_file_cmd(
     let (exported_rows, bytes_written) = writer_handle
         .await
         .map_err(|e| format!("等待流式导出线程失败: {e}"))??;
-    exec_res.map_err(map_err)?;
+    if let Err(err) = exec_res {
+        let _ = std::fs::remove_file(&cleanup_path);
+        return Err(map_err(err));
+    }
 
     let _ = profile;
     let _ = on_progress.send(QueryExportProgress {

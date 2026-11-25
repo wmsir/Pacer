@@ -1,5 +1,40 @@
 use std::io::BufRead;
 
+pub const DEFAULT_MAX_STATEMENT_BYTES: usize = 32 * 1024 * 1024;
+
+fn read_bounded_line<R: BufRead>(
+    reader: &mut R,
+    max_line_bytes: usize,
+) -> std::io::Result<Option<String>> {
+    let mut raw: Vec<u8> = Vec::new();
+    loop {
+        let avail = reader.fill_buf()?;
+        if avail.is_empty() {
+            if raw.is_empty() {
+                return Ok(None);
+            }
+            let s = String::from_utf8(raw)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+            return Ok(Some(s));
+        }
+        let nl_pos = avail.iter().position(|&b| b == b'\n');
+        let take_len = nl_pos.map_or(avail.len(), |p| p + 1);
+        if raw.len().saturating_add(take_len) > max_line_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("单条 SQL 语句或单行超过最大大小限制（{} bytes）", max_line_bytes),
+            ));
+        }
+        raw.extend_from_slice(&avail[..take_len]);
+        reader.consume(take_len);
+        if nl_pos.is_some() {
+            let s = String::from_utf8(raw)
+                .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned());
+            return Ok(Some(s));
+        }
+    }
+}
+
 /// Incrementally splits potentially multi-gigabyte SQL script files into executable statements
 /// using bounded memory while preserving string literals, comments, PostgreSQL dollar-quoted
 /// blocks (`$$...$$` / `$tag$...$tag$`), and MySQL `DELIMITER` directives.
@@ -8,6 +43,7 @@ pub struct SqlScriptStreamReader<R: BufRead> {
     pending: String,
     delimiter: String,
     bytes_read: u64,
+    max_statement_bytes: usize,
     first_line: bool,
     eof: bool,
     in_single_quote: bool,
@@ -19,11 +55,16 @@ pub struct SqlScriptStreamReader<R: BufRead> {
 
 impl<R: BufRead> SqlScriptStreamReader<R> {
     pub fn new(reader: R) -> Self {
+        Self::with_max_statement_bytes(reader, DEFAULT_MAX_STATEMENT_BYTES)
+    }
+
+    pub fn with_max_statement_bytes(reader: R, max_statement_bytes: usize) -> Self {
         Self {
             reader,
             pending: String::new(),
             delimiter: ";".to_string(),
             bytes_read: 0,
+            max_statement_bytes: max_statement_bytes.max(1024),
             first_line: true,
             eof: false,
             in_single_quote: false,
@@ -60,13 +101,12 @@ impl<R: BufRead> SqlScriptStreamReader<R> {
                     return Ok(None);
                 }
 
-                let mut line = String::new();
-                let n = self.reader.read_line(&mut line)?;
-                if n == 0 {
+                let rem_budget = self.max_statement_bytes.saturating_sub(stmt.len()).max(1);
+                let Some(mut line) = read_bounded_line(&mut self.reader, rem_budget)? else {
                     self.eof = true;
                     break;
-                }
-                self.bytes_read += n as u64;
+                };
+                self.bytes_read += line.len() as u64;
                 if self.first_line {
                     self.first_line = false;
                     if let Some(stripped) = line.strip_prefix('\u{FEFF}') {
@@ -99,6 +139,15 @@ impl<R: BufRead> SqlScriptStreamReader<R> {
                     return Ok(Some(emitted));
                 }
                 stmt.clear();
+            }
+            if stmt.len() > self.max_statement_bytes {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "单条 SQL 语句超过最大大小限制（{} bytes）",
+                        self.max_statement_bytes
+                    ),
+                ));
             }
         }
     }
@@ -363,5 +412,16 @@ mod tests {
         assert!(stmts[0].contains("SELECT 42; END"));
         assert!(stmts[1].contains("$body$"));
         assert_eq!(stmts[2], "SELECT 99");
+    }
+
+    #[test]
+    fn test_sql_script_stream_rejects_oversized_single_statement() {
+        let huge = format!("SELECT '{}';", "x".repeat(4096));
+        let mut reader = SqlScriptStreamReader::with_max_statement_bytes(
+            Cursor::new(huge.as_bytes()),
+            1024,
+        );
+        let err = reader.next_statement().unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 }
