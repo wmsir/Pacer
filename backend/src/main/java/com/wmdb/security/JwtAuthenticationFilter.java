@@ -1,5 +1,6 @@
 package com.wmdb.security;
 
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -58,9 +59,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         final String jwt = authHeader.substring(7);
         try {
-            if (jwtUtils.isTokenValid(jwt)) {
-                String idCard = jwtUtils.extractIdCard(jwt);
-                String realName = jwtUtils.extractRealName(jwt);
+            Claims claims = jwtUtils.parseClaimsIfValid(jwt);
+            if (claims != null) {
+                String idCard = claims.getSubject();
 
                 UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                         idCard, null, new ArrayList<>());

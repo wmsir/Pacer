@@ -34,11 +34,14 @@ public class JwtUtils {
     @Value("${wmdb.jwt.expiration}")
     private long expirationTime;
 
+    private SecretKey cachedSigningKey;
+
     @jakarta.annotation.PostConstruct
     public void validateSecret() {
         if (secretString == null || secretString.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8).length < 32) {
             throw new IllegalStateException("CRITICAL SECURITY VIOLATION: wmdb.jwt.secret must be provided via environment variable and must be at least 32 bytes in length!");
         }
+        this.cachedSigningKey = Keys.hmacShaKeyFor(secretString.getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -47,7 +50,10 @@ public class JwtUtils {
      * @return SecretKey 实例
      */
     private SecretKey getSigningKey() {
-        return Keys.hmacShaKeyFor(secretString.getBytes(StandardCharsets.UTF_8));
+        if (cachedSigningKey == null) {
+            cachedSigningKey = Keys.hmacShaKeyFor(secretString.getBytes(StandardCharsets.UTF_8));
+        }
+        return cachedSigningKey;
     }
 
     /**
@@ -102,17 +108,26 @@ public class JwtUtils {
     }
 
     /**
+     * 单次解析并校验 Token，无效或过期返回 null（避免过滤器重复验签）
+     *
+     * @param token JWT 字符串
+     * @return Claims 或 null
+     */
+    public Claims parseClaimsIfValid(String token) {
+        try {
+            return extractAllClaims(token);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * 验证 Token 是否合法且未过期
      *
      * @param token JWT 字符串
      * @return 是否有效
      */
     public boolean isTokenValid(String token) {
-        try {
-            extractAllClaims(token);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+        return parseClaimsIfValid(token) != null;
     }
 }

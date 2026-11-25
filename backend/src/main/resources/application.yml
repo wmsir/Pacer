@@ -1,5 +1,11 @@
 server:
   port: 8088
+  tomcat:
+    threads:
+      max: 200
+      min-spare: 20
+    accept-count: 200
+    max-connections: 4096
 
 spring:
   application:
@@ -17,6 +23,12 @@ spring:
     username: ${WMDB_DB_USERNAME:root}
     password: ${WMDB_DB_PASSWORD:root}
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 10000
+      idle-timeout: 300000
+      max-lifetime: 1800000
     dynamic:
       primary: master
       datasource:
@@ -26,9 +38,10 @@ spring:
           password: ${WMDB_DB_PASSWORD:root}
           driver-class-name: com.mysql.cj.jdbc.Driver
 
+# 生产环境默认关闭全量 SQL stdout 打印，避免磁盘 IO 阻塞（如需排查可通过环境变量开启）
 mybatis-plus:
   configuration:
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    log-impl: ${WMDB_MYBATIS_LOG_IMPL:org.apache.ibatis.logging.nologging.NoLoggingImpl}
 
 wmdb:
   jwt:

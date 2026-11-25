@@ -257,6 +257,35 @@ public class AuthService {
         return token;
     }
 
+    private static boolean isLikelySm2Cipher(String value) {
+        if (value == null) {
+            return false;
+        }
+        String trimmed = value.trim();
+        if (trimmed.length() < 130) {
+            return false;
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            boolean isHex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!isHex) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String resolvePlainPassword(String encryptedPassword) {
+        if (!isLikelySm2Cipher(encryptedPassword)) {
+            return encryptedPassword;
+        }
+        try {
+            return SmUtils.sm2Decrypt(encryptedPassword);
+        } catch (Exception e) {
+            return encryptedPassword;
+        }
+    }
+
     /**
      * 账号密码登录（支持 用户名 / 身份证号码 / 手机号）
      *
@@ -274,13 +303,8 @@ public class AuthService {
         final String searchAccount = account.trim();
 
         try {
-            // 解密密码（若前端使用 SM2 密文则解密，若解密失败且原串为明文则回退）
-            String password = encryptedPassword;
-            try {
-                password = SmUtils.sm2Decrypt(encryptedPassword);
-            } catch (Exception e) {
-                password = encryptedPassword;
-            }
+            // 解密密码（仅对疑似 SM2 密文执行非对称解密，避免明文登录触发异常堆栈）
+            String password = resolvePlainPassword(encryptedPassword);
 
             // 支持按用户名、身份证号、手机号或企业邮箱匹配
             List<SysUser> userList = sysUserMapper.selectList(
@@ -352,13 +376,8 @@ public class AuthService {
         final String searchAccount = account.trim();
 
         try {
-            // 解密密码（若前端使用 SM2 密文则解密，若解密失败且原串为明文则回退）
-            String password = encryptedPassword;
-            try {
-                password = SmUtils.sm2Decrypt(encryptedPassword);
-            } catch (Exception e) {
-                password = encryptedPassword;
-            }
+            // 解密密码（仅对疑似 SM2 密文执行非对称解密，避免明文登录触发异常堆栈）
+            String password = resolvePlainPassword(encryptedPassword);
 
             // 支持按用户名、身份证号、手机号或企业邮箱匹配
             List<SysUser> userList = sysUserMapper.selectList(
