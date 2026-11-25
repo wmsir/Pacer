@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.SysRole;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.SysRoleService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +23,7 @@ import java.util.List;
 public class SysRoleController {
 
     private final SysRoleService sysRoleService;
+    private final PrivilegeGuard privilegeGuard;
 
     @GetMapping("/list")
     public Result<List<SysRole>> listRoles() {
@@ -38,12 +40,14 @@ public class SysRoleController {
 
     @PostMapping("/save")
     public Result<Void> saveRole(@RequestBody SysRole role) {
+        privilegeGuard.requireAdmin();
         sysRoleService.saveRole(role);
         return Result.success(null);
     }
 
     @DeleteMapping("/{id}")
     public Result<Void> deleteRole(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdmin();
         sysRoleService.deleteRole(id);
         return Result.success(null);
     }
@@ -70,6 +74,7 @@ public class SysRoleController {
     public Result<Void> addUsersToRole(
             @PathVariable("roleCode") String roleCode,
             @RequestBody java.util.Map<String, Object> body) {
+        privilegeGuard.requireAdmin();
         java.util.List<Long> userIds = extractUserIds(body);
         sysRoleService.addUsersToRole(roleCode, userIds);
         return Result.success(null);
@@ -79,6 +84,7 @@ public class SysRoleController {
     public Result<Void> removeUsersFromRole(
             @PathVariable("roleCode") String roleCode,
             @RequestBody java.util.Map<String, Object> body) {
+        privilegeGuard.requireAdmin();
         java.util.List<Long> userIds = extractUserIds(body);
         sysRoleService.removeUsersFromRole(roleCode, userIds);
         return Result.success(null);

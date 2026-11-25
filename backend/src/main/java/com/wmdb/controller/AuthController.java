@@ -186,7 +186,9 @@ public class AuthController {
                     sysName = "稳骥 PacerSQL";
                 } else if (ref.contains("wm-erp") || ref.contains("zebra")) {
                     sysName = "斑马 ERP";
-                } else if (ref.contains("admin.html")) {
+                } else if (ref.contains("xynote") || ua.contains("XyNote")) {
+                    sysName = "小悦笔记";
+                } else if (ref.contains("/admin")) {
                     sysName = "超级管理中心";
                 } else {
                     sysName = "FWPT 统一门户";
@@ -206,6 +208,12 @@ public class AuthController {
                     1L, username.trim(), sysName, operation, details, clientIp, "SUCCESS", new Timestamp(System.currentTimeMillis())
             );
         } catch (Exception ignored) {}
+    }
+
+    @Operation(summary = "认证网关健康检查")
+    @GetMapping("/health")
+    public Result<Map<String, Object>> health() {
+        return Result.success(Map.of("status", "UP", "service", "wmdb-backend"));
     }
 
     /**

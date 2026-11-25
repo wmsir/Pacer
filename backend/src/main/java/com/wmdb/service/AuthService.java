@@ -699,7 +699,7 @@ public class AuthService {
      */
     public Map<String, Object> getCurrentUserInfo(String authHeader) {
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            throw new RuntimeException("未登录或登录凭据已过期");
+            throw new com.wmdb.exception.BusinessException("A0220", "未登录或登录凭据已过期");
         }
         String token = authHeader.substring(7).trim();
         String identifier = jwtUtils.extractIdCard(token);

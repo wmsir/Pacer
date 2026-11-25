@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.SysUser;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -25,10 +26,12 @@ import java.util.Map;
 public class UserController {
 
     private final UserService userService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "查询用户列表（全量兼容）")
     @GetMapping("/list")
     public Result<List<com.wmdb.model.SysUserDTO>> listUsers(@RequestParam(value = "keyword", required = false) String keyword) {
+        privilegeGuard.requireAdmin();
         return Result.success(userService.listUsers(keyword));
     }
 
@@ -40,12 +43,14 @@ public class UserController {
             @RequestParam(value = "keyword", required = false) String keyword,
             @RequestParam(value = "role", required = false) String role,
             @RequestParam(value = "status", required = false) Integer status) {
+        privilegeGuard.requireAdmin();
         return Result.success(userService.pageUsers(page, size, keyword, role, status));
     }
 
     @Operation(summary = "保存用户（新建或编辑）")
     @PostMapping("/save")
     public Result<Void> saveUser(@RequestBody SysUser user) {
+        privilegeGuard.requireAdmin();
         userService.saveUser(user);
         return Result.success(null);
     }
@@ -53,6 +58,7 @@ public class UserController {
     @Operation(summary = "删除用户")
     @DeleteMapping("/{id:\\d+}")
     public Result<Void> deleteUser(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdmin();
         userService.deleteUser(id);
         return Result.success(null);
     }
@@ -60,6 +66,7 @@ public class UserController {
     @Operation(summary = "切换用户状态（启用/禁用）")
     @PostMapping("/{id:\\d+}/toggle-status")
     public Result<Void> toggleStatus(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdmin();
         userService.toggleStatus(id);
         return Result.success(null);
     }
@@ -67,6 +74,7 @@ public class UserController {
     @Operation(summary = "重置用户密码")
     @PostMapping("/{id:\\d+}/reset-password")
     public Result<Void> resetPassword(@PathVariable("id") Long id, @RequestBody(required = false) Map<String, String> body) {
+        privilegeGuard.requireAdmin();
         String newPassword = body != null ? body.get("newPassword") : "123456";
         userService.resetPassword(id, newPassword);
         return Result.success(null);

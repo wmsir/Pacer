@@ -1,6 +1,7 @@
 package com.wmdb.controller;
 
 import com.wmdb.common.Result;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.SystemConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 public class SystemConfigController {
 
     private final SystemConfigService systemConfigService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "获取全局安全策略配置")
     @GetMapping("/safety-policies")
@@ -29,6 +31,7 @@ public class SystemConfigController {
     @Operation(summary = "更新全局安全策略配置 (管理员/DBA权限)")
     @PostMapping("/safety-policies")
     public Result<SystemConfigService.SafetyPolicyDTO> updateSafetyPolicies(@RequestBody SystemConfigService.SafetyPolicyDTO dto) {
+        privilegeGuard.requireAdminOrDba();
         systemConfigService.updateSafetyPolicies(dto);
         return Result.success(systemConfigService.getSafetyPolicies());
     }
@@ -42,6 +45,7 @@ public class SystemConfigController {
     @Operation(summary = "更新集群执行策略配置 (支持动态配置多节点路由)")
     @PostMapping("/execution-policy")
     public Result<SystemConfigService.ExecutionPolicyDTO> updateExecutionPolicy(@RequestBody SystemConfigService.ExecutionPolicyDTO dto) {
+        privilegeGuard.requireAdminOrDba();
         systemConfigService.updateExecutionPolicy(dto);
         return Result.success(systemConfigService.getExecutionPolicy());
     }

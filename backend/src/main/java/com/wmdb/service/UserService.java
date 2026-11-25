@@ -173,9 +173,9 @@ public class UserService {
     }
 
     /**
-     * 非阻塞同步个人资料与密码变更到统一认证中心库 fwpt_auth
+     * 非阻塞同步个人资料、状态与密码变更到统一认证中心库 fwpt_auth
      */
-    private void syncUserToFwptAuth(SysUser user, String newSm3Hash) {
+    public void syncUserToFwptAuth(SysUser user, String newSm3Hash) {
         if (user == null || user.getId() == null) {
             return;
         }
@@ -185,12 +185,18 @@ public class UserService {
                     "SET display_name = COALESCE(NULLIF(?, ''), display_name), " +
                     "    email = NULLIF(?, ''), " +
                     "    phone = NULLIF(?, ''), " +
+                    "    status = COALESCE(?, status), " +
                     "    updated_at = NOW() " +
                     "WHERE legacy_oneid_id = ?")) {
                 ps.setString(1, user.getRealName() != null ? user.getRealName().trim() : "");
                 ps.setString(2, user.getEmail() != null ? user.getEmail().trim() : "");
                 ps.setString(3, user.getPhone() != null ? user.getPhone().trim() : "");
-                ps.setLong(4, user.getId());
+                if (user.getStatus() != null) {
+                    ps.setInt(4, user.getStatus());
+                } else {
+                    ps.setNull(4, java.sql.Types.INTEGER);
+                }
+                ps.setLong(5, user.getId());
                 ps.executeUpdate();
             }
             if (newSm3Hash != null && !newSm3Hash.isEmpty()) {
@@ -206,6 +212,23 @@ public class UserService {
             }
         } catch (Exception ex) {
             log.warn("Non-blocking sync to fwpt_auth failed for user {}: {}", user.getUsername(), ex.getMessage());
+        }
+    }
+
+    /**
+     * 用户删除时同步在统一认证中心禁用其登录状态
+     */
+    public void disableUserInFwptAuth(Long legacyOneidId) {
+        if (legacyOneidId == null) {
+            return;
+        }
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE fwpt_auth.auth_user SET status = 0, updated_at = NOW() WHERE legacy_oneid_id = ?")) {
+            ps.setLong(1, legacyOneidId);
+            ps.executeUpdate();
+        } catch (Exception ex) {
+            log.warn("Non-blocking disable fwpt_auth user {} failed: {}", legacyOneidId, ex.getMessage());
         }
     }
 

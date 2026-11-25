@@ -6,6 +6,7 @@ import com.wmdb.mapper.SysUserMapper;
 import com.wmdb.model.SysUser;
 import com.wmdb.security.JwtUtils;
 import com.wmdb.security.SmUtils;
+import com.wmdb.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.HttpServletRequest;
@@ -41,6 +42,7 @@ public class AdminController {
     private final SysUserMapper sysUserMapper;
     private final JdbcTemplate jdbcTemplate;
     private final JwtUtils jwtUtils;
+    private final UserService userService;
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
@@ -415,8 +417,66 @@ public class AdminController {
 
         user.setStatus(status);
         sysUserMapper.updateById(user);
+        userService.syncUserToFwptAuth(user, null);
 
         return Result.success(status == 1 ? "账号已成功启用" : "账号已成功冻结禁用");
+    }
+
+    /**
+     * 5.5 超级管理员编辑指定用户基础资料、角色与部门
+     */
+    @Operation(summary = "编辑用户信息", description = "超级管理员修改用户姓名、角色、部门、邮箱及手机号，并同步至统一认证中心")
+    @PostMapping("/user/update")
+    public Result<String> updateUser(
+            @RequestBody Map<String, Object> req,
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+
+        if (!checkAdminPrivilege(authHeader)) {
+            return Result.error("A0301", "权限不足，仅超级管理员可修改用户信息");
+        }
+
+        Long userId = req.get("userId") != null ? Long.valueOf(req.get("userId").toString()) : null;
+        if (userId == null) {
+            return Result.error("A0400", "缺少用户 ID");
+        }
+
+        SysUser user = sysUserMapper.selectById(userId);
+        if (user == null) {
+            return Result.error("A0404", "指定用户不存在");
+        }
+
+        if (req.get("realName") != null && !req.get("realName").toString().trim().isEmpty()) {
+            user.setRealName(req.get("realName").toString().trim());
+        }
+        if (req.get("department") != null) {
+            String dept = req.get("department").toString().trim();
+            user.setDepartment(dept);
+            if (!dept.isEmpty()) {
+                user.setResourceGroup(dept);
+            }
+        }
+        if (req.get("email") != null) {
+            user.setEmail(req.get("email").toString().trim());
+        }
+        if (req.get("phone") != null) {
+            user.setPhone(req.get("phone").toString().trim());
+        }
+        if (req.get("role") != null && !req.get("role").toString().trim().isEmpty()) {
+            boolean isRootAdmin = (user.getId() != null && user.getId() == 1L) || "admin".equalsIgnoreCase(user.getUsername());
+            user.setRole(isRootAdmin ? "ADMIN" : req.get("role").toString().trim());
+        }
+
+        sysUserMapper.updateById(user);
+        userService.syncUserToFwptAuth(user, null);
+
+        try {
+            jdbcTemplate.update(
+                    "INSERT INTO sys_audit_log (tenant_id, username, resource_type, operation, details, ip_address, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    1L, "admin", "超级管理中心", "UPDATE_USER", "管理员更新了用户资料: " + user.getUsername() + " (ID: " + userId + ")", "127.0.0.1", "SUCCESS", new Timestamp(System.currentTimeMillis())
+            );
+        } catch (Exception ignored) {}
+
+        return Result.success("用户【" + user.getUsername() + "】资料已更新并全平台同步");
     }
 
     /**
@@ -451,6 +511,7 @@ public class AdminController {
         user.setPasswordCipher(hash);
         user.setPasswordHash(hash);
         sysUserMapper.updateById(user);
+        userService.syncUserToFwptAuth(user, hash);
 
         return Result.success("用户 " + user.getUsername() + " 密码已成功重置");
     }
@@ -484,6 +545,7 @@ public class AdminController {
 
         String targetName = user.getUsername();
         sysUserMapper.deleteById(userId);
+        userService.disableUserInFwptAuth(userId);
 
         try {
             jdbcTemplate.update(
