@@ -8,6 +8,7 @@ import com.wmdb.model.SysUser;
 import com.wmdb.security.JwtUtils;
 import com.wmdb.security.SmUtils;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -257,6 +258,8 @@ public class AuthService {
         return token;
     }
 
+    private static final BCryptPasswordEncoder BCRYPT_ENCODER = new BCryptPasswordEncoder();
+
     private static boolean isLikelySm2Cipher(String value) {
         if (value == null) {
             return false;
@@ -284,6 +287,39 @@ public class AuthService {
         } catch (Exception e) {
             return encryptedPassword;
         }
+    }
+
+    /**
+     * 校验用户密码：优先比对 SM3（passwordCipher），其次兼容历史 BCrypt（passwordHash），
+     * BCrypt 命中且 passwordCipher 为空时透明回写 SM3 哈希以完成渐进升级。
+     */
+    private boolean verifyUserPassword(SysUser user, String rawPassword) {
+        if (user == null || rawPassword == null) {
+            return false;
+        }
+        String sm3Cipher = user.getPasswordCipher();
+        if (sm3Cipher != null && !sm3Cipher.isEmpty() && SmUtils.sm3Matches(rawPassword, sm3Cipher)) {
+            return true;
+        }
+        String bcryptHash = user.getPasswordHash();
+        if (bcryptHash != null && (bcryptHash.startsWith("$2a$") || bcryptHash.startsWith("$2b$") || bcryptHash.startsWith("$2y$"))) {
+            try {
+                if (BCRYPT_ENCODER.matches(rawPassword, bcryptHash)) {
+                    if (sm3Cipher == null || sm3Cipher.isEmpty()) {
+                        try {
+                            user.setPasswordCipher(SmUtils.sm3Hash(rawPassword));
+                            sysUserMapper.updateById(user);
+                        } catch (Exception ex) {
+                            log.warn("Backfill passwordCipher for user {} failed: {}", user.getUsername(), ex.getMessage());
+                        }
+                    }
+                    return true;
+                }
+            } catch (Exception ex) {
+                log.warn("BCrypt match failed for user {}: {}", user.getUsername(), ex.getMessage());
+            }
+        }
+        return isDevEnvironment() && (sm3Cipher == null || sm3Cipher.isEmpty()) && "123456".equals(rawPassword);
     }
 
     /**
@@ -325,15 +361,8 @@ public class AuthService {
                 throw new RuntimeException("该账号已被管理员冻结禁用，请联系系统管理员");
             }
 
-            // 密码校验：SM3 匹配或内置演示账号兼容
-            boolean matched = false;
-            if (user.getPasswordCipher() != null && !user.getPasswordCipher().isEmpty()) {
-                matched = SmUtils.sm3Matches(password, user.getPasswordCipher());
-            }
-            // 严禁生产环境内置硬编码后门密码；开发模式仅限密码为空的测试账号应急
-            if (!matched && isDevEnvironment() && (user.getPasswordCipher() == null || user.getPasswordCipher().isEmpty()) && "123456".equals(password)) {
-                matched = true;
-            }
+            // 密码校验：SM3 匹配或历史 BCrypt 兼容
+            boolean matched = verifyUserPassword(user, password);
 
             if (!matched) {
                 throw new RuntimeException("账号不存在或密码错误");
@@ -398,15 +427,8 @@ public class AuthService {
                 throw new RuntimeException("该账号已被管理员冻结禁用，请联系系统管理员");
             }
 
-            // 密码校验：SM3 匹配或内置演示账号兼容
-            boolean matched = false;
-            if (user.getPasswordCipher() != null && !user.getPasswordCipher().isEmpty()) {
-                matched = SmUtils.sm3Matches(password, user.getPasswordCipher());
-            }
-            // 严禁生产环境内置硬编码后门密码；开发模式仅限密码为空的测试账号应急
-            if (!matched && isDevEnvironment() && (user.getPasswordCipher() == null || user.getPasswordCipher().isEmpty()) && "123456".equals(password)) {
-                matched = true;
-            }
+            // 密码校验：SM3 匹配或历史 BCrypt 兼容
+            boolean matched = verifyUserPassword(user, password);
 
             if (!matched) {
                 throw new RuntimeException("账号不存在或密码错误");
