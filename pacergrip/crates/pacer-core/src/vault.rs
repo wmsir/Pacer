@@ -15,6 +15,7 @@ const LEGACY_VAULT_KEY: [u8; 16] = [
 ];
 const VAULT_V2_MAGIC: &[u8; 5] = b"PCRV2";
 const VAULT_DATA_FILE: &str = "credentials.dat";
+#[cfg(target_os = "windows")]
 const VAULT_DPAPI_KEY_FILE: &str = "vault.dpapi";
 const VAULT_PLAIN_KEY_FILE: &str = "vault.key";
 
@@ -167,9 +168,10 @@ fn store_keychain_master_key(key: &[u8; 16]) -> bool {
 
 #[cfg(target_os = "macos")]
 fn encode_hex(bytes: &[u8; 16]) -> String {
+    use std::fmt::Write as _;
+
     let mut s = String::with_capacity(32);
     for b in bytes {
-        use std::fmt::Write as _;
         let _ = write!(s, "{b:02x}");
     }
     s
@@ -188,6 +190,43 @@ fn decode_hex_16(raw: &str) -> Option<[u8; 16]> {
     Some(out)
 }
 
+#[cfg(target_os = "windows")]
+fn try_load_os_master_key(storage_dir: &Path) -> Option<[u8; 16]> {
+    let blob = std::fs::read(storage_dir.join(VAULT_DPAPI_KEY_FILE)).ok()?;
+    let plain = win_dpapi::unprotect(&blob)?;
+    <[u8; 16]>::try_from(plain.as_slice()).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn try_load_os_master_key(_storage_dir: &Path) -> Option<[u8; 16]> {
+    load_keychain_master_key()
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn try_load_os_master_key(_storage_dir: &Path) -> Option<[u8; 16]> {
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn try_store_os_master_key(storage_dir: &Path, key: &[u8; 16]) -> Result<bool, String> {
+    if let Some(protected) = win_dpapi::protect(key) {
+        std::fs::write(storage_dir.join(VAULT_DPAPI_KEY_FILE), protected)
+            .map_err(|e| e.to_string())?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+#[cfg(target_os = "macos")]
+fn try_store_os_master_key(_storage_dir: &Path, key: &[u8; 16]) -> Result<bool, String> {
+    Ok(store_keychain_master_key(key))
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn try_store_os_master_key(_storage_dir: &Path, _key: &[u8; 16]) -> Result<bool, String> {
+    Ok(false)
+}
+
 fn write_restricted_key_file(path: &Path, key: &[u8; 16]) -> Result<(), String> {
     std::fs::write(path, key).map_err(|e| e.to_string())?;
     #[cfg(unix)]
@@ -200,30 +239,14 @@ fn write_restricted_key_file(path: &Path, key: &[u8; 16]) -> Result<(), String> 
 
 fn try_load_existing_master_key(storage_dir: &Path, is_portable: bool) -> Option<[u8; 16]> {
     if !is_portable {
-        #[cfg(target_os = "windows")]
-        {
-            if let Ok(blob) = std::fs::read(storage_dir.join(VAULT_DPAPI_KEY_FILE)) {
-                if let Some(plain) = win_dpapi::unprotect(&blob) {
-                    if let Ok(arr) = <[u8; 16]>::try_from(plain.as_slice()) {
-                        return Some(arr);
-                    }
-                }
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            if let Some(key) = load_keychain_master_key() {
-                return Some(key);
-            }
+        let os_key = try_load_os_master_key(storage_dir);
+        if os_key.is_some() {
+            return os_key;
         }
     }
 
-    if let Ok(raw) = std::fs::read(storage_dir.join(VAULT_PLAIN_KEY_FILE)) {
-        if let Ok(arr) = <[u8; 16]>::try_from(raw.as_slice()) {
-            return Some(arr);
-        }
-    }
-    None
+    let raw = std::fs::read(storage_dir.join(VAULT_PLAIN_KEY_FILE)).ok()?;
+    <[u8; 16]>::try_from(raw.as_slice()).ok()
 }
 
 fn load_or_create_master_key(storage_dir: &Path, is_portable: bool) -> Result<[u8; 16], String> {
@@ -234,21 +257,8 @@ fn load_or_create_master_key(storage_dir: &Path, is_portable: bool) -> Result<[u
     std::fs::create_dir_all(storage_dir).map_err(|e| e.to_string())?;
     let new_key = *Uuid::new_v4().as_bytes();
 
-    if !is_portable {
-        #[cfg(target_os = "windows")]
-        {
-            if let Some(protected) = win_dpapi::protect(&new_key) {
-                std::fs::write(storage_dir.join(VAULT_DPAPI_KEY_FILE), protected)
-                    .map_err(|e| e.to_string())?;
-                return Ok(new_key);
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            if store_keychain_master_key(&new_key) {
-                return Ok(new_key);
-            }
-        }
+    if !is_portable && try_store_os_master_key(storage_dir, &new_key)? {
+        return Ok(new_key);
     }
 
     write_restricted_key_file(&storage_dir.join(VAULT_PLAIN_KEY_FILE), &new_key)?;
