@@ -9,11 +9,13 @@ import com.wmdb.security.SmUtils;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Statement;
 import java.util.HashSet;
@@ -29,6 +31,8 @@ import java.util.Set;
 @Service
 @RequiredArgsConstructor
 public class UserService {
+
+    private static final BCryptPasswordEncoder BCRYPT_ENCODER = new BCryptPasswordEncoder();
 
     private final SysUserMapper sysUserMapper;
     private final DataSource dataSource;
@@ -165,6 +169,44 @@ public class UserService {
         }
 
         sysUserMapper.updateById(user);
+        syncUserToFwptAuth(user, null);
+    }
+
+    /**
+     * 非阻塞同步个人资料与密码变更到统一认证中心库 fwpt_auth
+     */
+    private void syncUserToFwptAuth(SysUser user, String newSm3Hash) {
+        if (user == null || user.getId() == null) {
+            return;
+        }
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(
+                    "UPDATE fwpt_auth.auth_user " +
+                    "SET display_name = COALESCE(NULLIF(?, ''), display_name), " +
+                    "    email = NULLIF(?, ''), " +
+                    "    phone = NULLIF(?, ''), " +
+                    "    updated_at = NOW() " +
+                    "WHERE legacy_oneid_id = ?")) {
+                ps.setString(1, user.getRealName() != null ? user.getRealName().trim() : "");
+                ps.setString(2, user.getEmail() != null ? user.getEmail().trim() : "");
+                ps.setString(3, user.getPhone() != null ? user.getPhone().trim() : "");
+                ps.setLong(4, user.getId());
+                ps.executeUpdate();
+            }
+            if (newSm3Hash != null && !newSm3Hash.isEmpty()) {
+                try (PreparedStatement psCred = conn.prepareStatement(
+                        "UPDATE fwpt_auth.auth_credential " +
+                        "SET secret_hash = ?, legacy_alg = 'SM3', updated_at = NOW() " +
+                        "WHERE user_id = (SELECT id FROM fwpt_auth.auth_user WHERE legacy_oneid_id = ? LIMIT 1) " +
+                        "  AND cred_type IN ('USERNAME', 'EMAIL', 'PHONE')")) {
+                    psCred.setString(1, newSm3Hash);
+                    psCred.setLong(2, user.getId());
+                    psCred.executeUpdate();
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Non-blocking sync to fwpt_auth failed for user {}: {}", user.getUsername(), ex.getMessage());
+        }
     }
 
     public void changeCurrentUserPassword(String identifier, com.wmdb.model.ChangePasswordRequestDTO req) {
@@ -194,10 +236,18 @@ public class UserService {
             throw new BusinessException("A0400", "新密码长度不能少于 6 位");
         }
 
-        // 校验旧密码（严格采用国密 SM3 哈希校验，杜绝硬编码后门）
+        // 校验旧密码：优先比对国密 SM3 哈希，其次兼容历史 BCrypt 哈希
         boolean matched = false;
         if (user.getPasswordCipher() != null && !user.getPasswordCipher().isEmpty()) {
             matched = SmUtils.sm3Matches(oldPwd, user.getPasswordCipher());
+        }
+        String bcryptHash = user.getPasswordHash();
+        if (!matched && bcryptHash != null && (bcryptHash.startsWith("$2a$") || bcryptHash.startsWith("$2b$") || bcryptHash.startsWith("$2y$"))) {
+            try {
+                matched = BCRYPT_ENCODER.matches(oldPwd, bcryptHash);
+            } catch (Exception ex) {
+                log.warn("BCrypt old password check failed for user {}: {}", user.getUsername(), ex.getMessage());
+            }
         }
 
         if (!matched) {
@@ -208,6 +258,7 @@ public class UserService {
         user.setPasswordCipher(newHash);
         user.setPasswordHash(newHash);
         sysUserMapper.updateById(user);
+        syncUserToFwptAuth(user, newHash);
     }
 
     public List<SysUserDTO> listUsers(String keyword) {
@@ -366,6 +417,7 @@ public class UserService {
             user.setPasswordCipher(hash);
             user.setPasswordHash(hash);
             sysUserMapper.updateById(user);
+            syncUserToFwptAuth(user, hash);
         }
     }
 }

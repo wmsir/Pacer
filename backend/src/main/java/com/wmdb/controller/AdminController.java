@@ -111,6 +111,7 @@ public class AdminController {
         systemStats.put("磐石密码本", 0L);
         systemStats.put("斑马 ERP", 0L);
         systemStats.put("开发者工具箱", 0L);
+        systemStats.put("小悦笔记", 0L);
 
         Long totalTraces = 0L;
         try {
