@@ -179,13 +179,14 @@ fn encode_hex(bytes: &[u8; 16]) -> String {
 
 #[cfg(target_os = "macos")]
 fn decode_hex_16(raw: &str) -> Option<[u8; 16]> {
-    if raw.len() != 32 {
+    let (chunks, rem) = raw.as_bytes().as_chunks::<2>();
+    if !rem.is_empty() || chunks.len() != 16 {
         return None;
     }
     let mut out = [0u8; 16];
-    for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
-        let hex_pair = core::str::from_utf8(chunk).ok()?;
-        out[idx] = u8::from_str_radix(hex_pair, 16).ok()?;
+    for (dst, pair) in out.iter_mut().zip(chunks.iter()) {
+        let hex_pair = core::str::from_utf8(pair).ok()?;
+        *dst = u8::from_str_radix(hex_pair, 16).ok()?;
     }
     Some(out)
 }
