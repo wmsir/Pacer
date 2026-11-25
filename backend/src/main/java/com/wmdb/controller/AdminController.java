@@ -13,6 +13,8 @@ import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.*;
 
 import java.sql.Timestamp;
@@ -340,20 +342,28 @@ public class AdminController {
     }
 
     /**
-     * 4. 记录各端跨系统交互动作与使用轨迹（公开上报接口）
+     * 4. 记录各端跨系统交互动作与使用轨迹（已鉴权用户上报）
      */
     @Operation(summary = "跨系统使用轨迹上报", description = "各子系统与客户端漫游时上报当前模块进入与核心操作")
     @PostMapping("/record-trace")
     public Result<Map<String, String>> recordTrace(@RequestBody RecordTraceRequest req, HttpServletRequest request) {
-        if (req.getUsername() == null || req.getUsername().trim().isEmpty()) {
-            return Result.success(Map.of("status", "skipped", "message", "匿名访问暂不上报"));
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String authSubject = (auth != null && auth.isAuthenticated() && !"anonymousUser".equals(auth.getPrincipal()))
+                ? String.valueOf(auth.getPrincipal()).trim() : "";
+        if (authSubject.isEmpty()) {
+            return Result.error("A0220", "请先登录后再上报系统轨迹");
         }
+        SysUser user = sysUserMapper.selectOne(new QueryWrapper<SysUser>()
+                .eq("id_card", authSubject).or().eq("username", authSubject).last("LIMIT 1"));
+        String verifiedUsername = (user != null && user.getUsername() != null && !user.getUsername().trim().isEmpty())
+                ? user.getUsername().trim() : authSubject;
 
-        String clientIp = request.getHeader("X-Forwarded-For");
-        if (clientIp == null || clientIp.isEmpty()) {
-            clientIp = request.getRemoteAddr();
-        } else if (clientIp.contains(",")) {
-            clientIp = clientIp.split(",")[0].trim();
+        String clientIp = request.getHeader("X-Real-IP");
+        if (clientIp == null || clientIp.trim().isEmpty()) {
+            String xff = request.getHeader("X-Forwarded-For");
+            clientIp = (xff != null && !xff.trim().isEmpty()) ? xff.split(",")[0].trim() : request.getRemoteAddr();
+        } else {
+            clientIp = clientIp.trim();
         }
 
         String sysName = (req.getSystemName() != null && !req.getSystemName().trim().isEmpty())
@@ -365,7 +375,7 @@ public class AdminController {
         try {
             jdbcTemplate.update(
                     "INSERT INTO sys_audit_log (tenant_id, username, resource_type, operation, details, ip_address, result, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    1L, req.getUsername().trim(), sysName, operation, details, clientIp, "SUCCESS", new Timestamp(System.currentTimeMillis())
+                    1L, verifiedUsername, sysName, operation, details, clientIp, "SUCCESS", new Timestamp(System.currentTimeMillis())
             );
         } catch (Exception e) {
             log.warn("[AdminController] 记录轨迹日志写入失败: {}", e.getMessage());

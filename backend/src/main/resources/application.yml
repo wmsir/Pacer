@@ -70,3 +70,10 @@ wmdb:
     password: ${WMDB_MAIL_PASSWORD:}
     sender-name: ${WMDB_MAIL_SENDER_NAME:FWPT 官方支持}
     enabled: ${WMDB_MAIL_ENABLED:true}
+
+# 生产默认关闭 OpenAPI / Swagger 文档界面
+springdoc:
+  api-docs:
+    enabled: ${WMDB_SWAGGER_ENABLED:false}
+  swagger-ui:
+    enabled: ${WMDB_SWAGGER_ENABLED:false}
