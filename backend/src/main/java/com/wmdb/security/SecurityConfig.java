@@ -53,10 +53,20 @@ public class SecurityConfig {
                 "http://localhost:*",
                 "http://127.0.0.1:*",
                 "tauri://localhost",
-                "https://tauri.localhost"
+                "http://tauri.localhost",
+                "http://tauri.localhost:*",
+                "https://tauri.localhost",
+                "https://tauri.localhost:*",
+                "capacitor://localhost",
+                "https://localhost",
+                "chrome-extension://*",
+                "moz-extension://*",
+                "edge-extension://*"
         ));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "X-Tenant-Id", "X-Requested-With", "Accept"));
+        configuration.setAllowedHeaders(Arrays.asList(
+                "Authorization", "Content-Type", "X-Tenant-Id", "X-Requested-With", "Accept", "X-RockVault-Version"
+        ));
         configuration.setExposedHeaders(Arrays.asList("Authorization"));
         configuration.setAllowCredentials(true);
         configuration.setMaxAge(3600L);
