@@ -1,5 +1,4 @@
 import { Channel, invoke } from '@tauri-apps/api/core';
-import { open as dialogOpen, save as dialogSave } from '@tauri-apps/plugin-dialog';
 
 export type EnvLevel = 'DEV' | 'TEST' | 'PROD' | 'UNKNOWN';
 export type SqlAccessKind = 'READ_ONLY' | 'WRITE_DML' | 'WRITE_DDL' | 'ADMIN_OR_DCL' | 'UNKNOWN';
@@ -360,188 +359,134 @@ function assertTauri(): void {
   }
 }
 
-export async function pickTextFileToOpen(): Promise<string | null> {
+interface DialogFilterArg {
+  name: string;
+  extensions: string[];
+}
+
+async function pickViaBackendDialog(
+  kind: 'openFile' | 'openTextFile' | 'openDir' | 'saveFile',
+  defaultPath?: string,
+  filters?: DialogFilterArg[],
+): Promise<string | null> {
   assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: false,
-    filters: [
-      { name: 'SQL & Markdown', extensions: ['md', 'markdown', 'sql', 'ddl', 'dml', 'txt'] },
-      { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
-      { name: 'SQL 脚本', extensions: ['sql', 'ddl', 'dml', 'psql'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
+  return invoke<string | null>('pick_dialog_path_cmd', {
+    kind,
+    defaultPath: defaultPath ?? null,
+    filters: filters ?? null,
   });
-  return typeof res === 'string' ? res : null;
+}
+
+export async function pickTextFileToOpen(): Promise<string | null> {
+  return pickViaBackendDialog('openTextFile', undefined, [
+    { name: 'SQL & Markdown', extensions: ['md', 'markdown', 'sql', 'ddl', 'dml', 'txt'] },
+    { name: 'Markdown', extensions: ['md', 'markdown', 'mdx'] },
+    { name: 'SQL 脚本', extensions: ['sql', 'ddl', 'dml', 'psql'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickDirectoryToMount(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: true,
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openDir');
 }
 
 export async function pickSaveFilePath(defaultPath?: string): Promise<string | null> {
-  assertTauri();
-  const res = await dialogSave({
-    defaultPath,
-    filters: [
-      { name: 'SQL / Markdown', extensions: ['sql', 'md', 'txt'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    { name: 'SQL / Markdown', extensions: ['sql', 'md', 'txt'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickDbeaverImportFile(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: false,
-    filters: [
-      { name: 'DBeaver Connections (JSON / DBP / ZIP / XML)', extensions: ['json', 'dbp', 'zip', 'xml'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openFile', undefined, [
+    { name: 'DBeaver Connections (JSON / DBP / ZIP / XML)', extensions: ['json', 'dbp', 'zip', 'xml'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickDbeaverFolder(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: true,
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openDir');
 }
 
 export async function pickSaveDbeaverDbpPath(
   defaultPath = 'pacer-dbeaver-export.dbp',
 ): Promise<string | null> {
-  assertTauri();
-  const res = await dialogSave({
-    defaultPath,
-    filters: [
-      { name: 'DBeaver Project Archive (.dbp)', extensions: ['dbp', 'zip'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    { name: 'DBeaver Project Archive (.dbp)', extensions: ['dbp', 'zip'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickSaveXlsxPath(defaultPath = 'export.xlsx'): Promise<string | null> {
-  assertTauri();
-  const res = await dialogSave({
-    defaultPath,
-    filters: [
-      { name: 'Excel 工作簿 (.xlsx)', extensions: ['xlsx'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    { name: 'Excel 工作簿 (.xlsx)', extensions: ['xlsx'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickExportFolderPath(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: true,
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openDir');
 }
 
 export async function pickCertificateOrKeyFile(
   kind: 'cert' | 'key' = 'cert',
 ): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: false,
-    filters: [
-      {
-        name: kind === 'key' ? 'Private Key / Identity Files' : 'Certificates / PEM Files',
-        extensions: ['pem', 'crt', 'cer', 'key', 'p12', 'pfx', 'ppk'],
-      },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openFile', undefined, [
+    {
+      name: kind === 'key' ? 'Private Key / Identity Files' : 'Certificates / PEM Files',
+      extensions: ['pem', 'crt', 'cer', 'key', 'p12', 'pfx', 'ppk'],
+    },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickDataImportFile(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: false,
-    filters: [
-      { name: 'Excel / CSV / TSV / JSON Data', extensions: ['xlsx', 'csv', 'tsv', 'json', 'txt'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openFile', undefined, [
+    { name: 'Excel / CSV / TSV / JSON Data', extensions: ['xlsx', 'csv', 'tsv', 'json', 'txt'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickQueryExportPath(
   defaultPath: string,
   format: 'csv' | 'xlsx' | 'json',
 ): Promise<string | null> {
-  assertTauri();
   const filter =
     format === 'xlsx'
       ? { name: 'Excel 工作簿 (.xlsx)', extensions: ['xlsx'] }
       : format === 'csv'
         ? { name: 'CSV 表格 (.csv)', extensions: ['csv'] }
         : { name: 'JSON 数据 (.json)', extensions: ['json'] };
-  const res = await dialogSave({
-    defaultPath,
-    filters: [filter, { name: '所有文件', extensions: ['*'] }],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    filter,
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickSaveSqlDumpPath(defaultPath = 'dump.sql'): Promise<string | null> {
-  assertTauri();
-  const res = await dialogSave({
-    defaultPath,
-    filters: [
-      { name: 'SQL 转储文件 (.sql)', extensions: ['sql'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    { name: 'SQL 转储文件 (.sql)', extensions: ['sql'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickSqlScriptFile(): Promise<string | null> {
-  assertTauri();
-  const res = await dialogOpen({
-    multiple: false,
-    directory: false,
-    filters: [
-      { name: 'SQL 脚本文件 (.sql)', extensions: ['sql', 'txt'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('openFile', undefined, [
+    { name: 'SQL 脚本文件 (.sql)', extensions: ['sql', 'txt'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function pickSaveDocPath(
   defaultPath: string,
   format: 'md' | 'html',
 ): Promise<string | null> {
-  assertTauri();
-  const res = await dialogSave({
-    defaultPath,
-    filters: [
-      format === 'html'
-        ? { name: 'HTML 数据字典 (.html)', extensions: ['html', 'htm'] }
-        : { name: 'Markdown 数据字典 (.md)', extensions: ['md'] },
-      { name: '所有文件', extensions: ['*'] },
-    ],
-  });
-  return typeof res === 'string' ? res : null;
+  return pickViaBackendDialog('saveFile', defaultPath, [
+    format === 'html'
+      ? { name: 'HTML 数据字典 (.html)', extensions: ['html', 'htm'] }
+      : { name: 'Markdown 数据字典 (.md)', extensions: ['md'] },
+    { name: '所有文件', extensions: ['*'] },
+  ]);
 }
 
 export async function listProjects(): Promise<WorkspaceProject[]> {
@@ -667,7 +612,7 @@ export async function exportDbeaverFolder(
 
 export async function exportConnectionsXlsx(
   path: string,
-  includePasswords = true,
+  includePasswords = false,
   profileIds?: string[],
 ): Promise<ExportResultDto> {
   assertTauri();

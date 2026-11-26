@@ -12,6 +12,7 @@ use std::time::Duration;
 use pacer_core::{
     ConnectionOptionsConfig, CoreError, CoreResult, DbBackend, DbEngineType, DirectConfig,
 };
+use pacer_sql_ast::{analyze_sql, SqlAccessKind};
 
 pub use clickhouse::ClickHouseBackend;
 pub use mysql::MySqlBackend;
@@ -149,6 +150,43 @@ pub(crate) fn classify_tx_statement(sql: &str) -> TxStatementKind {
         }
         _ => TxStatementKind::Other,
     }
+}
+
+/// Validates SQL before running driver `explain()` to block multi-statement injection,
+/// `EXPLAIN ANALYZE <DML>`, DDL/DCL, and non-read-only operations on read-only connections.
+pub fn validate_explain_sql(sql: &str, engine: &DbEngineType, read_only: bool) -> CoreResult<()> {
+    let analysis = analyze_sql(sql, engine);
+    if analysis.statements.is_empty() {
+        return Err(CoreError::InvalidConfig(
+            "EXPLAIN 需要提供有效的 SQL 语句".to_string(),
+        ));
+    }
+    if analysis.statements.len() > 1 {
+        return Err(CoreError::PermissionDenied(
+            "安全限制：EXPLAIN 仅允许单条 SQL 语句，禁止拼接多条语句".to_string(),
+        ));
+    }
+    let stmt = &analysis.statements[0];
+    let is_read_only = matches!(analysis.overall_kind, SqlAccessKind::ReadOnly);
+    if read_only && !is_read_only {
+        return Err(CoreError::PermissionDenied(
+            "Connection is marked read-only; EXPLAIN of mutating/DDL/unknown SQL blocked"
+                .to_string(),
+        ));
+    }
+    if !is_read_only
+        && (stmt.statement_type.starts_with("EXPLAIN_ANALYZE_")
+            || matches!(
+                analysis.overall_kind,
+                SqlAccessKind::WriteDdl | SqlAccessKind::AdminOrDcl | SqlAccessKind::Unknown
+            ))
+    {
+        return Err(CoreError::PermissionDenied(format!(
+            "安全限制：禁止通过 EXPLAIN 执行高危或会实际修改数据的语句 ({})",
+            stmt.statement_type
+        )));
+    }
+    Ok(())
 }
 
 /// Connects directly to a supported database engine using native Rust async drivers.
@@ -404,6 +442,22 @@ mod tests {
         assert!(!explain.rows.is_empty());
 
         drop(backend);
+
+        let ro = connect_direct(&sqlite_config(&tmp, true), None)
+            .await
+            .unwrap();
+        let err_ea = ro
+            .explain("main", "EXPLAIN ANALYZE DELETE FROM orders WHERE id = 1;")
+            .await
+            .unwrap_err();
+        assert!(matches!(err_ea, CoreError::PermissionDenied(_)));
+        let err_multi = ro
+            .explain("main", "SELECT 1; DROP TABLE orders;")
+            .await
+            .unwrap_err();
+        assert!(matches!(err_multi, CoreError::PermissionDenied(_)));
+        drop(ro);
+
         let _ = std::fs::remove_file(&tmp);
     }
 

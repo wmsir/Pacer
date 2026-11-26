@@ -355,7 +355,7 @@ const connForm = reactive<{
   sshPassphrase: '',
   sshLocalPort: '',
   sslEnabled: false,
-  sslMode: 'preferred',
+  sslMode: 'verify_identity',
   sslCaCert: '',
   sslUseIdeTruststore: true,
   sslUseSystemTruststore: true,
@@ -635,7 +635,7 @@ function buildDraftPayload(): ConnectionDraft {
 
   const sslConfig: SslConfig = {
     enabled: connForm.sslEnabled && connForm.sslMode !== 'disabled',
-    mode: connForm.sslEnabled ? connForm.sslMode || 'preferred' : 'disabled',
+    mode: connForm.sslEnabled ? connForm.sslMode || 'verify_identity' : 'disabled',
     caCert: connForm.sslCaCert.trim() || null,
     clientCert: connForm.sslClientCert.trim() || null,
     clientKey: connForm.sslClientKey.trim() || null,
@@ -697,7 +697,7 @@ function buildDraftPayload(): ConnectionDraft {
     passwordSaveMode: connForm.passwordSaveMode,
     socketPath: connForm.connectionType === 'socket' ? connForm.socketPath.trim() || null : null,
     driverProperties: propsMap,
-    sslMode: connForm.sslEnabled ? connForm.sslMode || 'preferred' : connForm.sslMode === 'disabled' ? 'disabled' : null,
+    sslMode: connForm.sslEnabled ? connForm.sslMode || 'verify_identity' : connForm.sslMode === 'disabled' ? 'disabled' : null,
     ssl: connForm.sslEnabled || connForm.sslCaCert.trim() || connForm.sslClientCert.trim() || connForm.sslMode === 'disabled' ? sslConfig : null,
     ssh: sshConfig,
     schemaPattern: connForm.schemaPattern.trim() || null,
@@ -1071,7 +1071,7 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
       connForm.sshLocalPort = cfg.ssh?.localPort ? String(cfg.ssh.localPort) : '';
       // SSL
       connForm.sslEnabled = Boolean(cfg.ssl?.enabled);
-      connForm.sslMode = cfg.ssl?.mode ?? (cfg.ssl && !cfg.ssl.enabled ? 'disabled' : 'preferred');
+      connForm.sslMode = cfg.ssl?.mode ?? (cfg.ssl && !cfg.ssl.enabled ? 'disabled' : 'verify_identity');
       connForm.sslCaCert = cfg.ssl?.caCert ?? '';
       connForm.sslUseIdeTruststore = cfg.ssl?.useIdeTruststore ?? true;
       connForm.sslUseSystemTruststore = cfg.ssl?.useSystemTruststore ?? true;
@@ -1134,7 +1134,7 @@ function applyEditingProfileToForm(prof: ConnectionProfile | null) {
       connForm.sshPassphrase = '';
       connForm.sshLocalPort = '';
       connForm.sslEnabled = false;
-      connForm.sslMode = 'preferred';
+      connForm.sslMode = 'verify_identity';
       connForm.sslCaCert = '';
       connForm.sslUseIdeTruststore = true;
       connForm.sslUseSystemTruststore = true;
@@ -1276,7 +1276,7 @@ async function browseDbeaverFolder() {
   }
 }
 
-const exportIncludePasswords = ref(true);
+const exportIncludePasswords = ref(false);
 
 async function copyExportedJson() {
   if (!props.exportedJson) return;
@@ -2496,10 +2496,11 @@ function runImportLiveTemplates() {
             <div class="conn-row">
               <label class="conn-row-label">校验模式 (Mode):</label>
               <select v-model="connForm.sslMode" class="field" style="max-width: 240px" :disabled="!connForm.sslEnabled">
-                <option value="preferred">Preferred（优先加密）</option>
-                <option value="required">Require（必须加密）</option>
+                <option value="verify_identity">Verify Identity（严格校验主机名与证书）</option>
                 <option value="verify_ca">Verify CA（校验证书链）</option>
-                <option value="verify_identity">Verify Identity（严格校验主机名）</option>
+                <option value="required">Require（必须加密且校验证书）</option>
+                <option value="preferred">Preferred（优先加密且校验证书）</option>
+                <option value="insecure">Insecure（跳过证书校验 · 仅限受信任内网）</option>
               </select>
             </div>
           </div>

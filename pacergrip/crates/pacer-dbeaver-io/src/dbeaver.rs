@@ -8,6 +8,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
+use zeroize::Zeroize;
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
@@ -909,22 +910,30 @@ pub fn encrypt_dbeaver_credentials(
         root.insert(key.clone(), Value::Object(entry));
     }
 
-    let json_bytes = serde_json::to_vec_pretty(&Value::Object(root))
+    let mut json_bytes = serde_json::to_vec_pretty(&Value::Object(root))
         .map_err(|e| CoreError::ParseError(format!("序列化 DBeaver 凭证 JSON 失败: {e}")))?;
 
     let iv = *Uuid::new_v4().as_bytes();
     let pt_len = json_bytes.len();
     let mut buf = vec![0u8; pt_len + 16];
     buf[..pt_len].copy_from_slice(&json_bytes);
-    let enc = Aes128CbcEnc::new_from_slices(&DBEAVER_LOCAL_AES_KEY, &iv)
-        .map_err(|e| CoreError::ParseError(format!("初始化 DBeaver AES 加密器失败: {e}")))?;
-    let ct = enc
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len)
-        .map_err(|e| CoreError::ParseError(format!("加密 DBeaver 凭证失败: {e}")))?;
+    json_bytes.zeroize();
+    let enc = Aes128CbcEnc::new_from_slices(&DBEAVER_LOCAL_AES_KEY, &iv).map_err(|e| {
+        buf.zeroize();
+        CoreError::ParseError(format!("初始化 DBeaver AES 加密器失败: {e}"))
+    })?;
+    let ct_len = match enc.encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len) {
+        Ok(ct) => ct.len(),
+        Err(e) => {
+            buf.zeroize();
+            return Err(CoreError::ParseError(format!("加密 DBeaver 凭证失败: {e}")));
+        }
+    };
 
-    let mut out = Vec::with_capacity(16 + ct.len());
+    let mut out = Vec::with_capacity(16 + ct_len);
     out.extend_from_slice(&iv);
-    out.extend_from_slice(ct);
+    out.extend_from_slice(&buf[..ct_len]);
+    buf.zeroize();
     Ok(out)
 }
 
@@ -1084,14 +1093,19 @@ pub fn decrypt_dbeaver_credentials(
 
     let (iv, ciphertext) = raw_bytes.split_at(16);
     let mut buf = ciphertext.to_vec();
-    let dec = Aes128CbcDec::new_from_slices(&DBEAVER_LOCAL_AES_KEY, iv)
-        .map_err(|e| CoreError::ParseError(format!("AES 初始化失败: {e}")))?;
-    let decrypted = dec
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| CoreError::ParseError("无法解密 DBeaver credentials-config.json".to_string()))?;
-
-    let val: Value = serde_json::from_slice(decrypted)
-        .map_err(|e| CoreError::ParseError(format!("credentials-config.json JSON 无效: {e}")))?;
+    let dec = Aes128CbcDec::new_from_slices(&DBEAVER_LOCAL_AES_KEY, iv).map_err(|e| {
+        buf.zeroize();
+        CoreError::ParseError(format!("AES 初始化失败: {e}"))
+    })?;
+    let parsed = match dec.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+        Ok(decrypted) => serde_json::from_slice::<Value>(decrypted)
+            .map_err(|e| CoreError::ParseError(format!("credentials-config.json JSON 无效: {e}"))),
+        Err(_) => Err(CoreError::ParseError(
+            "无法解密 DBeaver credentials-config.json".to_string(),
+        )),
+    };
+    buf.zeroize();
+    let val = parsed?;
     Ok(extract_credentials_from_json(&val))
 }
 

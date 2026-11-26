@@ -13,3 +13,4 @@ zip.workspace = true
 uuid.workspace = true
 aes.workspace = true
 cbc.workspace = true
+zeroize.workspace = true

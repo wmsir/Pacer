@@ -147,6 +147,11 @@ pub fn build_ssh_args(
 
     if matches!(auth_norm.as_str(), "KEY_PAIR" | "KEY" | "PUBLIC_KEY") {
         if let Some(key_path) = ssh.key_file.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            if key_path.starts_with('-') || key_path.chars().any(char::is_control) {
+                return Err(CoreError::InvalidConfig(
+                    "SSH 私钥路径不能以 '-' 开头或包含控制字符".to_string(),
+                ));
+            }
             args.push("-i".to_string());
             args.push(expand_tilde(key_path));
         }
@@ -184,7 +189,11 @@ fn create_askpass_script(env_var: &str) -> CoreResult<PathBuf> {
     #[cfg(target_os = "windows")]
     let path = {
         let p = std::env::temp_dir().join(format!("pacer_askpass_{seq}_{rand_id}.cmd"));
-        let body = format!("@echo off\r\nsetlocal EnableDelayedExpansion\r\necho(!{env_var}!\r\n");
+        // Avoid `cmd.exe` EnableDelayedExpansion (corrupts `!`) and `%VAR%` expansion (metacharacter injection)
+        // by reading the secret directly from the process environment via PowerShell.
+        let body = format!(
+            "@echo off\r\n\"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -NonInteractive -Command \"[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; [Console]::Out.WriteLine([Environment]::GetEnvironmentVariable('{env_var}'))\"\r\n"
+        );
         std::fs::write(&p, body.as_bytes()).map_err(|e| {
             CoreError::Transport(format!("Failed writing temporary SSH askpass helper: {e}"))
         })?;
@@ -394,5 +403,25 @@ mod tests {
 
         let free_port = allocate_local_port(None).unwrap();
         assert!(free_port > 0);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_windows_askpass_preserves_bang_and_shell_metacharacters() {
+        let env_key = "PACER_TEST_ASKPASS_SECRET";
+        let secret = "P@ss!w0rd!%&|<>^\"'test!";
+        let script_path = create_askpass_script(env_key).unwrap();
+        let content = std::fs::read_to_string(&script_path).unwrap();
+        assert!(!content.contains("EnableDelayedExpansion"));
+
+        let out = Command::new("cmd")
+            .args(["/c", &script_path.to_string_lossy()])
+            .env(env_key, secret)
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_file(&script_path);
+        assert!(out.status.success());
+        let printed = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(printed.trim_end_matches(&['\r', '\n'][..]), secret);
     }
 }

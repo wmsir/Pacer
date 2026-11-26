@@ -669,6 +669,7 @@ impl DbBackend for SqliteBackend {
     }
 
     async fn explain(&self, _db: &str, sql: &str) -> CoreResult<ExplainResult> {
+        crate::validate_explain_sql(sql, &DbEngineType::Sqlite, self.read_only)?;
         let started = Instant::now();
         let trimmed = sql.trim().trim_end_matches(';');
         let explain_sql = if trimmed.to_ascii_uppercase().starts_with("EXPLAIN") {

@@ -31,6 +31,7 @@ struct SqlServerEndpoint {
     default_db: Option<String>,
     ssl_enabled: bool,
     trust_cert: bool,
+    ca_cert: Option<String>,
 }
 
 #[derive(Default)]
@@ -85,6 +86,8 @@ async fn connect_tiberius(
         cfg.encryption(EncryptionLevel::Required);
         if ep.trust_cert {
             cfg.trust_cert();
+        } else if let Some(ref ca) = ep.ca_cert {
+            cfg.trust_cert_ca(ca);
         }
     } else {
         cfg.encryption(EncryptionLevel::Off);
@@ -126,11 +129,14 @@ impl SqlServerBackend {
         };
 
         let ssl_enabled = config.ssl.as_ref().is_some_and(|s| s.enabled);
-        let trust_cert = config
+        let trust_cert = should_trust_sqlserver_cert(config);
+        let ca_cert = config
             .ssl
             .as_ref()
-            .and_then(|s| s.mode.as_deref())
-            .is_none_or(|m| !matches!(m.to_ascii_lowercase().as_str(), "verify-full" | "verify-ca"));
+            .and_then(|s| s.ca_cert.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string);
 
         let endpoint = SqlServerEndpoint {
             connect_host,
@@ -151,6 +157,7 @@ impl SqlServerBackend {
                 .map(str::to_string),
             ssl_enabled,
             trust_cert,
+            ca_cert,
         };
 
         let mut client = connect_tiberius(&endpoint, None).await?;
@@ -863,6 +870,7 @@ impl DbBackend for SqlServerBackend {
     }
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
+        crate::validate_explain_sql(sql, &DbEngineType::SqlServer, self.read_only)?;
         let started = Instant::now();
         let mut guard = self.client.lock().await;
         if !db.trim().is_empty() {
@@ -870,7 +878,10 @@ impl DbBackend for SqlServerBackend {
                 .execute(format!("USE {};", quote_tsql_ident(db.trim())).as_str(), &[])
                 .await;
         }
-        let _ = guard.execute("SET SHOWPLAN_TEXT ON", &[]).await;
+        guard
+            .execute("SET SHOWPLAN_TEXT ON", &[])
+            .await
+            .map_err(|e| CoreError::ExecutionFailed(format!("启用 SQL Server SHOWPLAN_TEXT 失败: {e}")))?;
         let res = exec_tiberius_collect(&mut guard, sql, None).await;
         let _ = guard.execute("SET SHOWPLAN_TEXT OFF", &[]).await;
         match res {
@@ -983,5 +994,61 @@ impl DbBackend for SqlServerBackend {
 
     fn capabilities(&self) -> CapabilityFlags {
         CapabilityFlags::direct_full(self.read_only)
+    }
+}
+
+fn should_trust_sqlserver_cert(config: &DirectConfig) -> bool {
+    config
+        .ssl
+        .as_ref()
+        .and_then(|s| s.mode.as_deref())
+        .is_some_and(|m| {
+            matches!(
+                m.trim().to_ascii_lowercase().as_str(),
+                "insecure" | "skip-verify" | "skip_verify" | "no-verify" | "disable" | "disabled"
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sqlserver_tls_verifies_by_default_and_only_skips_on_explicit_insecure() {
+        let base_ssl = |mode: Option<&str>| DirectConfig {
+            db_type: DbEngineType::SqlServer,
+            host: Some("db.internal".to_string()),
+            port: Some(1433),
+            database: None,
+            jdbc_url: "jdbc:sqlserver://db.internal:1433".to_string(),
+            driver_ref: None,
+            driver_class: None,
+            username: Some("sa".to_string()),
+            driver_properties: BTreeMap::new(),
+            ssh: None,
+            ssl: Some(pacer_core::SslConfig {
+                enabled: true,
+                mode: mode.map(ToString::to_string),
+                ..Default::default()
+            }),
+            read_only: false,
+            schema_pattern: None,
+            object_filter: None,
+            options: None,
+            connection_type: None,
+            auth_type: None,
+            password_save_mode: None,
+            socket_path: None,
+            has_saved_password: false,
+        };
+
+        assert!(!should_trust_sqlserver_cert(&base_ssl(None)));
+        assert!(!should_trust_sqlserver_cert(&base_ssl(Some("preferred"))));
+        assert!(!should_trust_sqlserver_cert(&base_ssl(Some("required"))));
+        assert!(!should_trust_sqlserver_cert(&base_ssl(Some("verify_ca"))));
+        assert!(!should_trust_sqlserver_cert(&base_ssl(Some("verify_identity"))));
+        assert!(should_trust_sqlserver_cert(&base_ssl(Some("insecure"))));
+        assert!(should_trust_sqlserver_cert(&base_ssl(Some("disable"))));
     }
 }

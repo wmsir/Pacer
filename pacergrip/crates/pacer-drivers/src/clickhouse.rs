@@ -109,11 +109,14 @@ impl ClickHouseBackend {
                     CoreError::InvalidConfig(format!("解析 ClickHouse PEM 证书失败 ({ca}): {e}"))
                 })?;
                 builder = builder.add_root_certificate(cert);
-            } else if matches!(
-                ssl_mode_low.as_deref(),
-                Some("require" | "required" | "prefer" | "preferred" | "allow" | "insecure" | "skip-verify")
-            ) {
-                builder = builder.danger_accept_invalid_certs(true);
+            }
+            let mode_ref = ssl_mode_low.as_deref();
+            if should_skip_ch_tls_verify(mode_ref) {
+                builder = builder
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true);
+            } else if should_skip_ch_tls_hostname(mode_ref) {
+                builder = builder.danger_accept_invalid_hostnames(true);
             }
         }
         let client = builder
@@ -280,6 +283,17 @@ fn normalize_ch_value(val: Value) -> Value {
         }
         other => other,
     }
+}
+
+fn should_skip_ch_tls_verify(ssl_mode: Option<&str>) -> bool {
+    matches!(
+        ssl_mode.map(str::trim),
+        Some("insecure" | "skip-verify" | "skip_verify" | "no-verify" | "disable" | "disabled")
+    )
+}
+
+fn should_skip_ch_tls_hostname(ssl_mode: Option<&str>) -> bool {
+    should_skip_ch_tls_verify(ssl_mode) || matches!(ssl_mode.map(str::trim), Some("verify-ca" | "verify_ca"))
 }
 
 fn escape_ch_str(s: &str) -> String {
@@ -853,6 +867,7 @@ impl DbBackend for ClickHouseBackend {
     }
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
+        crate::validate_explain_sql(sql, &DbEngineType::ClickHouse, self.read_only)?;
         let started = Instant::now();
         let clean = sql.trim().trim_end_matches(';');
         let explain_sql = if clean.to_ascii_uppercase().starts_with("EXPLAIN") {
@@ -1060,5 +1075,21 @@ mod tests {
         assert!(matches!(err, CoreError::PermissionDenied(_)));
 
         server.abort();
+    }
+
+    #[test]
+    fn test_clickhouse_tls_verification_defaults_strict() {
+        assert!(!should_skip_ch_tls_verify(None));
+        assert!(!should_skip_ch_tls_verify(Some("preferred")));
+        assert!(!should_skip_ch_tls_verify(Some("required")));
+        assert!(!should_skip_ch_tls_verify(Some("verify_ca")));
+        assert!(!should_skip_ch_tls_verify(Some("verify_identity")));
+        assert!(should_skip_ch_tls_verify(Some("insecure")));
+        assert!(should_skip_ch_tls_verify(Some("disable")));
+
+        assert!(!should_skip_ch_tls_hostname(Some("preferred")));
+        assert!(!should_skip_ch_tls_hostname(Some("required")));
+        assert!(should_skip_ch_tls_hostname(Some("verify_ca")));
+        assert!(!should_skip_ch_tls_hostname(Some("verify_identity")));
     }
 }

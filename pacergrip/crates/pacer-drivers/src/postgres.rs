@@ -949,6 +949,7 @@ impl DbBackend for PostgresBackend {
     }
 
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
+        crate::validate_explain_sql(sql, &self.engine_type, self.read_only)?;
         let started = Instant::now();
         let mut conn = self
             .pool

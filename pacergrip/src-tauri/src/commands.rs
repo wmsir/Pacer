@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, RwLock};
@@ -8,8 +8,15 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
+use tauri_plugin_dialog::DialogExt;
 use tokio::sync::{mpsc, oneshot, RwLock as AsyncRwLock};
 use uuid::Uuid;
+use zeroize::Zeroize;
+
+use pacer_core::files::{
+    canonicalize_existing_path, canonicalize_target_path, is_path_within_any_root,
+    reject_traversal_components,
+};
 
 use pacer_core::{
     load_vault_passwords, save_vault_passwords, AuditEvent, CapabilityFlags, ColumnMeta,
@@ -94,6 +101,9 @@ pub struct AppState {
     pub extensions: ExtensionRegistry,
     pub storage_dir: PathBuf,
     pub is_portable: bool,
+    pub approved_read_paths: RwLock<HashSet<PathBuf>>,
+    pub approved_write_paths: RwLock<HashSet<PathBuf>>,
+    pub approved_dirs: RwLock<HashSet<PathBuf>>,
 }
 
 impl AppState {
@@ -126,6 +136,20 @@ impl AppState {
         let history = load_history_from_disk(&storage_dir);
         let _ = std::fs::create_dir_all(storage_dir.join("consoles"));
         let _ = std::fs::create_dir_all(storage_dir.join("plugins"));
+        let _ = std::fs::create_dir_all(storage_dir.join("docs"));
+        let _ = std::fs::create_dir_all(storage_dir.join("exports"));
+
+        let mut initial_dirs = HashSet::new();
+        for proj in &projects {
+            if let Some(ref rd) = proj.root_dir {
+                if let Ok(canon) = canonicalize_existing_path(Path::new(rd)) {
+                    if canon.is_dir() {
+                        initial_dirs.insert(canon);
+                    }
+                }
+            }
+        }
+
         Self {
             projects: RwLock::new(projects),
             connections: RwLock::new(connections),
@@ -138,6 +162,245 @@ impl AppState {
             extensions: ExtensionRegistry::new(),
             storage_dir,
             is_portable,
+            approved_read_paths: RwLock::new(HashSet::new()),
+            approved_write_paths: RwLock::new(HashSet::new()),
+            approved_dirs: RwLock::new(initial_dirs),
+        }
+    }
+
+    fn protected_storage_paths(&self) -> Vec<PathBuf> {
+        let protected_names = [
+            "credentials.dat",
+            "vault.key",
+            "vault_v3.key",
+            "vault.dpapi",
+            "vault_v3.dpapi",
+            "connections.json",
+            "projects.json",
+            "history.json",
+            "demo_store.sqlite",
+            ".pacer-portable",
+            "pacer.portable",
+        ];
+        let base = canonicalize_existing_path(&self.storage_dir)
+            .unwrap_or_else(|_| self.storage_dir.clone());
+        protected_names
+            .into_iter()
+            .map(|name| base.join(name))
+            .collect()
+    }
+
+    fn is_protected_storage_target(&self, canonical_target: &Path) -> bool {
+        if let Ok(base) = canonicalize_existing_path(&self.storage_dir) {
+            if canonical_target == base {
+                return true;
+            }
+            if canonical_target.parent() == Some(base.as_path()) {
+                if let Some(fname) = canonical_target.file_name().and_then(|n| n.to_str()) {
+                    if fname.starts_with('.') || fname.ends_with(".tmp") {
+                        return true;
+                    }
+                }
+            }
+        }
+        let protected = self.protected_storage_paths();
+        is_path_within_any_root(canonical_target, &protected)
+    }
+
+    fn canonical_writable_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = Vec::new();
+        for sub in ["consoles", "docs", "exports"] {
+            if let Ok(c) = canonicalize_existing_path(&self.storage_dir.join(sub)) {
+                dirs.push(c);
+            }
+        }
+        if let Ok(guard) = self.approved_dirs.read() {
+            dirs.extend(guard.iter().cloned());
+        }
+        dirs
+    }
+
+    fn canonical_readable_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = self.canonical_writable_dirs();
+        if let Ok(c) = canonicalize_existing_path(&self.storage_dir.join("plugins")) {
+            dirs.push(c);
+        }
+        dirs
+    }
+
+    fn dbeaver_discovery_roots() -> Vec<PathBuf> {
+        let mut roots = Vec::new();
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            roots.push(PathBuf::from(&appdata).join("DBeaverData"));
+        }
+        if let Ok(userprofile) = std::env::var("USERPROFILE") {
+            roots.push(PathBuf::from(&userprofile).join(".dbeaver4"));
+            roots.push(
+                PathBuf::from(&userprofile)
+                    .join("AppData")
+                    .join("Roaming")
+                    .join("DBeaverData"),
+            );
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let h = PathBuf::from(&home);
+            roots.push(h.join("Library").join("DBeaverData"));
+            roots.push(h.join(".local").join("share").join("DBeaverData"));
+            roots.push(h.join(".dbeaver4"));
+        }
+        roots
+            .into_iter()
+            .filter_map(|p| canonicalize_existing_path(&p).ok())
+            .collect()
+    }
+
+    fn validate_read_path(&self, raw: &str) -> Result<PathBuf, String> {
+        let canon = canonicalize_existing_path(Path::new(raw)).map_err(map_err)?;
+        if self.is_protected_storage_target(&canon) {
+            return Err("安全限制：禁止直接读取内部状态或凭据库文件".to_string());
+        }
+        if self
+            .approved_read_paths
+            .read()
+            .is_ok_and(|g| g.contains(&canon))
+            || self
+                .approved_write_paths
+                .read()
+                .is_ok_and(|g| g.contains(&canon))
+        {
+            return Ok(canon);
+        }
+        if let Ok(handbook) = canonicalize_existing_path(&self.storage_dir.join("示例查询手册.md"))
+        {
+            if canon == handbook {
+                return Ok(canon);
+            }
+        }
+        let dirs = self.canonical_readable_dirs();
+        if is_path_within_any_root(&canon, &dirs) {
+            return Ok(canon);
+        }
+        Err(format!(
+            "安全限制：拒绝读取未授权工作区或未通过系统对话框选择的文件 ({raw})"
+        ))
+    }
+
+    fn validate_write_path(&self, raw: &str) -> Result<PathBuf, String> {
+        let canon = canonicalize_target_path(Path::new(raw), false).map_err(map_err)?;
+        if self.is_protected_storage_target(&canon) {
+            return Err("安全限制：禁止写入或覆盖内部状态或凭据库文件".to_string());
+        }
+        if let Ok(plugins_dir) = canonicalize_existing_path(&self.storage_dir.join("plugins")) {
+            if is_path_within_any_root(&canon, &[plugins_dir]) {
+                return Err("安全限制：禁止通过通用文件接口修改本地插件目录".to_string());
+            }
+        }
+        if self
+            .approved_write_paths
+            .read()
+            .is_ok_and(|g| g.contains(&canon))
+        {
+            return Ok(canon);
+        }
+        let dirs = self.canonical_writable_dirs();
+        if is_path_within_any_root(&canon, &dirs) {
+            return Ok(canon);
+        }
+        Err(format!(
+            "安全限制：拒绝写入未授权目录或未通过保存对话框选择的路径 ({raw})"
+        ))
+    }
+
+    fn validate_dir_path(&self, raw: &str, for_write: bool) -> Result<PathBuf, String> {
+        let canon = canonicalize_existing_path(Path::new(raw)).map_err(map_err)?;
+        if !canon.is_dir() {
+            return Err(format!("目录不存在: {raw}"));
+        }
+        let dirs = if for_write {
+            self.canonical_writable_dirs()
+        } else {
+            self.canonical_readable_dirs()
+        };
+        if is_path_within_any_root(&canon, &dirs) {
+            return Ok(canon);
+        }
+        Err(format!(
+            "安全限制：拒绝访问未授权工作区之外的目录 ({raw})"
+        ))
+    }
+
+    fn validate_import_dbeaver_path(&self, raw: &str) -> Result<PathBuf, String> {
+        let canon = canonicalize_existing_path(Path::new(raw)).map_err(map_err)?;
+        if self.is_protected_storage_target(&canon) {
+            return Err("安全限制：禁止从内部凭据存储路径导入".to_string());
+        }
+        if self
+            .approved_read_paths
+            .read()
+            .is_ok_and(|g| g.contains(&canon))
+        {
+            return Ok(canon);
+        }
+        let mut dirs = self.canonical_readable_dirs();
+        dirs.extend(Self::dbeaver_discovery_roots());
+        if is_path_within_any_root(&canon, &dirs) {
+            return Ok(canon);
+        }
+        Err(format!(
+            "安全限制：仅允许从已发现的 DBeaver 工作区、已挂载目录或通过文件选择框选定的路径导入 ({raw})"
+        ))
+    }
+
+    fn validate_reveal_path(&self, raw: &str) -> Result<PathBuf, String> {
+        let canon = canonicalize_existing_path(Path::new(raw)).map_err(map_err)?;
+        if let Ok(base) = canonicalize_existing_path(&self.storage_dir) {
+            if canon == base {
+                return Ok(canon);
+            }
+        }
+        if self.is_protected_storage_target(&canon) {
+            return Err("安全限制：禁止直接定位内部凭据或状态文件".to_string());
+        }
+        if self
+            .approved_read_paths
+            .read()
+            .is_ok_and(|g| g.contains(&canon))
+            || self
+                .approved_write_paths
+                .read()
+                .is_ok_and(|g| g.contains(&canon))
+        {
+            return Ok(canon);
+        }
+        let dirs = self.canonical_readable_dirs();
+        if is_path_within_any_root(&canon, &dirs) {
+            return Ok(canon);
+        }
+        Err(format!(
+            "安全限制：拒绝在系统文件管理器中打开未授权路径 ({raw})"
+        ))
+    }
+
+    fn approve_read_path(&self, canon: PathBuf, allow_write: bool) {
+        if let Ok(mut g) = self.approved_read_paths.write() {
+            g.insert(canon.clone());
+        }
+        if allow_write {
+            if let Ok(mut g) = self.approved_write_paths.write() {
+                g.insert(canon);
+            }
+        }
+    }
+
+    fn approve_write_path(&self, canon: PathBuf) {
+        if let Ok(mut g) = self.approved_write_paths.write() {
+            g.insert(canon);
+        }
+    }
+
+    fn approve_dir(&self, canon: PathBuf) {
+        if let Ok(mut g) = self.approved_dirs.write() {
+            g.insert(canon);
         }
     }
 
@@ -331,8 +594,16 @@ impl AppState {
     ) -> Result<(ConnectionProfile, Arc<dyn DbBackend>), String> {
         let profile = self.get_profile(profile_id)?;
 
+        let mut transient_override: Option<String> = None;
         if let Some(pwd) = password_override {
-            if let Ok(mut guard) = self.passwords.write() {
+            let is_never = matches!(
+                &profile.mode,
+                ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. }
+                    if d.password_save_mode.as_deref() == Some("never")
+            );
+            if is_never {
+                transient_override = Some(pwd);
+            } else if let Ok(mut guard) = self.passwords.write() {
                 guard.insert(profile_id.to_string(), pwd);
             }
             self.active_backends.write().await.remove(profile_id);
@@ -341,12 +612,18 @@ impl AppState {
             return Ok((profile, Arc::clone(&cached.backend)));
         }
 
-        let stored_pwd = self
-            .passwords
-            .read()
-            .map_err(|e| e.to_string())?
-            .get(profile_id)
-            .cloned();
+        let stored_pwd = if transient_override.is_some() {
+            transient_override.clone()
+        } else {
+            self.passwords
+                .read()
+                .map_err(|e| e.to_string())?
+                .get(profile_id)
+                .cloned()
+        };
+        if let Some(ref mut tmp) = transient_override {
+            tmp.zeroize();
+        }
 
         let mut direct = match &profile.mode {
             ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } => d.clone(),
@@ -792,12 +1069,20 @@ pub fn save_project_cmd(
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| format!("proj-{}", Uuid::new_v4()));
 
+    let validated_root_dir = match draft.root_dir.filter(|s| !s.trim().is_empty()) {
+        Some(raw_dir) => {
+            let canon = state.validate_dir_path(&raw_dir, false)?;
+            Some(normalize_display_path(&canon))
+        }
+        None => None,
+    };
+
     let project = WorkspaceProject {
         id: id.clone(),
         name,
         description: draft.description.filter(|s| !s.trim().is_empty()),
         color: draft.color.filter(|s| !s.trim().is_empty()),
-        root_dir: draft.root_dir.filter(|s| !s.trim().is_empty()),
+        root_dir: validated_root_dir,
         created_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
     };
 
@@ -918,8 +1203,12 @@ pub async fn save_connection(
             .map_err(|e| e.to_string())?;
 
         if direct.auth_type.as_deref() == Some("noAuth") || save_mode == "never" {
-            pwd_guard.remove(&id);
-            vault_guard.remove(&id);
+            if let Some(mut old) = pwd_guard.remove(&id) {
+                old.zeroize();
+            }
+            if let Some(mut old) = vault_guard.remove(&id) {
+                old.zeroize();
+            }
             false
         } else {
             let final_pwd = effective_input_pwd.or_else(|| pwd_guard.get(&id).cloned());
@@ -928,8 +1217,8 @@ pub async fn save_connection(
                     pwd_guard.insert(id.clone(), p.clone());
                     if save_mode == "forever" {
                         vault_guard.insert(id.clone(), p);
-                    } else {
-                        vault_guard.remove(&id);
+                    } else if let Some(mut old) = vault_guard.remove(&id) {
+                        old.zeroize();
                     }
                     true
                 }
@@ -939,7 +1228,7 @@ pub async fn save_connection(
     };
     direct.has_saved_password = has_saved_password;
 
-    if let Some(ref ssh_cfg) = direct.ssh {
+    {
         let mut pwd_guard = state.passwords.write().map_err(|e| e.to_string())?;
         let mut vault_guard = state
             .persisted_passwords
@@ -947,12 +1236,30 @@ pub async fn save_connection(
             .map_err(|e| e.to_string())?;
         let ssh_pwd_key = format!("ssh_pwd:{id}");
         let ssh_pass_key = format!("ssh_pass:{id}");
-        if save_mode == "never" || !ssh_cfg.enabled {
-            pwd_guard.remove(&ssh_pwd_key);
-            pwd_guard.remove(&ssh_pass_key);
-            vault_guard.remove(&ssh_pwd_key);
-            vault_guard.remove(&ssh_pass_key);
-        } else {
+        let ssh_enabled = direct.ssh.as_ref().is_some_and(|s| s.enabled);
+
+        if save_mode == "never" || !ssh_enabled {
+            if let Some(mut old) = pwd_guard.remove(&ssh_pwd_key) {
+                old.zeroize();
+            }
+            if let Some(mut old) = pwd_guard.remove(&ssh_pass_key) {
+                old.zeroize();
+            }
+            if let Some(mut old) = vault_guard.remove(&ssh_pwd_key) {
+                old.zeroize();
+            }
+            if let Some(mut old) = vault_guard.remove(&ssh_pass_key) {
+                old.zeroize();
+            }
+        } else if let Some(ref ssh_cfg) = direct.ssh {
+            if save_mode != "forever" {
+                if let Some(mut old) = vault_guard.remove(&ssh_pwd_key) {
+                    old.zeroize();
+                }
+                if let Some(mut old) = vault_guard.remove(&ssh_pass_key) {
+                    old.zeroize();
+                }
+            }
             if let Some(ref sp) = ssh_cfg.password {
                 if !sp.is_empty() {
                     pwd_guard.insert(ssh_pwd_key.clone(), sp.clone());
@@ -1114,11 +1421,21 @@ pub async fn delete_connection(
         let mut guard = state.connections.write().map_err(|e| e.to_string())?;
         guard.retain(|p| p.id != profile_id);
     }
+    let ssh_pwd_key = format!("ssh_pwd:{profile_id}");
+    let ssh_pass_key = format!("ssh_pass:{profile_id}");
     if let Ok(mut pguard) = state.passwords.write() {
-        pguard.remove(&profile_id);
+        for key in [&profile_id, &ssh_pwd_key, &ssh_pass_key] {
+            if let Some(mut old) = pguard.remove(key) {
+                old.zeroize();
+            }
+        }
     }
     if let Ok(mut vguard) = state.persisted_passwords.write() {
-        vguard.remove(&profile_id);
+        for key in [&profile_id, &ssh_pwd_key, &ssh_pass_key] {
+            if let Some(mut old) = vguard.remove(key) {
+                old.zeroize();
+            }
+        }
     }
     state.active_backends.write().await.remove(&profile_id);
     state.persist_connections()?;
@@ -1226,6 +1543,97 @@ pub fn discover_dbeaver_cmd() -> Vec<DbeaverDiscoveryItem> {
     discover_local_dbeaver_files()
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DialogFilterDto {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn pick_dialog_path_cmd(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    kind: String,
+    default_path: Option<String>,
+    filters: Option<Vec<DialogFilterDto>>,
+) -> Result<Option<String>, String> {
+    let mut builder = app.dialog().file();
+    if let Some(ref flts) = filters {
+        for f in flts {
+            let ext_refs: Vec<&str> = f.extensions.iter().map(String::as_str).collect();
+            if !ext_refs.is_empty() {
+                builder = builder.add_filter(&f.name, &ext_refs);
+            }
+        }
+    }
+    if kind == "saveFile" {
+        if let Some(def) = default_path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            let safe_name = def.rsplit(['/', '\\']).next().unwrap_or(def);
+            builder = builder.set_file_name(safe_name);
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    match kind.as_str() {
+        "openDir" => {
+            builder.pick_folder(move |picked| {
+                let _ = tx.send(picked);
+            });
+        }
+        "saveFile" => {
+            builder.save_file(move |picked| {
+                let _ = tx.send(picked);
+            });
+        }
+        "openFile" | "openTextFile" => {
+            builder.pick_file(move |picked| {
+                let _ = tx.send(picked);
+            });
+        }
+        other => return Err(format!("不支持的对话框类型: {other}")),
+    }
+
+    let Some(file_path) = rx.await.map_err(|e| format!("等待系统文件对话框失败: {e}"))? else {
+        return Ok(None);
+    };
+    let pb = file_path
+        .into_path()
+        .map_err(|e| format!("所选路径不是有效本地文件系统路径: {e}"))?;
+
+    match kind.as_str() {
+        "openDir" => {
+            let canon = canonicalize_existing_path(&pb).map_err(map_err)?;
+            state.approve_dir(canon.clone());
+            Ok(Some(normalize_display_path(&canon)))
+        }
+        "saveFile" => {
+            let canon = canonicalize_target_path(&pb, false).map_err(map_err)?;
+            if state.is_protected_storage_target(&canon) {
+                return Err("安全限制：禁止选择内部凭据或状态文件作为保存目标".to_string());
+            }
+            state.approve_write_path(canon.clone());
+            Ok(Some(normalize_display_path(&canon)))
+        }
+        "openTextFile" => {
+            let canon = canonicalize_existing_path(&pb).map_err(map_err)?;
+            if state.is_protected_storage_target(&canon) {
+                return Err("安全限制：禁止直接打开内部凭据或状态文件".to_string());
+            }
+            state.approve_read_path(canon.clone(), true);
+            Ok(Some(normalize_display_path(&canon)))
+        }
+        _ => {
+            let canon = canonicalize_existing_path(&pb).map_err(map_err)?;
+            if state.is_protected_storage_target(&canon) {
+                return Err("安全限制：禁止直接打开内部凭据或状态文件".to_string());
+            }
+            state.approve_read_path(canon.clone(), false);
+            Ok(Some(normalize_display_path(&canon)))
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn import_dbeaver_path_cmd(
     state: State<'_, AppState>,
@@ -1233,11 +1641,9 @@ pub async fn import_dbeaver_path_cmd(
     include_passwords: Option<bool>,
     project_id: Option<String>,
 ) -> Result<Vec<ConnectionProfile>, String> {
-    let parsed = import_dbeaver_from_path(
-        Path::new(&path),
-        include_passwords.unwrap_or(true),
-    )
-    .map_err(map_err)?;
+    let canon = state.validate_import_dbeaver_path(&path)?;
+    let parsed = import_dbeaver_from_path(&canon, include_passwords.unwrap_or(true))
+        .map_err(map_err)?;
     state.merge_imported_dbeaver(parsed, project_id).await
 }
 
@@ -1277,6 +1683,7 @@ pub fn export_dbeaver_dbp_cmd(
     include_passwords: bool,
     profile_ids: Option<Vec<String>>,
 ) -> Result<ExportResultDto, String> {
+    let out_path = state.validate_write_path(&path)?;
     let selected = state.filter_profiles(profile_ids)?;
     let folders = state.folder_map_by_profile();
     let passwords = if include_passwords {
@@ -1293,17 +1700,17 @@ pub fn export_dbeaver_dbp_cmd(
     )
     .map_err(map_err)?;
 
-    let out_path = PathBuf::from(&path);
     if let Some(parent) = out_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
 
+    let display_path = normalize_display_path(&out_path);
     Ok(ExportResultDto {
-        path: path.clone(),
+        path: display_path.clone(),
         count: selected.len(),
         included_passwords: include_passwords,
-        files: vec![path],
+        files: vec![display_path],
     })
 }
 
@@ -1314,6 +1721,7 @@ pub fn export_dbeaver_folder_cmd(
     include_passwords: bool,
     profile_ids: Option<Vec<String>>,
 ) -> Result<ExportResultDto, String> {
+    let out_dir = state.validate_dir_path(&dir_path, true)?;
     let selected = state.filter_profiles(profile_ids)?;
     let folders = state.folder_map_by_profile();
     let passwords = if include_passwords {
@@ -1322,7 +1730,7 @@ pub fn export_dbeaver_folder_cmd(
         HashMap::new()
     };
     let files = export_to_dbeaver_folder(
-        Path::new(&dir_path),
+        &out_dir,
         &selected,
         &passwords,
         &folders,
@@ -1331,7 +1739,7 @@ pub fn export_dbeaver_folder_cmd(
     .map_err(map_err)?;
 
     Ok(ExportResultDto {
-        path: dir_path,
+        path: normalize_display_path(&out_dir),
         count: selected.len(),
         included_passwords: include_passwords,
         files,
@@ -1342,9 +1750,11 @@ pub fn export_dbeaver_folder_cmd(
 pub fn export_connections_xlsx_cmd(
     state: State<'_, AppState>,
     path: String,
-    include_passwords: bool,
+    include_passwords: Option<bool>,
     profile_ids: Option<Vec<String>>,
 ) -> Result<ExportResultDto, String> {
+    let include_passwords = include_passwords.unwrap_or(false);
+    let out_path = state.validate_write_path(&path)?;
     let selected = state.filter_profiles(profile_ids)?;
     let folders = state.folder_map_by_profile();
     let passwords = if include_passwords {
@@ -1431,26 +1841,29 @@ pub fn export_connections_xlsx_cmd(
         rows.push(r);
     }
 
-    let count = write_xlsx_file(Path::new(&path), "数据源账号清单", &columns, &rows)
+    let count = write_xlsx_file(&out_path, "数据源账号清单", &columns, &rows)
         .map_err(map_err)?;
 
+    let display_path = normalize_display_path(&out_path);
     Ok(ExportResultDto {
-        path: path.clone(),
+        path: display_path.clone(),
         count,
         included_passwords: include_passwords,
-        files: vec![path],
+        files: vec![display_path],
     })
 }
 
 #[tauri::command]
 pub async fn export_rows_xlsx_cmd(
+    state: State<'_, AppState>,
     path: String,
     sheet_name: String,
     columns: Vec<String>,
     rows: Vec<BTreeMap<String, serde_json::Value>>,
 ) -> Result<usize, String> {
+    let out_path = state.validate_write_path(&path)?;
     tokio::task::spawn_blocking(move || {
-        write_xlsx_file(Path::new(&path), &sheet_name, &columns, &rows).map_err(map_err)
+        write_xlsx_file(&out_path, &sheet_name, &columns, &rows).map_err(map_err)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1699,7 +2112,54 @@ pub async fn explain_sql_cmd(
     db_name: String,
     sql: String,
 ) -> Result<ExplainResult, String> {
-    let (_, backend) = state.resolve_backend(&profile_id, None).await?;
+    let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
+    let analysis = analyze_sql(&sql, &profile.db_type);
+    if analysis.statements.is_empty() {
+        return Err("EXPLAIN 需要提供有效的 SQL 语句".to_string());
+    }
+    if analysis.statements.len() > 1 {
+        return Err("安全限制：EXPLAIN 仅允许单条 SQL 语句，禁止拼接多条语句".to_string());
+    }
+    let stmt = &analysis.statements[0];
+    let is_read_only_sql = matches!(analysis.overall_kind, SqlAccessKind::ReadOnly);
+    let profile_read_only = matches!(
+        &profile.mode,
+        ConnectionMode::Direct(d) | ConnectionMode::Hybrid { direct: d, .. } if d.read_only
+    ) || !profile.capabilities.can_dml;
+
+    if profile_read_only && !is_read_only_sql {
+        return Err(
+            "安全限制：只读连接禁止对写操作/DDL/DCL 或未知语句执行 EXPLAIN".to_string(),
+        );
+    }
+    if !is_read_only_sql
+        && (stmt.statement_type.starts_with("EXPLAIN_ANALYZE_")
+            || matches!(
+                analysis.overall_kind,
+                SqlAccessKind::WriteDdl | SqlAccessKind::AdminOrDcl | SqlAccessKind::Unknown
+            ))
+    {
+        return Err(format!(
+            "安全限制：禁止通过 EXPLAIN 执行高危或会实际修改数据的语句 ({})",
+            stmt.statement_type
+        ));
+    }
+
+    match state
+        .extensions
+        .check_before_execute(&profile, Some(db_name.as_str()), &sql)
+        .await
+        .map_err(map_err)?
+    {
+        PreExecuteDecision::Allow => {}
+        PreExecuteDecision::RequireApproval { reason } => {
+            return Err(format!("EXTENSION_APPROVAL_REQUIRED: {reason}"));
+        }
+        PreExecuteDecision::Block { reason } => {
+            return Err(format!("EXTENSION_BLOCKED: {reason}"));
+        }
+    }
+
     backend.explain(&db_name, &sql).await.map_err(map_err)
 }
 
@@ -1846,11 +2306,13 @@ pub async fn extract_markdown_sql_blocks_cmd(
 
 #[tauri::command]
 pub async fn open_text_file_cmd(
+    state: State<'_, AppState>,
     path: String,
     encoding_override: Option<String>,
 ) -> Result<OpenedFileDto, String> {
+    let canon = state.validate_read_path(&path)?;
     tokio::task::spawn_blocking(move || {
-        open_text_file(Path::new(&path), encoding_override.as_deref()).map_err(map_err)
+        open_text_file(&canon, encoding_override.as_deref()).map_err(map_err)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -1858,29 +2320,33 @@ pub async fn open_text_file_cmd(
 
 #[tauri::command]
 pub async fn save_text_file_cmd(
+    state: State<'_, AppState>,
     path: String,
     content: String,
     encoding: String,
     line_ending: String,
     with_bom: bool,
 ) -> Result<FileStatsDto, String> {
-    tokio::task::spawn_blocking(move || {
-        save_text_file(Path::new(&path), &content, &encoding, &line_ending, with_bom)
-            .map_err(map_err)
+    let canon = state.validate_write_path(&path)?;
+    let canon_for_approve = canon.clone();
+    let stats = tokio::task::spawn_blocking(move || {
+        save_text_file(&canon, &content, &encoding, &line_ending, with_bom).map_err(map_err)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    state.approve_read_path(canon_for_approve, true);
+    Ok(stats)
 }
 
 #[tauri::command]
 pub async fn list_workspace_files_cmd(
+    state: State<'_, AppState>,
     dir_path: String,
 ) -> Result<Vec<WorkspaceFileEntry>, String> {
-    tokio::task::spawn_blocking(move || {
-        list_workspace_files(Path::new(&dir_path)).map_err(map_err)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let canon = state.validate_dir_path(&dir_path, false)?;
+    tokio::task::spawn_blocking(move || list_workspace_files(&canon).map_err(map_err))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1889,8 +2355,11 @@ pub fn create_demo_markdown_file_cmd(state: State<'_, AppState>) -> Result<Opene
 }
 
 #[tauri::command]
-pub fn reveal_in_explorer_cmd(path: String) -> Result<(), String> {
-    let target = PathBuf::from(&path);
+pub fn reveal_in_explorer_cmd(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), String> {
+    let target = state.validate_reveal_path(&path)?;
     if !target.exists() {
         return Err(format!("路径不存在: {}", target.display()));
     }
@@ -2043,8 +2512,13 @@ pub async fn save_console_scratch_cmd(
     let consoles_dir = state.storage_dir.join("consoles");
     tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&consoles_dir).map_err(|e| e.to_string())?;
+        let canon_dir = canonicalize_existing_path(&consoles_dir).map_err(map_err)?;
         let safe_name = sanitize_console_filename(&file_name);
-        let target = consoles_dir.join(safe_name);
+        reject_traversal_components(Path::new(&safe_name)).map_err(map_err)?;
+        let target = canonicalize_target_path(&canon_dir.join(safe_name), false).map_err(map_err)?;
+        if !is_path_within_any_root(&target, &[canon_dir]) {
+            return Err("安全限制：控制台草稿路径越界".to_string());
+        }
         std::fs::write(&target, content.as_bytes()).map_err(|e| e.to_string())?;
         Ok(normalize_display_path(&target))
     })
@@ -2191,6 +2665,7 @@ pub async fn export_sql_dump_cmd(
     state: State<'_, AppState>,
     req: SqlDumpRequest,
 ) -> Result<SqlDumpResultDto, String> {
+    let out_path = state.validate_write_path(&req.path)?;
     let (profile, backend) = state.resolve_backend(&req.profile_id, None).await?;
     if matches!(profile.db_type, DbEngineType::Redis) {
         return Err("Redis 数据源不支持导出 SQL 转储文件，请使用结果集导出或 Redis 命令。".to_string());
@@ -2229,7 +2704,8 @@ pub async fn export_sql_dump_cmd(
     );
     let footer_str = build_sql_dump_footer(&profile.db_type);
 
-    let out_path = PathBuf::from(&req.path);
+    let approved_out = out_path.clone();
+    let display_out = normalize_display_path(&out_path);
     let db_name_writer = req.db_name.clone();
     let engine_writer = profile.db_type.clone();
     let (dump_tx, mut dump_rx) = mpsc::channel::<DumpWriteMsg>(8);
@@ -2395,8 +2871,10 @@ pub async fn export_sql_dump_cmd(
         .await
         .map_err(|e| format!("等待 SQL 转储写入线程失败: {e}"))??;
 
+    state.approve_read_path(approved_out, false);
+
     Ok(SqlDumpResultDto {
-        path: req.path,
+        path: display_out,
         table_count: target_tables.len(),
         row_count: total_rows,
         truncated_tables,
@@ -2439,13 +2917,15 @@ pub fn delete_history_entry_cmd(
 
 #[tauri::command]
 pub async fn read_xlsx_sheet_cmd(
+    state: State<'_, AppState>,
     path: String,
     sheet_name: Option<String>,
     max_rows: Option<usize>,
 ) -> Result<XlsxSheetPreview, String> {
+    let canon = state.validate_read_path(&path)?;
     tokio::task::spawn_blocking(move || {
         read_xlsx_sheet_preview(
-            Path::new(&path),
+            &canon,
             sheet_name.as_deref(),
             max_rows.unwrap_or(1000),
         )
@@ -2467,8 +2947,8 @@ pub async fn run_sql_file_cmd(
     on_progress: Channel<SqlScriptProgress>,
 ) -> Result<SqlScriptRunResult, String> {
     let started = Instant::now();
+    let file_path = state.validate_read_path(&path)?;
     let (profile, backend) = state.resolve_backend(&profile_id, None).await?;
-    let file_path = PathBuf::from(&path);
     let total_bytes = std::fs::metadata(&file_path)
         .map_err(|e| format!("读取 SQL 文件信息失败: {e}"))?
         .len();
@@ -2535,18 +3015,29 @@ pub async fn run_sql_file_cmd(
         last_bytes_read = bytes_read;
         total_statements += 1;
 
-        match state
+        let ext_res = state
             .extensions
             .check_before_execute(&profile, db_name.as_deref(), &stmt)
-            .await
-            .map_err(map_err)?
-        {
-            PreExecuteDecision::Allow => {}
-            PreExecuteDecision::RequireApproval { reason } => {
+            .await;
+        match ext_res {
+            Ok(PreExecuteDecision::Allow) => {}
+            Ok(PreExecuteDecision::RequireApproval { reason }) => {
+                if let Some(ref qid) = effective_qid {
+                    state.running_queries.write().await.remove(qid);
+                }
                 return Err(format!("EXTENSION_APPROVAL_REQUIRED: {reason}"));
             }
-            PreExecuteDecision::Block { reason } => {
+            Ok(PreExecuteDecision::Block { reason }) => {
+                if let Some(ref qid) = effective_qid {
+                    state.running_queries.write().await.remove(qid);
+                }
                 return Err(format!("EXTENSION_BLOCKED: {reason}"));
+            }
+            Err(err) => {
+                if let Some(ref qid) = effective_qid {
+                    state.running_queries.write().await.remove(qid);
+                }
+                return Err(map_err(err));
             }
         }
 
@@ -2702,8 +3193,9 @@ pub async fn export_query_to_file_cmd(
         return Err(format!("不支持的导出格式: {format}"));
     }
 
-    let out_path = PathBuf::from(&path);
+    let out_path = state.validate_write_path(&path)?;
     let cleanup_path = out_path.clone();
+    let display_out = normalize_display_path(&out_path);
     let sheet_title = sheet_name.unwrap_or_else(|| "QueryResult".to_string());
     let fmt_writer = fmt.clone();
     let (write_tx, mut write_rx) = mpsc::channel::<QueryExportWriteMsg>(8);
@@ -2909,9 +3401,66 @@ pub async fn export_query_to_file_cmd(
     });
 
     Ok(QueryExportResult {
-        path,
+        path: display_out,
         format: fmt,
         exported_rows,
         duration_ms: started.elapsed().as_millis() as u64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_appstate_path_guards_block_traversal_and_vault_files() {
+        let dir = std::env::temp_dir().join(format!("pacergrip_cmd_path_{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("pacergrip_cmd_out_{}", Uuid::new_v4()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let state = AppState::new(dir.clone(), false);
+        std::fs::write(dir.join("vault_v3.key"), b"fake").unwrap();
+        std::fs::write(dir.join("credentials.dat"), b"fake").unwrap();
+        let outside_file = outside.join("secret.txt");
+        std::fs::write(&outside_file, b"outside").unwrap();
+
+        // Reading or overwriting vault files inside storage_dir must be denied.
+        assert!(state
+            .validate_read_path(&dir.join("vault_v3.key").to_string_lossy())
+            .is_err());
+        assert!(state
+            .validate_write_path(&dir.join("credentials.dat").to_string_lossy())
+            .is_err());
+
+        // Reading/writing outside approved workspace or dialog selection must be denied.
+        assert!(state
+            .validate_read_path(&outside_file.to_string_lossy())
+            .is_err());
+        assert!(state
+            .validate_write_path(&outside.join("new.sql").to_string_lossy())
+            .is_err());
+
+        // Traversal inside consoles must be denied, while valid consoles file works.
+        assert!(state
+            .validate_write_path(&dir.join("consoles/../vault_v3.key").to_string_lossy())
+            .is_err());
+        assert!(state
+            .validate_write_path(&dir.join("consoles/q1.sql").to_string_lossy())
+            .is_ok());
+
+        // Explicit dialog approval allows only that approved path.
+        let canon_out = canonicalize_existing_path(&outside_file).unwrap();
+        state.approve_read_path(canon_out, false);
+        assert!(state
+            .validate_read_path(&outside_file.to_string_lossy())
+            .is_ok());
+        assert!(state
+            .validate_write_path(&outside_file.to_string_lossy())
+            .is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
 }

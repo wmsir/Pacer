@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use chardetng::EncodingDetector;
 use encoding_rs::{Encoding, GB18030, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
@@ -6,6 +6,149 @@ use encoding_rs::{Encoding, GB18030, UTF_16BE, UTF_16LE, UTF_8, WINDOWS_1252};
 use crate::{CoreError, CoreResult, FileStatsDto, OpenedFileDto, WorkspaceFileEntry};
 
 pub const MAX_EDITOR_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Rejects empty paths, NUL bytes, and parent directory traversal (`..`) components.
+pub fn reject_traversal_components(path: &Path) -> CoreResult<()> {
+    let raw = path.as_os_str().to_string_lossy();
+    if raw.trim().is_empty() {
+        return Err(CoreError::InvalidConfig("路径不能为空".to_string()));
+    }
+    if raw.contains('\0') {
+        return Err(CoreError::InvalidConfig("路径包含非法空字符".to_string()));
+    }
+    for comp in path.components() {
+        if matches!(comp, Component::ParentDir) {
+            return Err(CoreError::PermissionDenied(format!(
+                "安全限制：拒绝包含 '..' 目录遍历的路径: {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalizes an existing file or directory path after rejecting traversal components.
+pub fn canonicalize_existing_path(path: &Path) -> CoreResult<PathBuf> {
+    reject_traversal_components(path)?;
+    std::fs::canonicalize(path).map_err(|e| {
+        CoreError::InvalidConfig(format!("无法解析目标路径 ({}): {e}", path.display()))
+    })
+}
+
+/// Canonicalizes a path whose leaf (or newly created subdirectories) may not exist yet by
+/// canonicalizing the nearest existing ancestor and validating all trailing components.
+pub fn canonicalize_target_path(path: &Path, must_exist: bool) -> CoreResult<PathBuf> {
+    if must_exist {
+        return canonicalize_existing_path(path);
+    }
+    reject_traversal_components(path)?;
+    if path.exists() {
+        return canonicalize_existing_path(path);
+    }
+
+    let mut suffix_parts: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    loop {
+        if cursor.exists() {
+            let base = canonicalize_existing_path(cursor)?;
+            let mut out = base;
+            for part in suffix_parts.iter().rev() {
+                out.push(part);
+            }
+            return Ok(out);
+        }
+        let Some(name) = cursor.file_name() else {
+            break;
+        };
+        suffix_parts.push(name.to_os_string());
+        let Some(parent) = cursor.parent() else {
+            break;
+        };
+        if parent.as_os_str().is_empty() {
+            // Relative path under current directory: resolve `.` as base.
+            let cwd = std::env::current_dir().map_err(|e| {
+                CoreError::InvalidConfig(format!("无法解析当前工作目录: {e}"))
+            })?;
+            let base = canonicalize_existing_path(&cwd)?;
+            let mut out = base;
+            for part in suffix_parts.iter().rev() {
+                out.push(part);
+            }
+            return Ok(out);
+        }
+        cursor = parent;
+    }
+
+    Err(CoreError::InvalidConfig(format!(
+        "无法解析目标父目录: {}",
+        path.display()
+    )))
+}
+
+fn strip_verbatim_prefix(path: &Path) -> String {
+    let s = path.to_string_lossy().replace('\\', "/");
+    if let Some(rest) = s.strip_prefix("//?/UNC/") {
+        format!("//{rest}")
+    } else if let Some(rest) = s.strip_prefix("//?/") {
+        rest.to_string()
+    } else {
+        s
+    }
+}
+
+/// Checks whether `canonical_target` lies within any canonicalized `canonical_roots`
+/// (case-insensitive on Windows to match NTFS volume semantics).
+pub fn is_path_within_any_root(canonical_target: &Path, canonical_roots: &[PathBuf]) -> bool {
+    let target_norm = strip_verbatim_prefix(canonical_target);
+    for root in canonical_roots {
+        let root_norm = strip_verbatim_prefix(root);
+        let root_trimmed = root_norm.trim_end_matches('/');
+        if root_trimmed.is_empty() {
+            continue;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            if target_norm.eq_ignore_ascii_case(root_trimmed) {
+                return true;
+            }
+            let prefix = format!("{}/", root_trimmed.to_ascii_lowercase());
+            if target_norm.to_ascii_lowercase().starts_with(&prefix) {
+                return true;
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            if target_norm == root_trimmed {
+                return true;
+            }
+            let prefix = format!("{root_trimmed}/");
+            if target_norm.starts_with(&prefix) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Canonicalizes `path` and enforces that it resides under one of `allowed_roots`.
+pub fn ensure_path_within_roots(
+    path: &Path,
+    allowed_roots: &[PathBuf],
+    must_exist: bool,
+) -> CoreResult<PathBuf> {
+    let canonical_target = canonicalize_target_path(path, must_exist)?;
+    let canonical_roots: Vec<PathBuf> = allowed_roots
+        .iter()
+        .filter_map(|r| canonicalize_existing_path(r).ok())
+        .collect();
+    if !is_path_within_any_root(&canonical_target, &canonical_roots) {
+        return Err(CoreError::PermissionDenied(format!(
+            "安全限制：拒绝访问未授权目录之外的路径 ({})",
+            path.display()
+        )));
+    }
+    Ok(canonical_target)
+}
 
 /// Ensures a file is small enough to edit safely in the browser WebView editor.
 pub fn validate_editor_file_size(byte_size: u64) -> CoreResult<()> {
@@ -23,17 +166,18 @@ pub fn open_text_file(
     path: &Path,
     encoding_override: Option<&str>,
 ) -> CoreResult<OpenedFileDto> {
-    if !path.is_file() {
+    let canonical_path = canonicalize_existing_path(path)?;
+    let meta = std::fs::metadata(&canonical_path)?;
+    if !meta.is_file() {
         return Err(CoreError::InvalidConfig(format!(
-            "文件不存在: {}",
+            "文件不存在或不是常规文件: {}",
             path.display()
         )));
     }
 
-    let meta_len = std::fs::metadata(path)?.len();
-    validate_editor_file_size(meta_len)?;
+    validate_editor_file_size(meta.len())?;
 
-    let raw_bytes = std::fs::read(path)?;
+    let raw_bytes = std::fs::read(&canonical_path)?;
     let byte_size = raw_bytes.len() as u64;
     validate_editor_file_size(byte_size)?;
 
@@ -53,15 +197,15 @@ pub fn open_text_file(
     };
     let char_count = normalized.chars().count();
 
-    let name = path
+    let name = canonical_path
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("untitled")
         .to_string();
-    let file_kind = infer_file_kind(path);
+    let file_kind = infer_file_kind(&canonical_path);
 
     Ok(OpenedFileDto {
-        path: path.to_string_lossy().replace('\\', "/"),
+        path: strip_verbatim_prefix(&canonical_path),
         name,
         content: normalized,
         encoding: encoding_label,
@@ -83,7 +227,8 @@ pub fn save_text_file(
     line_ending: &str,
     with_bom: bool,
 ) -> CoreResult<FileStatsDto> {
-    if let Some(parent) = path.parent() {
+    let canonical_path = canonicalize_target_path(path, false)?;
+    if let Some(parent) = canonical_path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
@@ -106,7 +251,7 @@ pub fn save_text_file(
         encode_text(&normalized_lf, encoding, with_bom)
     };
 
-    std::fs::write(path, &encoded_bytes)?;
+    std::fs::write(&canonical_path, &encoded_bytes)?;
 
     let line_count = if normalized_lf.is_empty() {
         1
@@ -115,7 +260,7 @@ pub fn save_text_file(
     };
 
     Ok(FileStatsDto {
-        path: path.to_string_lossy().replace('\\', "/"),
+        path: strip_verbatim_prefix(&canonical_path),
         encoding: normalized_enc,
         has_bom: effective_bom,
         line_ending: effective_eol.to_string(),
@@ -127,7 +272,8 @@ pub fn save_text_file(
 
 /// Lists direct children of a local directory for the Pacer Files Explorer tool window.
 pub fn list_workspace_files(dir_path: &Path) -> CoreResult<Vec<WorkspaceFileEntry>> {
-    if !dir_path.is_dir() {
+    let canonical_dir = canonicalize_existing_path(dir_path)?;
+    if !canonical_dir.is_dir() {
         return Err(CoreError::InvalidConfig(format!(
             "目录不存在: {}",
             dir_path.display()
@@ -135,7 +281,7 @@ pub fn list_workspace_files(dir_path: &Path) -> CoreResult<Vec<WorkspaceFileEntr
     }
 
     let mut entries = Vec::new();
-    for item in std::fs::read_dir(dir_path)? {
+    for item in std::fs::read_dir(&canonical_dir)? {
         let Ok(entry) = item else {
             continue;
         };
@@ -158,7 +304,7 @@ pub fn list_workspace_files(dir_path: &Path) -> CoreResult<Vec<WorkspaceFileEntr
                 .map(|e| e.to_ascii_lowercase())
         };
         entries.push(WorkspaceFileEntry {
-            path: path.to_string_lossy().replace('\\', "/"),
+            path: strip_verbatim_prefix(&path),
             name,
             is_dir,
             size,
@@ -398,5 +544,29 @@ mod tests {
         assert!(validate_editor_file_size(1024).is_ok());
         assert!(validate_editor_file_size(MAX_EDITOR_FILE_BYTES).is_ok());
         assert!(validate_editor_file_size(MAX_EDITOR_FILE_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn test_path_canonicalization_blocks_traversal_and_escape() {
+        let base = std::env::temp_dir().join(format!("pacergrip_path_guard_{}", std::process::id()));
+        let allowed = base.join("allowed");
+        let outside = base.join("outside");
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let inside_file = allowed.join("query.sql");
+        std::fs::write(&inside_file, b"SELECT 1;").unwrap();
+        let outside_file = outside.join("secret.txt");
+        std::fs::write(&outside_file, b"secret").unwrap();
+
+        assert!(ensure_path_within_roots(&inside_file, &[allowed.clone()], true).is_ok());
+        assert!(ensure_path_within_roots(&allowed.join("new_sub/export.csv"), &[allowed.clone()], false).is_ok());
+
+        let traversal = allowed.join("../outside/secret.txt");
+        assert!(ensure_path_within_roots(&traversal, &[allowed.clone()], true).is_err());
+        assert!(ensure_path_within_roots(&outside_file, &[allowed], true).is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

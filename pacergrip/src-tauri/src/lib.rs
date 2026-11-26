@@ -24,6 +24,8 @@ fn migrate_legacy_storage(target_dir: &Path, fallback_app_data: &Path) {
         "projects.json",
         "connections.json",
         "credentials.dat",
+        "vault.dpapi",
+        "vault_v3.dpapi",
         "history.json",
         "demo_store.sqlite",
         "示例查询手册.md",
@@ -175,33 +177,60 @@ fn build_macos_menu<R: tauri::Runtime>(
     Menu::with_items(app_handle, &[&app_menu, &edit_menu, &view_menu, &window_menu])
 }
 
+fn has_portable_marker(exe_dir: Option<&Path>, workspace_dir: &Path) -> bool {
+    if std::env::var("PACER_PORTABLE")
+        .is_ok_and(|v| v.trim() == "1" || v.trim().eq_ignore_ascii_case("true"))
+    {
+        return true;
+    }
+    let markers = [".pacer-portable", "pacer.portable"];
+    if markers.iter().any(|m| workspace_dir.join(m).is_file()) {
+        return true;
+    }
+    if let Some(dir) = exe_dir {
+        if markers.iter().any(|m| dir.join(m).is_file()) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Prefers `<exe_dir>/pacer-workspace` on Windows/Linux (or next to `Pacer.app` in custom writable
 /// folders on macOS); falls back to OS AppData / Application Support when inside `/Applications`,
 /// DMG volumes, Gatekeeper AppTranslocation, or read-only locations.
+/// Plaintext portable master-key storage (`is_portable = true`) is ONLY enabled when an explicit
+/// portable marker file (`.pacer-portable` / `pacer.portable`) or `PACER_PORTABLE=1` is present,
+/// so installed Windows `currentUser` builds always protect vault keys with OS DPAPI.
 fn resolve_workspace_dir(fallback_app_data: &Path) -> (std::path::PathBuf, bool) {
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            #[cfg(target_os = "macos")]
-            {
-                if let Some(bundle_parent) = resolve_macos_bundle_parent(exe_dir) {
-                    if !is_restricted_macos_bundle_parent(&bundle_parent) {
-                        let portable_dir = bundle_parent.join("pacer-workspace");
-                        if is_dir_writable(&portable_dir) {
-                            return (portable_dir, true);
-                        }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+
+    if let Some(ref exe_dir_path) = exe_dir {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(bundle_parent) = resolve_macos_bundle_parent(exe_dir_path) {
+                if !is_restricted_macos_bundle_parent(&bundle_parent) {
+                    let portable_dir = bundle_parent.join("pacer-workspace");
+                    if is_dir_writable(&portable_dir) {
+                        let is_portable = has_portable_marker(Some(&bundle_parent), &portable_dir);
+                        return (portable_dir, is_portable);
                     }
-                    let _ = std::fs::create_dir_all(fallback_app_data);
-                    return (fallback_app_data.to_path_buf(), false);
                 }
+                let _ = std::fs::create_dir_all(fallback_app_data);
+                let is_portable = has_portable_marker(Some(exe_dir_path), fallback_app_data);
+                return (fallback_app_data.to_path_buf(), is_portable);
             }
-            let portable_dir = exe_dir.join("pacer-workspace");
-            if is_dir_writable(&portable_dir) {
-                return (portable_dir, true);
-            }
+        }
+        let candidate_dir = exe_dir_path.join("pacer-workspace");
+        if is_dir_writable(&candidate_dir) {
+            let is_portable = has_portable_marker(Some(exe_dir_path), &candidate_dir);
+            return (candidate_dir, is_portable);
         }
     }
     let _ = std::fs::create_dir_all(fallback_app_data);
-    (fallback_app_data.to_path_buf(), false)
+    let is_portable = has_portable_marker(exe_dir.as_deref(), fallback_app_data);
+    (fallback_app_data.to_path_buf(), is_portable)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -244,6 +273,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::pick_dialog_path_cmd,
             commands::get_workspace_info_cmd,
             commands::save_console_scratch_cmd,
             commands::list_local_plugins_cmd,

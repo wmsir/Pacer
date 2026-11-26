@@ -66,7 +66,7 @@ pub fn analyze_sql(sql: &str, db_type: &DbEngineType) -> ScriptAnalysis {
         return analyze_redis_script(sql);
     }
 
-    let raw_chunks = split_sql_statements(sql);
+    let raw_chunks = split_sql_statements_for_dialect(sql, db_type);
     let dialect = dialect_for_engine(db_type);
 
     let mut statements = Vec::new();
@@ -75,7 +75,7 @@ pub fn analyze_sql(sql: &str, db_type: &DbEngineType) -> ScriptAnalysis {
         if trimmed.is_empty() {
             continue;
         }
-        let body = strip_sql_comments(trimmed);
+        let body = strip_sql_comments_for_dialect(trimmed, db_type);
         if body.trim().is_empty() {
             continue;
         }
@@ -88,6 +88,7 @@ pub fn analyze_sql(sql: &str, db_type: &DbEngineType) -> ScriptAnalysis {
             &body,
             expected_rows_hint,
             dialect.as_ref(),
+            db_type,
         );
         statements.push(analysis);
     }
@@ -131,29 +132,173 @@ fn dialect_for_engine(db_type: &DbEngineType) -> Box<dyn Dialect> {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DialectLexRules {
+    backslash_escapes_in_single_quote: bool,
+    allow_e_string: bool,
+    dollar_quoting: bool,
+}
+
+impl DialectLexRules {
+    fn for_engine(db_type: &DbEngineType) -> Self {
+        match db_type {
+            DbEngineType::MySql
+            | DbEngineType::MariaDb
+            | DbEngineType::TiDb
+            | DbEngineType::OceanBase
+            | DbEngineType::ClickHouse => Self {
+                backslash_escapes_in_single_quote: true,
+                allow_e_string: false,
+                dollar_quoting: false,
+            },
+            DbEngineType::PostgreSql | DbEngineType::OpenGauss | DbEngineType::Kingbase => Self {
+                backslash_escapes_in_single_quote: false,
+                allow_e_string: true,
+                dollar_quoting: true,
+            },
+            DbEngineType::Sqlite
+            | DbEngineType::SqlServer
+            | DbEngineType::Oracle
+            | DbEngineType::Dameng
+            | DbEngineType::Redis
+            | DbEngineType::Unknown(_) => Self {
+                backslash_escapes_in_single_quote: false,
+                allow_e_string: false,
+                dollar_quoting: false,
+            },
+        }
+    }
+}
+
+fn parse_dollar_tag(bytes: &[u8], pos: usize) -> Option<&[u8]> {
+    if bytes.get(pos) != Some(&b'$') {
+        return None;
+    }
+    if pos > 0 {
+        let prev = bytes[pos - 1];
+        if prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$' {
+            return None;
+        }
+    }
+    let mut j = pos + 1;
+    if bytes.get(j) == Some(&b'$') {
+        return Some(&bytes[pos..=j]);
+    }
+    let first = *bytes.get(j)?;
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return None;
+    }
+    j += 1;
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == b'$' {
+            return Some(&bytes[pos..=j]);
+        }
+        if !(b.is_ascii_alphanumeric() || b == b'_') {
+            return None;
+        }
+        j += 1;
+    }
+    None
+}
+
+fn is_e_string_start(bytes: &[u8], pos: usize, rules: DialectLexRules) -> bool {
+    if !rules.allow_e_string {
+        return false;
+    }
+    if !matches!(bytes.get(pos), Some(b'E' | b'e')) || bytes.get(pos + 1) != Some(&b'\'') {
+        return false;
+    }
+    if pos == 0 {
+        return true;
+    }
+    let prev = bytes[pos - 1];
+    !(prev.is_ascii_alphanumeric() || prev == b'_' || prev == b'$')
+}
+
 fn analyze_single_statement(
     index: usize,
     raw_sql: String,
     clean_body: &str,
     expected_rows_hint: Option<i64>,
     dialect: &dyn Dialect,
+    db_type: &DbEngineType,
 ) -> StatementAnalysis {
     let mut warnings = Vec::new();
+    let rules = DialectLexRules::for_engine(db_type);
 
     match Parser::parse_sql(dialect, clean_body) {
         Ok(parsed) if !parsed.is_empty() => {
-            let stmt = &parsed[0];
-            let (access_kind, statement_type) = classify_ast_statement(index, stmt, &mut warnings);
+            let mut overall_kind = SqlAccessKind::ReadOnly;
+            let mut overall_type = String::new();
+            for (stmt_pos, stmt) in parsed.iter().enumerate() {
+                let (k, st_type) = classify_ast_statement(index, stmt, &mut warnings);
+                if stmt_pos == 0 || kind_rank(k) > kind_rank(overall_kind) {
+                    overall_kind = k;
+                    overall_type = st_type;
+                }
+            }
+            if parsed.len() > 1 && !matches!(overall_kind, SqlAccessKind::ReadOnly) {
+                warnings.push(SqlRiskWarning {
+                    code: "MULTI_STATEMENT_CHUNK".to_string(),
+                    level: RiskLevel::Critical,
+                    message: format!(
+                        "单条语句块中解析出 {} 条 SQL 语句且包含写操作/管理指令 ({overall_type})",
+                        parsed.len()
+                    ),
+                    statement_index: index,
+                });
+            }
             StatementAnalysis {
                 index,
                 sql: raw_sql,
-                access_kind,
-                statement_type,
+                access_kind: overall_kind,
+                statement_type: overall_type,
                 expected_rows_hint,
                 warnings,
             }
         }
-        _ => classify_lexically(index, raw_sql, clean_body, expected_rows_hint),
+        _ => classify_lexically_with_rules(index, raw_sql, clean_body, expected_rows_hint, dialect, rules),
+    }
+}
+
+fn check_query_write_kind(
+    index: usize,
+    query: &sqlparser::ast::Query,
+    warnings: &mut Vec<SqlRiskWarning>,
+) -> Option<(SqlAccessKind, String)> {
+    if let Some(ref with_clause) = query.with {
+        for cte in &with_clause.cte_tables {
+            if let Some(found) = check_query_write_kind(index, &cte.query, warnings) {
+                return Some(found);
+            }
+        }
+    }
+    check_set_expr_write_kind(index, query.body.as_ref(), warnings)
+}
+
+fn check_set_expr_write_kind(
+    index: usize,
+    body: &SetExpr,
+    warnings: &mut Vec<SqlRiskWarning>,
+) -> Option<(SqlAccessKind, String)> {
+    match body {
+        SetExpr::Insert(stmt) | SetExpr::Update(stmt) => {
+            Some(classify_ast_statement(index, stmt, warnings))
+        }
+        SetExpr::Select(select) => {
+            if select.into.is_some() {
+                Some((SqlAccessKind::WriteDml, "SELECT_INTO".to_string()))
+            } else {
+                None
+            }
+        }
+        SetExpr::Query(inner) => check_query_write_kind(index, inner, warnings),
+        SetExpr::SetOperation { left, right, .. } => {
+            check_set_expr_write_kind(index, left.as_ref(), warnings)
+                .or_else(|| check_set_expr_write_kind(index, right.as_ref(), warnings))
+        }
+        _ => None,
     }
 }
 
@@ -164,21 +309,8 @@ fn classify_ast_statement(
 ) -> (SqlAccessKind, String) {
     match stmt {
         Statement::Query(query) => {
-            if let Some(ref with_clause) = query.with {
-                for cte in &with_clause.cte_tables {
-                    if let Some(inner_stmt) = unwrap_write_set_expr(cte.query.body.as_ref()) {
-                        return classify_ast_statement(index, inner_stmt, warnings);
-                    }
-                    if query_has_into(cte.query.body.as_ref()) {
-                        return (SqlAccessKind::WriteDml, "SELECT_INTO".to_string());
-                    }
-                }
-            }
-            if let Some(inner_stmt) = unwrap_write_set_expr(query.body.as_ref()) {
-                return classify_ast_statement(index, inner_stmt, warnings);
-            }
-            if query_has_into(query.body.as_ref()) {
-                return (SqlAccessKind::WriteDml, "SELECT_INTO".to_string());
+            if let Some(found) = check_query_write_kind(index, query, warnings) {
+                return found;
             }
             let has_limit = query.limit.is_some() || query.fetch.is_some();
             if !has_limit && query_has_wildcard(query.body.as_ref()) {
@@ -191,9 +323,52 @@ fn classify_ast_statement(
             }
             (SqlAccessKind::ReadOnly, "SELECT".to_string())
         }
-        Statement::Explain { .. } | Statement::ExplainTable { .. } => {
-            (SqlAccessKind::ReadOnly, "EXPLAIN".to_string())
+        Statement::Explain {
+            analyze,
+            statement,
+            options,
+            ..
+        } => {
+            let pg_analyze = options.as_deref().is_some_and(|opts| {
+                opts.iter().any(|opt| {
+                    opt.name.value.eq_ignore_ascii_case("ANALYZE")
+                        && !matches!(
+                            opt.arg,
+                            Some(sqlparser::ast::Expr::Value(sqlparser::ast::Value::Boolean(false)))
+                        )
+                })
+            });
+            let is_analyze = *analyze || pg_analyze;
+            let (inner_kind, inner_type) =
+                classify_ast_statement(index, statement.as_ref(), warnings);
+            if !matches!(inner_kind, SqlAccessKind::ReadOnly) {
+                if is_analyze {
+                    warnings.push(SqlRiskWarning {
+                        code: "EXPLAIN_ANALYZE_MUTATION".to_string(),
+                        level: RiskLevel::Critical,
+                        message: format!(
+                            "EXPLAIN ANALYZE 会实际执行内部的 {inner_type} 语句，禁止用于写操作或只读连接"
+                        ),
+                        statement_index: index,
+                    });
+                }
+                let st_type = if is_analyze {
+                    format!("EXPLAIN_ANALYZE_{inner_type}")
+                } else {
+                    format!("EXPLAIN_{inner_type}")
+                };
+                return (inner_kind, st_type);
+            }
+            (
+                SqlAccessKind::ReadOnly,
+                if is_analyze {
+                    "EXPLAIN_ANALYZE".to_string()
+                } else {
+                    "EXPLAIN".to_string()
+                },
+            )
         }
+        Statement::ExplainTable { .. } => (SqlAccessKind::ReadOnly, "EXPLAIN".to_string()),
         Statement::ShowTables { .. }
         | Statement::ShowColumns { .. }
         | Statement::ShowCreate { .. }
@@ -301,28 +476,6 @@ fn classify_ast_statement(
     }
 }
 
-fn unwrap_write_set_expr(body: &SetExpr) -> Option<&Statement> {
-    match body {
-        SetExpr::Insert(stmt) | SetExpr::Update(stmt) => Some(stmt),
-        SetExpr::Query(inner) => unwrap_write_set_expr(inner.body.as_ref()),
-        SetExpr::SetOperation { left, right, .. } => {
-            unwrap_write_set_expr(left.as_ref()).or_else(|| unwrap_write_set_expr(right.as_ref()))
-        }
-        _ => None,
-    }
-}
-
-fn query_has_into(body: &SetExpr) -> bool {
-    match body {
-        SetExpr::Select(select) => select.into.is_some(),
-        SetExpr::Query(inner) => query_has_into(inner.body.as_ref()),
-        SetExpr::SetOperation { left, right, .. } => {
-            query_has_into(left.as_ref()) || query_has_into(right.as_ref())
-        }
-        _ => false,
-    }
-}
-
 fn query_has_wildcard(body: &SetExpr) -> bool {
     match body {
         SetExpr::Select(select) => select.projection.iter().any(|item| {
@@ -336,11 +489,13 @@ fn query_has_wildcard(body: &SetExpr) -> bool {
     }
 }
 
-fn classify_lexically(
+fn classify_lexically_with_rules(
     index: usize,
     raw_sql: String,
     clean_body: &str,
     expected_rows_hint: Option<i64>,
+    dialect: &dyn Dialect,
+    rules: DialectLexRules,
 ) -> StatementAnalysis {
     let tokens: Vec<String> = clean_body
         .split_whitespace()
@@ -353,7 +508,7 @@ fn classify_lexically(
     let mut warnings = Vec::new();
 
     let (access_kind, statement_type) = match first {
-        "WITH" => classify_cte_lexically(index, clean_body, &mut warnings),
+        "WITH" => classify_cte_lexically(index, clean_body, &mut warnings, rules),
         "SELECT" => {
             if contains_word_ci(&upper_body, "INTO")
                 && (contains_word_ci(&upper_body, "OUTFILE")
@@ -370,7 +525,66 @@ fn classify_lexically(
                 (SqlAccessKind::ReadOnly, "SELECT".to_string())
             }
         }
-        "EXPLAIN" | "SHOW" | "DESC" | "DESCRIBE" => (SqlAccessKind::ReadOnly, first.to_string()),
+        "EXPLAIN" => {
+            return classify_explain_lexically(
+                index,
+                raw_sql,
+                clean_body,
+                expected_rows_hint,
+                dialect,
+                rules,
+            );
+        }
+        "ANALYZE" => {
+            let (executes_query, inner) = strip_leading_analyze_prefix(clean_body);
+            if executes_query && !inner.is_empty() {
+                if let Ok(parsed) = Parser::parse_sql(dialect, inner) {
+                    if !parsed.is_empty() {
+                        let mut k_worst = SqlAccessKind::ReadOnly;
+                        let mut t_worst = String::new();
+                        for (pos, stmt) in parsed.iter().enumerate() {
+                            let (k, st_type) = classify_ast_statement(index, stmt, &mut warnings);
+                            if pos == 0 || kind_rank(k) > kind_rank(k_worst) {
+                                k_worst = k;
+                                t_worst = st_type;
+                            }
+                        }
+                        let st_type = if matches!(k_worst, SqlAccessKind::ReadOnly) {
+                            "ANALYZE_SELECT".to_string()
+                        } else {
+                            format!("EXPLAIN_ANALYZE_{t_worst}")
+                        };
+                        return StatementAnalysis {
+                            index,
+                            sql: raw_sql,
+                            access_kind: k_worst,
+                            statement_type: st_type,
+                            expected_rows_hint,
+                            warnings,
+                        };
+                    }
+                }
+                let inner_res = classify_lexically_with_rules(
+                    index,
+                    raw_sql,
+                    inner,
+                    expected_rows_hint,
+                    dialect,
+                    rules,
+                );
+                let st_type = if matches!(inner_res.access_kind, SqlAccessKind::ReadOnly) {
+                    "ANALYZE_SELECT".to_string()
+                } else {
+                    format!("EXPLAIN_ANALYZE_{}", inner_res.statement_type)
+                };
+                return StatementAnalysis {
+                    statement_type: st_type,
+                    ..inner_res
+                };
+            }
+            (SqlAccessKind::AdminOrDcl, "ANALYZE".to_string())
+        }
+        "SHOW" | "DESC" | "DESCRIBE" => (SqlAccessKind::ReadOnly, first.to_string()),
         "PRAGMA" => {
             if clean_body.contains('=') {
                 (SqlAccessKind::AdminOrDcl, "PRAGMA_SET".to_string())
@@ -422,26 +636,185 @@ fn classify_lexically(
     }
 }
 
-fn contains_word_ci(upper_haystack: &str, word: &str) -> bool {
-    upper_haystack
-        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
-        .any(|tok| tok == word)
+fn strip_leading_analyze_prefix(sql: &str) -> (bool, &str) {
+    let trimmed = sql.trim_start();
+    let Some(rest) = trimmed
+        .get(.."ANALYZE".len())
+        .filter(|h| h.eq_ignore_ascii_case("ANALYZE"))
+        .map(|_| trimmed["ANALYZE".len()..].trim_start())
+    else {
+        return (false, trimmed);
+    };
+    let upper = rest.to_ascii_uppercase();
+    if upper.starts_with("SELECT")
+        || upper.starts_with("WITH")
+        || upper.starts_with("INSERT")
+        || upper.starts_with("UPDATE")
+        || upper.starts_with("DELETE")
+        || upper.starts_with("MERGE")
+        || upper.starts_with("REPLACE")
+        || upper.starts_with('(')
+    {
+        return (true, rest);
+    }
+    (false, rest)
 }
 
-fn classify_cte_lexically(
+fn classify_explain_lexically(
     index: usize,
+    raw_sql: String,
     clean_body: &str,
-    warnings: &mut Vec<SqlRiskWarning>,
-) -> (SqlAccessKind, String) {
-    // Scan tokens at parenthesis depth 0 (outside string literals) to find the main DML verb after CTE definitions.
-    let bytes = clean_body.as_bytes();
+    expected_rows_hint: Option<i64>,
+    dialect: &dyn Dialect,
+    rules: DialectLexRules,
+) -> StatementAnalysis {
+    let mut rest = clean_body.trim_start();
+    if let Some(after) = rest
+        .get(.."EXPLAIN".len())
+        .filter(|h| h.eq_ignore_ascii_case("EXPLAIN"))
+        .map(|_| rest["EXPLAIN".len()..].trim_start())
+    {
+        rest = after;
+    }
+
+    let mut is_analyze = false;
+    loop {
+        let trimmed = rest.trim_start();
+        if trimmed.starts_with('(') {
+            if let Some(close_idx) = find_matching_paren(trimmed) {
+                let opt_content = trimmed[1..close_idx].to_ascii_uppercase();
+                if contains_word_ci(&opt_content, "ANALYZE") {
+                    is_analyze = true;
+                }
+                rest = trimmed[close_idx + 1..].trim_start();
+                continue;
+            }
+        }
+        let next_tok_end = trimmed
+            .find(|c: char| c.is_whitespace() || c == '(' || c == '=')
+            .unwrap_or(trimmed.len());
+        let tok_upper = trimmed[..next_tok_end].to_ascii_uppercase();
+        if matches!(
+            tok_upper.as_str(),
+            "ANALYZE"
+                | "VERBOSE"
+                | "QUERY"
+                | "PLAN"
+                | "EXTENDED"
+                | "OUTLINE"
+                | "PIPELINE"
+                | "AST"
+                | "ESTIMATE"
+                | "SYNTAX"
+                | "FOR"
+                | "PARTITIONS"
+        ) {
+            if tok_upper == "ANALYZE" {
+                is_analyze = true;
+            }
+            rest = trimmed[next_tok_end..].trim_start();
+            continue;
+        }
+        if tok_upper == "FORMAT" {
+            let after_fmt = trimmed[next_tok_end..].trim_start();
+            let after_eq = after_fmt.strip_prefix('=').unwrap_or(after_fmt).trim_start();
+            let val_end = after_eq
+                .find(|c: char| c.is_whitespace())
+                .unwrap_or(after_eq.len());
+            rest = after_eq[val_end..].trim_start();
+            continue;
+        }
+        rest = trimmed;
+        break;
+    }
+
+    if rest.is_empty() {
+        return StatementAnalysis {
+            index,
+            sql: raw_sql,
+            access_kind: SqlAccessKind::Unknown,
+            statement_type: "EXPLAIN".to_string(),
+            expected_rows_hint,
+            warnings: Vec::new(),
+        };
+    }
+
+    let mut warnings = Vec::new();
+    let inner_res = match Parser::parse_sql(dialect, rest) {
+        Ok(parsed) if !parsed.is_empty() => {
+            let mut k_worst = SqlAccessKind::ReadOnly;
+            let mut t_worst = String::new();
+            for (pos, stmt) in parsed.iter().enumerate() {
+                let (k, st_type) = classify_ast_statement(index, stmt, &mut warnings);
+                if pos == 0 || kind_rank(k) > kind_rank(k_worst) {
+                    k_worst = k;
+                    t_worst = st_type;
+                }
+            }
+            (k_worst, t_worst, warnings)
+        }
+        _ => {
+            let lex = classify_lexically_with_rules(
+                index,
+                raw_sql.clone(),
+                rest,
+                expected_rows_hint,
+                dialect,
+                rules,
+            );
+            (lex.access_kind, lex.statement_type, lex.warnings)
+        }
+    };
+
+    let (inner_kind, inner_type, mut out_warnings) = inner_res;
+    if !matches!(inner_kind, SqlAccessKind::ReadOnly) {
+        if is_analyze {
+            out_warnings.push(SqlRiskWarning {
+                code: "EXPLAIN_ANALYZE_MUTATION".to_string(),
+                level: RiskLevel::Critical,
+                message: format!(
+                    "EXPLAIN ANALYZE 会实际执行内部的 {inner_type} 语句，禁止用于写操作或只读连接"
+                ),
+                statement_index: index,
+            });
+        }
+        let st_type = if is_analyze {
+            format!("EXPLAIN_ANALYZE_{inner_type}")
+        } else {
+            format!("EXPLAIN_{inner_type}")
+        };
+        StatementAnalysis {
+            index,
+            sql: raw_sql,
+            access_kind: inner_kind,
+            statement_type: st_type,
+            expected_rows_hint,
+            warnings: out_warnings,
+        }
+    } else {
+        StatementAnalysis {
+            index,
+            sql: raw_sql,
+            access_kind: SqlAccessKind::ReadOnly,
+            statement_type: if is_analyze {
+                "EXPLAIN_ANALYZE".to_string()
+            } else {
+                "EXPLAIN".to_string()
+            },
+            expected_rows_hint,
+            warnings: out_warnings,
+        }
+    }
+}
+
+fn find_matching_paren(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'(') {
+        return None;
+    }
     let mut depth = 0usize;
     let mut in_single = false;
-    let mut in_double = false;
     let mut i = 0usize;
-    let mut top_words = Vec::new();
-    let mut all_words = Vec::new();
-
     while i < bytes.len() {
         let b = bytes[i];
         if in_single {
@@ -455,15 +828,99 @@ fn classify_cte_lexically(
             i += 1;
             continue;
         }
+        match b {
+            b'\'' => in_single = true,
+            b'(' => depth += 1,
+            b')' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+fn contains_word_ci(upper_haystack: &str, word: &str) -> bool {
+    upper_haystack
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .any(|tok| tok == word)
+}
+
+fn classify_cte_lexically(
+    index: usize,
+    clean_body: &str,
+    warnings: &mut Vec<SqlRiskWarning>,
+    rules: DialectLexRules,
+) -> (SqlAccessKind, String) {
+    // Scan tokens at parenthesis depth 0 (outside string literals) to find the main DML/admin verb after CTE definitions.
+    let bytes = clean_body.as_bytes();
+    let mut depth = 0usize;
+    let mut in_single = false;
+    let mut e_escaped = false;
+    let mut in_double = false;
+    let mut dollar_tag: Option<&[u8]> = None;
+    let mut i = 0usize;
+    let mut top_words = Vec::new();
+    let mut all_words = Vec::new();
+
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(tag) = dollar_tag {
+            if bytes[i..].starts_with(tag) {
+                i += tag.len();
+                dollar_tag = None;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_single {
+            if (rules.backslash_escapes_in_single_quote || e_escaped) && b == b'\\' {
+                i += if i + 1 < bytes.len() { 2 } else { 1 };
+                continue;
+            }
+            if b == b'\'' {
+                if bytes.get(i + 1) == Some(&b'\'') {
+                    i += 2;
+                    continue;
+                }
+                in_single = false;
+                e_escaped = false;
+            }
+            i += 1;
+            continue;
+        }
         if in_double {
             if b == b'"' {
+                if bytes.get(i + 1) == Some(&b'"') {
+                    i += 2;
+                    continue;
+                }
                 in_double = false;
             }
             i += 1;
             continue;
         }
+        if rules.dollar_quoting {
+            if let Some(tag) = parse_dollar_tag(bytes, i) {
+                dollar_tag = Some(tag);
+                i += tag.len();
+                continue;
+            }
+        }
+        if is_e_string_start(bytes, i, rules) {
+            in_single = true;
+            e_escaped = true;
+            i += 2;
+            continue;
+        }
         if b == b'\'' {
             in_single = true;
+            e_escaped = false;
             i += 1;
             continue;
         }
@@ -514,17 +971,21 @@ fn classify_cte_lexically(
             "DROP" | "TRUNCATE" | "CREATE" | "ALTER" => {
                 return (SqlAccessKind::WriteDdl, word.clone());
             }
+            "CALL" | "EXEC" | "EXECUTE" | "COPY" | "GRANT" | "REVOKE" | "ATTACH"
+            | "DETACH" | "LOAD" | "IMPORT" | "VACUUM" => {
+                return (SqlAccessKind::AdminOrDcl, word.clone());
+            }
             _ => {}
         }
     }
 
     for word in top_words.iter().skip(1) {
-        if matches!(word.as_str(), "SELECT" | "VALUES") {
+        if matches!(word.as_str(), "SELECT" | "VALUES" | "TABLE") {
             return (SqlAccessKind::ReadOnly, "SELECT".to_string());
         }
     }
 
-    (SqlAccessKind::ReadOnly, "WITH".to_string())
+    (SqlAccessKind::Unknown, "WITH".to_string())
 }
 
 fn aggregate_access_kind(statements: &[StatementAnalysis]) -> SqlAccessKind {
@@ -553,156 +1014,179 @@ fn kind_rank(kind: SqlAccessKind) -> u8 {
 
 /// Splits SQL text on top-level `;` while respecting string literals, quoted identifiers, and comments.
 pub fn split_sql_statements(sql: &str) -> Vec<String> {
-    let bytes = sql.as_bytes();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    let mut i = 0usize;
+    split_sql_statements_with_rules(
+        sql,
+        DialectLexRules {
+            backslash_escapes_in_single_quote: true,
+            allow_e_string: true,
+            dollar_quoting: true,
+        },
+    )
+}
 
+/// Splits SQL text on top-level `;` using the given database engine's string-escaping and
+/// dollar-quoting rules.
+pub fn split_sql_statements_for_dialect(sql: &str, db_type: &DbEngineType) -> Vec<String> {
+    split_sql_statements_with_rules(sql, DialectLexRules::for_engine(db_type))
+}
+
+fn split_sql_statements_with_rules(sql: &str, rules: DialectLexRules) -> Vec<String> {
+    split_sql_statement_spans_with_rules(sql, rules)
+        .into_iter()
+        .map(|(s, e)| sql[s..e].trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn strip_sql_comments_for_dialect(sql: &str, db_type: &DbEngineType) -> String {
+    strip_sql_comments_with_rules(sql, DialectLexRules::for_engine(db_type))
+}
+
+fn strip_sql_comments_with_rules(sql: &str, rules: DialectLexRules) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = String::with_capacity(sql.len());
+    let mut i = 0usize;
     let mut in_single = false;
+    let mut e_escaped = false;
     let mut in_double = false;
     let mut in_backtick = false;
-    let mut in_line_comment = false;
-    let mut in_block_comment = false;
+    let mut dollar_tag: Option<&[u8]> = None;
 
     while i < bytes.len() {
         let b = bytes[i];
         let next = bytes.get(i + 1).copied();
 
-        if in_line_comment {
-            if b == b'\n' {
-                in_line_comment = false;
+        if let Some(tag) = dollar_tag {
+            if bytes[i..].starts_with(tag) {
+                let end = i + tag.len();
+                out.push_str(&sql[i..end]);
+                i = end;
+                dollar_tag = None;
+                continue;
             }
-            i += 1;
+            let ch = sql[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
-        if in_block_comment {
-            if b == b'*' && next == Some(b'/') {
-                in_block_comment = false;
-                i += 2;
-            } else {
-                i += 1;
-            }
-            continue;
-        }
+
         if in_single {
-            if b == b'\\' {
-                i += 2;
+            if (rules.backslash_escapes_in_single_quote || e_escaped) && b == b'\\' {
+                out.push('\\');
+                i += 1;
+                if i < bytes.len() {
+                    let ch = sql[i..].chars().next().unwrap();
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
                 continue;
             }
             if b == b'\'' {
                 if next == Some(b'\'') {
+                    out.push_str("''");
                     i += 2;
                     continue;
                 }
                 in_single = false;
+                e_escaped = false;
+                out.push('\'');
+                i += 1;
+                continue;
             }
-            i += 1;
+            let ch = sql[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
+
         if in_double {
             if b == b'"' {
                 if next == Some(b'"') {
+                    out.push_str("\"\"");
                     i += 2;
                     continue;
                 }
                 in_double = false;
+                out.push('"');
+                i += 1;
+                continue;
             }
-            i += 1;
+            let ch = sql[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
+
         if in_backtick {
             if b == b'`' {
+                if next == Some(b'`') {
+                    out.push_str("``");
+                    i += 2;
+                    continue;
+                }
                 in_backtick = false;
+                out.push('`');
+                i += 1;
+                continue;
             }
-            i += 1;
+            let ch = sql[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
             continue;
         }
 
         if b == b'-' && next == Some(b'-') {
-            in_line_comment = true;
-            i += 2;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
             continue;
         }
         if b == b'/' && next == Some(b'*') {
-            in_block_comment = true;
             i += 2;
+            while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+            out.push(' ');
+            continue;
+        }
+        if rules.dollar_quoting {
+            if let Some(tag) = parse_dollar_tag(bytes, i) {
+                let end = i + tag.len();
+                out.push_str(&sql[i..end]);
+                i = end;
+                dollar_tag = Some(tag);
+                continue;
+            }
+        }
+        if is_e_string_start(bytes, i, rules) {
+            out.push(b as char);
+            out.push('\'');
+            i += 2;
+            in_single = true;
+            e_escaped = true;
             continue;
         }
         if b == b'\'' {
             in_single = true;
+            e_escaped = false;
+            out.push('\'');
             i += 1;
             continue;
         }
         if b == b'"' {
             in_double = true;
+            out.push('"');
             i += 1;
             continue;
         }
         if b == b'`' {
             in_backtick = true;
+            out.push('`');
             i += 1;
             continue;
         }
 
-        if b == b';' {
-            let chunk = sql[start..i].trim();
-            if !chunk.is_empty() {
-                out.push(chunk.to_string());
-            }
-            start = i + 1;
-        }
-        i += 1;
-    }
-
-    if start < sql.len() {
-        let tail = sql[start..].trim();
-        if !tail.is_empty() {
-            out.push(tail.to_string());
-        }
-    }
-
-    out
-}
-
-fn strip_sql_comments(sql: &str) -> String {
-    let bytes = sql.as_bytes();
-    let mut out = String::with_capacity(sql.len());
-    let mut i = 0usize;
-    let mut in_single = false;
-    let mut in_double = false;
-    let mut in_backtick = false;
-
-    while i < bytes.len() {
-        let b = bytes[i];
-        let next = bytes.get(i + 1).copied();
-
-        if !in_single && !in_double && !in_backtick {
-            if b == b'-' && next == Some(b'-') {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                continue;
-            }
-            if b == b'/' && next == Some(b'*') {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
-                out.push(' ');
-                continue;
-            }
-        }
-
-        if b == b'\'' && !in_double && !in_backtick {
-            in_single = !in_single;
-        } else if b == b'"' && !in_single && !in_backtick {
-            in_double = !in_double;
-        } else if b == b'`' && !in_single && !in_double {
-            in_backtick = !in_backtick;
-        }
-
-        // Advance safely by UTF-8 char boundary when copying non-comment content.
         let ch = sql[i..].chars().next().unwrap();
         out.push(ch);
         i += ch.len_utf8();
@@ -783,16 +1267,29 @@ pub fn extract_statement_at_cursor(sql: &str, cursor_char_offset: usize) -> Opti
 }
 
 fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
+    split_sql_statement_spans_with_rules(
+        sql,
+        DialectLexRules {
+            backslash_escapes_in_single_quote: true,
+            allow_e_string: true,
+            dollar_quoting: true,
+        },
+    )
+}
+
+fn split_sql_statement_spans_with_rules(sql: &str, rules: DialectLexRules) -> Vec<(usize, usize)> {
     let bytes = sql.as_bytes();
     let mut out = Vec::new();
     let mut start = 0usize;
     let mut i = 0usize;
 
     let mut in_single = false;
+    let mut e_escaped = false;
     let mut in_double = false;
     let mut in_backtick = false;
     let mut in_line_comment = false;
     let mut in_block_comment = false;
+    let mut dollar_tag: Option<&[u8]> = None;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -814,9 +1311,18 @@ fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
             }
             continue;
         }
+        if let Some(tag) = dollar_tag {
+            if bytes[i..].starts_with(tag) {
+                i += tag.len();
+                dollar_tag = None;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
         if in_single {
-            if b == b'\\' {
-                i += 2;
+            if (rules.backslash_escapes_in_single_quote || e_escaped) && b == b'\\' {
+                i += if i + 1 < bytes.len() { 2 } else { 1 };
                 continue;
             }
             if b == b'\'' {
@@ -825,6 +1331,7 @@ fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
                     continue;
                 }
                 in_single = false;
+                e_escaped = false;
             }
             i += 1;
             continue;
@@ -842,6 +1349,10 @@ fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
         }
         if in_backtick {
             if b == b'`' {
+                if next == Some(b'`') {
+                    i += 2;
+                    continue;
+                }
                 in_backtick = false;
             }
             i += 1;
@@ -858,8 +1369,22 @@ fn split_sql_statement_spans(sql: &str) -> Vec<(usize, usize)> {
             i += 2;
             continue;
         }
+        if rules.dollar_quoting {
+            if let Some(tag) = parse_dollar_tag(bytes, i) {
+                dollar_tag = Some(tag);
+                i += tag.len();
+                continue;
+            }
+        }
+        if is_e_string_start(bytes, i, rules) {
+            in_single = true;
+            e_escaped = true;
+            i += 2;
+            continue;
+        }
         if b == b'\'' {
             in_single = true;
+            e_escaped = false;
             i += 1;
             continue;
         }
@@ -1730,5 +2255,87 @@ GROUP BY customer_id;
 
         let sel_into = analyze_sql("SELECT * INTO backup_users FROM users;", &DbEngineType::SqlServer);
         assert_ne!(sel_into.overall_kind, SqlAccessKind::ReadOnly);
+    }
+
+    #[test]
+    fn test_multi_statement_dialect_escape_and_dollar_quote_bypass_blocked() {
+        // 1. PostgreSQL / SQLite / SQL Server treat `\'` as literal backslash + closing quote (`''` escapes quotes).
+        let pg_bypass = "SELECT '\\'; DROP TABLE users; --';";
+        for engine in [
+            DbEngineType::PostgreSql,
+            DbEngineType::Sqlite,
+            DbEngineType::SqlServer,
+        ] {
+            let res = analyze_sql(pg_bypass, &engine);
+            assert_eq!(res.overall_kind, SqlAccessKind::WriteDdl, "engine={engine:?}");
+            assert!(res.requires_ticket, "engine={engine:?}");
+        }
+
+        // 2. PostgreSQL `$tag$...$tag$` hides `;` safely inside the literal, while `/*` inside `$tag$`
+        // must NOT swallow a trailing `DROP TABLE` outside the dollar quote.
+        let pg_safe = "SELECT $tag$a;b/*c$tag$; SELECT 1;";
+        let res_safe = analyze_sql(pg_safe, &DbEngineType::PostgreSql);
+        assert_eq!(res_safe.overall_kind, SqlAccessKind::ReadOnly);
+        assert!(!res_safe.requires_ticket);
+        assert_eq!(res_safe.statements.len(), 2);
+
+        let pg_comment_trap = "SELECT $tag$/*$tag$; DROP TABLE users; -- */";
+        let res_trap = analyze_sql(pg_comment_trap, &DbEngineType::PostgreSql);
+        assert_eq!(res_trap.overall_kind, SqlAccessKind::WriteDdl);
+        assert!(res_trap.requires_ticket);
+
+        // 3. Even if multiple AST statements arrive inside a single chunk, all statements are inspected.
+        let multi_chunk = analyze_single_statement(
+            0,
+            "SELECT 1; DELETE FROM users WHERE id = 1;".to_string(),
+            "SELECT 1; DELETE FROM users WHERE id = 1;",
+            None,
+            &PostgreSqlDialect {},
+            &DbEngineType::PostgreSql,
+        );
+        assert_eq!(multi_chunk.access_kind, SqlAccessKind::WriteDml);
+        assert!(multi_chunk
+            .warnings
+            .iter()
+            .any(|w| w.code == "MULTI_STATEMENT_CHUNK"));
+    }
+
+    #[test]
+    fn test_explain_analyze_and_explain_wrapping_dml_classified_as_mutating() {
+        let mysql_ea_del = analyze_sql(
+            "EXPLAIN ANALYZE DELETE FROM orders WHERE id = 1;",
+            &DbEngineType::MySql,
+        );
+        assert_eq!(mysql_ea_del.overall_kind, SqlAccessKind::WriteDml);
+        assert!(mysql_ea_del.requires_ticket);
+        assert!(mysql_ea_del.statements[0]
+            .warnings
+            .iter()
+            .any(|w| w.code == "EXPLAIN_ANALYZE_MUTATION"));
+
+        let pg_ea_upd = analyze_sql(
+            "EXPLAIN (ANALYZE, BUFFERS) UPDATE orders SET status = 'X' WHERE id = 1;",
+            &DbEngineType::PostgreSql,
+        );
+        assert_eq!(pg_ea_upd.overall_kind, SqlAccessKind::WriteDml);
+        assert!(pg_ea_upd.requires_ticket);
+
+        let explain_drop = analyze_sql("EXPLAIN DROP TABLE orders;", &DbEngineType::MySql);
+        assert_eq!(explain_drop.overall_kind, SqlAccessKind::WriteDdl);
+        assert!(explain_drop.requires_ticket);
+
+        let lexical_ea = analyze_sql(
+            "EXPLAIN (CUSTOM_OPT) DELETE FROM orders;",
+            &DbEngineType::PostgreSql,
+        );
+        assert_eq!(lexical_ea.overall_kind, SqlAccessKind::WriteDml);
+        assert!(lexical_ea.requires_ticket);
+
+        let explain_sel = analyze_sql(
+            "EXPLAIN ANALYZE SELECT * FROM orders WHERE id = 1;",
+            &DbEngineType::PostgreSql,
+        );
+        assert_eq!(explain_sel.overall_kind, SqlAccessKind::ReadOnly);
+        assert!(!explain_sel.requires_ticket);
     }
 }

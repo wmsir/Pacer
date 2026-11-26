@@ -182,12 +182,13 @@ impl RedisConn {
                 })?;
                 tls_builder.add_root_certificate(cert);
             }
-            match endpoint.ssl_mode.as_deref().map(str::to_ascii_lowercase).as_deref() {
-                Some("verify-full" | "verify_full") => {}
-                Some("verify-ca" | "verify_ca") => {
+            let tls_mode = resolve_redis_tls_mode(endpoint.ssl_mode.as_deref());
+            match tls_mode {
+                RedisTlsVerify::VerifyFull => {}
+                RedisTlsVerify::VerifyCa => {
                     tls_builder.danger_accept_invalid_hostnames(true);
                 }
-                _ => {
+                RedisTlsVerify::Insecure => {
                     tls_builder.danger_accept_invalid_certs(true);
                     tls_builder.danger_accept_invalid_hostnames(true);
                 }
@@ -456,6 +457,23 @@ fn read_resp_value<'a, S: AsyncBufRead + AsyncRead + Unpin + Send>(
             ))),
         }
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RedisTlsVerify {
+    VerifyFull,
+    VerifyCa,
+    Insecure,
+}
+
+fn resolve_redis_tls_mode(ssl_mode: Option<&str>) -> RedisTlsVerify {
+    match ssl_mode.map(|s| s.trim().to_ascii_lowercase()).as_deref() {
+        Some("insecure" | "skip-verify" | "skip_verify" | "no-verify" | "disable" | "disabled") => {
+            RedisTlsVerify::Insecure
+        }
+        Some("verify-ca" | "verify_ca") => RedisTlsVerify::VerifyCa,
+        _ => RedisTlsVerify::VerifyFull,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1125,6 +1143,11 @@ impl DbBackend for RedisBackend {
     async fn explain(&self, db: &str, sql: &str) -> CoreResult<ExplainResult> {
         let started = Instant::now();
         let analysis = analyze_sql(sql, &DbEngineType::Redis);
+        if self.read_only && !matches!(analysis.overall_kind, SqlAccessKind::ReadOnly) {
+            return Err(CoreError::PermissionDenied(
+                "Connection is marked read-only; mutating Redis command blocked".to_string(),
+            ));
+        }
         let cmds = split_redis_commands(sql);
         let first_cmd = cmds.first().map(|c| tokenize_redis_command(c)).unwrap_or_default();
         let cmd_name = first_cmd
@@ -1610,5 +1633,34 @@ mod tests {
         let mut cursor = BufReader::new(std::io::Cursor::new(payload));
         let err = read_resp_value(&mut cursor, 0).await.unwrap_err();
         assert!(err.to_string().contains("exceeded safety cap"));
+    }
+
+    #[test]
+    fn test_redis_tls_verifies_by_default_and_only_skips_on_explicit_insecure() {
+        assert_eq!(resolve_redis_tls_mode(None), RedisTlsVerify::VerifyFull);
+        assert_eq!(
+            resolve_redis_tls_mode(Some("preferred")),
+            RedisTlsVerify::VerifyFull
+        );
+        assert_eq!(
+            resolve_redis_tls_mode(Some("required")),
+            RedisTlsVerify::VerifyFull
+        );
+        assert_eq!(
+            resolve_redis_tls_mode(Some("verify_identity")),
+            RedisTlsVerify::VerifyFull
+        );
+        assert_eq!(
+            resolve_redis_tls_mode(Some("verify_ca")),
+            RedisTlsVerify::VerifyCa
+        );
+        assert_eq!(
+            resolve_redis_tls_mode(Some("insecure")),
+            RedisTlsVerify::Insecure
+        );
+        assert_eq!(
+            resolve_redis_tls_mode(Some("disable")),
+            RedisTlsVerify::Insecure
+        );
     }
 }

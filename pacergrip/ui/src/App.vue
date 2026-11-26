@@ -1893,7 +1893,7 @@ async function handleExportDbeaverFolder(includePasswords = true, profileIds?: s
 }
 
 async function handleExportConnectionsXlsx(
-  includePasswords = true,
+  includePasswords = false,
   profileIds?: string[],
   defaultName = 'pacer-connections-accounts.xlsx',
 ) {
@@ -5720,7 +5720,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 class="dropdown-item"
-                @click="openMenu = null; handleExportConnectionsXlsx(true)"
+                @click="openMenu = null; handleExportConnectionsXlsx(false)"
               >
                 <span>📊 导出数据源账号为 Excel (.xlsx)...</span>
               </button>

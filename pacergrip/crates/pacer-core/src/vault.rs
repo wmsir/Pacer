@@ -339,18 +339,68 @@ fn generate_256_bit_master_key() -> [u8; 32] {
 }
 
 fn load_or_create_master_key_v3(storage_dir: &Path, is_portable: bool) -> Result<[u8; 32], String> {
-    if let Some(existing) = try_load_existing_master_key_v3(storage_dir, is_portable) {
+    if !is_portable {
+        if let Some(os_key) = try_load_os_master_key_v3(storage_dir) {
+            return Ok(os_key);
+        }
+        // Seamless upgrade from pre-fix Windows currentUser plaintext `vault_v3.key` -> OS DPAPI/Keychain.
+        let plain_path = storage_dir.join(VAULT_PLAIN_V3_KEY_FILE);
+        if let Ok(mut raw) = std::fs::read(&plain_path) {
+            let existing = <[u8; 32]>::try_from(raw.as_slice()).ok();
+            raw.zeroize();
+            if let Some(mut key) = existing {
+                match try_store_os_master_key_v3(storage_dir, &key) {
+                    Ok(true) => {
+                        let _ = std::fs::remove_file(&plain_path);
+                        let _ = std::fs::remove_file(storage_dir.join(VAULT_PLAIN_KEY_FILE));
+                        return Ok(key);
+                    }
+                    Ok(false) => {
+                        if cfg!(any(target_os = "windows", target_os = "macos")) {
+                            key.zeroize();
+                            return Err(
+                                "无法将主密钥迁移至操作系统安全凭据库 (DPAPI/Keychain)，拒绝继续使用明文密钥文件。".to_string()
+                            );
+                        }
+                        return Ok(key);
+                    }
+                    Err(e) => {
+                        key.zeroize();
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    } else if let Some(existing) = try_load_existing_master_key_v3(storage_dir, true) {
         return Ok(existing);
     }
 
     std::fs::create_dir_all(storage_dir).map_err(|e| e.to_string())?;
-    let new_key = generate_256_bit_master_key();
+    let mut new_key = generate_256_bit_master_key();
 
-    if !is_portable && try_store_os_master_key_v3(storage_dir, &new_key)? {
-        return Ok(new_key);
+    if !is_portable {
+        match try_store_os_master_key_v3(storage_dir, &new_key) {
+            Ok(true) => return Ok(new_key),
+            Ok(false) => {
+                if cfg!(any(target_os = "windows", target_os = "macos")) {
+                    new_key.zeroize();
+                    return Err(
+                        "无法将主密钥写入操作系统安全凭据库 (DPAPI/Keychain)，拒绝明文落盘；如需便携模式请在程序目录放置 .pacer-portable 文件。".to_string()
+                    );
+                }
+            }
+            Err(e) => {
+                new_key.zeroize();
+                return Err(e);
+            }
+        }
     }
 
-    write_atomic_restricted_file(&storage_dir.join(VAULT_PLAIN_V3_KEY_FILE), &new_key)?;
+    if let Err(e) = write_atomic_restricted_file(&storage_dir.join(VAULT_PLAIN_V3_KEY_FILE), &new_key)
+    {
+        new_key.zeroize();
+        return Err(e);
+    }
     Ok(new_key)
 }
 
@@ -379,9 +429,17 @@ fn decrypt_vault_payload_v1_or_v2(
     }
     let (iv, ct) = iv_and_ct.split_at(16);
     let mut buf = ct.to_vec();
-    let dec = Aes128CbcDec::new_from_slices(key, iv).ok()?;
-    let pt = dec.decrypt_padded_mut::<Pkcs7>(&mut buf).ok()?;
-    let parsed = serde_json::from_slice::<HashMap<String, String>>(pt).ok();
+    let dec = match Aes128CbcDec::new_from_slices(key, iv) {
+        Ok(d) => d,
+        Err(_) => {
+            buf.zeroize();
+            return None;
+        }
+    };
+    let parsed = match dec.decrypt_padded_mut::<Pkcs7>(&mut buf) {
+        Ok(pt) => serde_json::from_slice::<HashMap<String, String>>(pt).ok(),
+        Err(_) => None,
+    };
     buf.zeroize();
     parsed
 }
@@ -435,6 +493,12 @@ pub fn load_vault_passwords(storage_dir: &Path, is_portable: bool) -> HashMap<St
             return HashMap::new();
         };
         let out = decrypt_vault_payload_v3(&master_key, rest).unwrap_or_default();
+        if !is_portable && try_load_os_master_key_v3(storage_dir).is_none() {
+            if let Ok(true) = try_store_os_master_key_v3(storage_dir, &master_key) {
+                let _ = std::fs::remove_file(storage_dir.join(VAULT_PLAIN_V3_KEY_FILE));
+                let _ = std::fs::remove_file(storage_dir.join(VAULT_PLAIN_KEY_FILE));
+            }
+        }
         master_key.zeroize();
         return out;
     }
@@ -499,13 +563,14 @@ pub fn save_vault_passwords(
     })?;
     enc_key.zeroize();
 
-    let ct_len = enc
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len)
-        .map_err(|_| {
+    let ct_len = match enc.encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len) {
+        Ok(ct) => ct.len(),
+        Err(_) => {
             mac_key.zeroize();
-            "vault encrypt error".to_string()
-        })?
-        .len();
+            buf.zeroize();
+            return Err("vault encrypt error".to_string());
+        }
+    };
 
     let mut mac = <HmacSha256 as Mac>::new_from_slice(&mac_key).map_err(|e| {
         mac_key.zeroize();
@@ -616,5 +681,28 @@ mod tests {
             .starts_with(VAULT_V3_MAGIC));
         assert_eq!(load_vault_passwords(&dir2, true), secrets);
         let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_non_portable_migrates_plain_v3_key_to_dpapi_and_removes_plaintext_key() {
+        let dir = std::env::temp_dir().join(format!("pacer_vault_dpapi_mig_{}", Uuid::new_v4()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut secrets = HashMap::new();
+        secrets.insert("prod-conn".to_string(), "TopSecret!123".to_string());
+
+        // Seed portable vault (plaintext vault_v3.key)
+        save_vault_passwords(&dir, true, &secrets).unwrap();
+        assert!(dir.join(VAULT_PLAIN_V3_KEY_FILE).is_file());
+        assert!(!dir.join(VAULT_DPAPI_V3_KEY_FILE).exists());
+
+        // Opening in non-portable mode (default for installed Windows currentUser)
+        // must migrate the key into DPAPI and delete plaintext vault_v3.key.
+        assert_eq!(load_vault_passwords(&dir, false), secrets);
+        assert!(dir.join(VAULT_DPAPI_V3_KEY_FILE).is_file());
+        assert!(!dir.join(VAULT_PLAIN_V3_KEY_FILE).exists());
+        assert_eq!(load_vault_passwords(&dir, false), secrets);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
