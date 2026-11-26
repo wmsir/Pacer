@@ -1,6 +1,5 @@
 package com.wmdb.security;
 
-import io.jsonwebtoken.Claims;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,10 +13,10 @@ import java.io.IOException;
 import java.util.ArrayList;
 
 /**
- * JWT 鉴权过滤器
+ * 双模 JWT 认证过滤器（传统 OneID HS256 与统一认证中心 RS256 JWKS）
  * <p>
- * 拦截每次请求，从 Authorization 请求头提取并校验 Token。
- * 如果有效，将用户信息封装存入 SecurityContextHolder；如果携带无效/过期 Token，直接响应 401。
+ * 拦截所有 HTTP 请求，校验黑名单、签名与会话有效性；
+ * 如果有效，将统一映射后的用户标识封装存入 SecurityContextHolder；如果携带无效/过期/已吊销 Token，直接响应 401。
  * </p>
  *
  * @author wm
@@ -26,54 +25,43 @@ import java.util.ArrayList;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtUtils jwtUtils;
+    private final JwtTokenResolver jwtTokenResolver;
 
-    /**
-     * 构造函数注入 JwtUtils
-     *
-     * @param jwtUtils JWT 工具类
-     */
-    public JwtAuthenticationFilter(JwtUtils jwtUtils) {
-        this.jwtUtils = jwtUtils;
+    public JwtAuthenticationFilter(JwtTokenResolver jwtTokenResolver) {
+        this.jwtTokenResolver = jwtTokenResolver;
     }
 
-    /**
-     * 执行过滤逻辑
-     *
-     * @param request HTTP 请求
-     * @param response HTTP 响应
-     * @param filterChain 过滤链
-     * @throws ServletException Servlet 异常
-     * @throws IOException IO 异常
-     */
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
 
         final String authHeader = request.getHeader("Authorization");
 
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        if (authHeader == null || !authHeader.regionMatches(true, 0, "Bearer ", 0, 7)) {
             filterChain.doFilter(request, response);
             return;
         }
 
-        final String jwt = authHeader.substring(7);
+        final String jwt = authHeader.substring(7).trim();
         try {
-            Claims claims = jwtUtils.parseClaimsIfValid(jwt);
-            if (claims != null) {
-                String idCard = claims.getSubject();
-
+            JwtTokenResolver.ResolvedPrincipal resolved = jwtTokenResolver.resolve(jwt);
+            if (resolved != null) {
                 UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                        idCard, null, new ArrayList<>());
+                        resolved.getPrincipal(), null, new ArrayList<>());
 
                 SecurityContextHolder.getContext().setAuthentication(authToken);
                 filterChain.doFilter(request, response);
+            } else if ("/api/v1/auth/logout".equals(request.getRequestURI())) {
+                SecurityContextHolder.clearContext();
+                filterChain.doFilter(request, response);
             } else {
+                SecurityContextHolder.clearContext();
                 response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                 response.setContentType("application/json;charset=UTF-8");
                 response.getWriter().write("{\"code\":\"A0220\", \"message\":\"登录身份已过期或无效，请重新登录\"}");
             }
         } catch (Exception e) {
+            SecurityContextHolder.clearContext();
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write("{\"code\":\"A0220\", \"message\":\"登录身份验证未通过，请重新登录\"}");

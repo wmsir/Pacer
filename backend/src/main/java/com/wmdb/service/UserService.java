@@ -5,6 +5,7 @@ import com.wmdb.exception.BusinessException;
 import com.wmdb.mapper.SysUserMapper;
 import com.wmdb.model.SysUser;
 import com.wmdb.model.SysUserDTO;
+import com.wmdb.security.JwtBlacklistService;
 import com.wmdb.security.SmUtils;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class UserService {
     private final SysUserMapper sysUserMapper;
     private final DataSource dataSource;
     private final UserDisplayNameService userDisplayNameService;
+    private final JwtBlacklistService jwtBlacklistService;
 
     @PostConstruct
     public void initUserColumns() {
@@ -216,6 +218,102 @@ public class UserService {
     }
 
     /**
+     * 立即吊销用户在本地 JWT 黑名单、Redis 登录缓存以及 fwpt_auth 会话表中的所有有效会话
+     */
+    public void revokeUserSessionsEverywhere(SysUser user) {
+        if (user == null) {
+            return;
+        }
+        jwtBlacklistService.revokeUserTokens(user);
+        if (user.getId() == null && (user.getUsername() == null || user.getUsername().trim().isEmpty())) {
+            return;
+        }
+        try (Connection conn = dataSource.getConnection()) {
+            String authUserId = null;
+            if (user.getId() != null) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT id FROM fwpt_auth.auth_user WHERE legacy_oneid_id = ? LIMIT 1")) {
+                    ps.setLong(1, user.getId());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            authUserId = rs.getString("id");
+                        }
+                    }
+                }
+            }
+            if ((authUserId == null || authUserId.trim().isEmpty())
+                    && user.getUsername() != null && !user.getUsername().trim().isEmpty()) {
+                try (PreparedStatement ps = conn.prepareStatement(
+                        "SELECT id FROM fwpt_auth.auth_user WHERE username = ? LIMIT 1")) {
+                    ps.setString(1, user.getUsername().trim());
+                    try (ResultSet rs = ps.executeQuery()) {
+                        if (rs.next()) {
+                            authUserId = rs.getString("id");
+                        }
+                    }
+                }
+            }
+            if (authUserId != null && !authUserId.trim().isEmpty()) {
+                String trimmedAuthUserId = authUserId.trim();
+                jwtBlacklistService.revokeUserTokens(List.of(trimmedAuthUserId));
+                List<String> activeSids = new java.util.ArrayList<>();
+                try (PreparedStatement psSid = conn.prepareStatement(
+                        "SELECT sid FROM fwpt_auth.auth_session WHERE user_id = ? AND revoked = 0")) {
+                    psSid.setString(1, trimmedAuthUserId);
+                    try (ResultSet rsSid = psSid.executeQuery()) {
+                        while (rsSid.next()) {
+                            String sid = rsSid.getString("sid");
+                            if (sid != null && !sid.trim().isEmpty()) {
+                                activeSids.add(sid.trim());
+                            }
+                        }
+                    }
+                }
+                try (PreparedStatement psRevSess = conn.prepareStatement(
+                        "UPDATE fwpt_auth.auth_session SET revoked = 1 WHERE user_id = ? AND revoked = 0")) {
+                    psRevSess.setString(1, trimmedAuthUserId);
+                    psRevSess.executeUpdate();
+                }
+                try (PreparedStatement psRevRefresh = conn.prepareStatement(
+                        "UPDATE fwpt_auth.auth_refresh_token SET revoked = 1 WHERE user_id = ? AND revoked = 0")) {
+                    psRevRefresh.setString(1, trimmedAuthUserId);
+                    psRevRefresh.executeUpdate();
+                }
+                for (String sid : activeSids) {
+                    jwtBlacklistService.revokeSsoSessionRedis(sid);
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("Non-blocking fwpt_auth session revocation failed for user {}: {}", user.getUsername(), ex.getMessage());
+        }
+    }
+
+    /**
+     * 按统一认证中心 sid 吊销单个 SSO 会话与刷新令牌
+     */
+    public void revokeFwptAuthSessionBySid(String sid) {
+        if (sid == null || sid.trim().isEmpty()) {
+            return;
+        }
+        String trimmedSid = sid.trim();
+        jwtBlacklistService.revokeSsoSessionRedis(trimmedSid);
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement psSess = conn.prepareStatement(
+                    "UPDATE fwpt_auth.auth_session SET revoked = 1 WHERE sid = ?")) {
+                psSess.setString(1, trimmedSid);
+                psSess.executeUpdate();
+            }
+            try (PreparedStatement psRefresh = conn.prepareStatement(
+                    "UPDATE fwpt_auth.auth_refresh_token SET revoked = 1 WHERE sid = ?")) {
+                psRefresh.setString(1, trimmedSid);
+                psRefresh.executeUpdate();
+            }
+        } catch (Exception ex) {
+            log.warn("Non-blocking fwpt_auth sid revocation failed for sid={}: {}", trimmedSid, ex.getMessage());
+        }
+    }
+
+    /**
      * 用户删除时同步在统一认证中心禁用其登录状态
      */
     public void disableUserInFwptAuth(Long legacyOneidId) {
@@ -282,6 +380,7 @@ public class UserService {
         user.setPasswordHash(newHash);
         sysUserMapper.updateById(user);
         syncUserToFwptAuth(user, newHash);
+        revokeUserSessionsEverywhere(user);
     }
 
     public List<SysUserDTO> listUsers(String keyword) {
@@ -418,14 +517,24 @@ public class UserService {
     }
 
     public void deleteUser(Long id) {
+        SysUser user = id != null ? sysUserMapper.selectById(id) : null;
+        if (user != null) {
+            revokeUserSessionsEverywhere(user);
+        }
         sysUserMapper.deleteById(id);
+        disableUserInFwptAuth(id);
     }
 
     public void toggleStatus(Long id) {
         SysUser user = sysUserMapper.selectById(id);
         if (user != null) {
-            user.setStatus(user.getStatus() != null && user.getStatus() == 1 ? 0 : 1);
+            int nextStatus = user.getStatus() != null && user.getStatus() == 1 ? 0 : 1;
+            user.setStatus(nextStatus);
             sysUserMapper.updateById(user);
+            syncUserToFwptAuth(user, null);
+            if (nextStatus == 0) {
+                revokeUserSessionsEverywhere(user);
+            }
         }
     }
 
@@ -441,6 +550,7 @@ public class UserService {
             user.setPasswordHash(hash);
             sysUserMapper.updateById(user);
             syncUserToFwptAuth(user, hash);
+            revokeUserSessionsEverywhere(user);
         }
     }
 }

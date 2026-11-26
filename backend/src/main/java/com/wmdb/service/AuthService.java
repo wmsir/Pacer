@@ -5,6 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.wmdb.mapper.SysUserMapper;
 import com.wmdb.model.SysUser;
+import com.wmdb.security.JwtBlacklistService;
+import com.wmdb.security.JwtTokenResolver;
+import com.wmdb.security.JwtTokenResolver.ResolvedPrincipal;
 import com.wmdb.security.JwtUtils;
 import com.wmdb.security.SmUtils;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -71,6 +74,9 @@ public class AuthService {
     private final UserDisplayNameService userDisplayNameService;
     private final SysRoleService sysRoleService;
     private final EmailService emailService;
+    private final JwtTokenResolver jwtTokenResolver;
+    private final JwtBlacklistService jwtBlacklistService;
+    private final UserService userService;
 
     // 内存邮箱验证码备用缓存
     private static final Map<String, SmsCodeRecord> EMAIL_CODE_CACHE = new ConcurrentHashMap<>();
@@ -83,13 +89,19 @@ public class AuthService {
                        RedisTemplate<String, Object> redisTemplate,
                        UserDisplayNameService userDisplayNameService,
                        SysRoleService sysRoleService,
-                       @org.springframework.beans.factory.annotation.Autowired(required = false) EmailService emailService) {
+                       @org.springframework.beans.factory.annotation.Autowired(required = false) EmailService emailService,
+                       JwtTokenResolver jwtTokenResolver,
+                       JwtBlacklistService jwtBlacklistService,
+                       UserService userService) {
         this.jwtUtils = jwtUtils;
         this.sysUserMapper = sysUserMapper;
         this.redisTemplate = redisTemplate;
         this.userDisplayNameService = userDisplayNameService;
         this.sysRoleService = sysRoleService;
         this.emailService = emailService;
+        this.jwtTokenResolver = jwtTokenResolver;
+        this.jwtBlacklistService = jwtBlacklistService;
+        this.userService = userService;
     }
 
     /**
@@ -705,6 +717,41 @@ public class AuthService {
                 user.setPhoneVerified(1);
             }
             sysUserMapper.updateById(user);
+            userService.syncUserToFwptAuth(user, passwordHash);
+            userService.revokeUserSessionsEverywhere(user);
+        }
+    }
+
+    /**
+     * 退出登录并立即使当前 Bearer Token 与关联会话失效
+     */
+    public void logout(String authHeader) {
+        String token = jwtTokenResolver.extractBearerToken(authHeader);
+        if (token == null) {
+            return;
+        }
+        ResolvedPrincipal resolved = jwtTokenResolver.resolve(token);
+        if (resolved != null) {
+            jwtBlacklistService.addToBlacklist(token, resolved.getExpiresAt());
+            if (resolved.getJti() != null) {
+                jwtBlacklistService.blacklistJti(resolved.getJti(), resolved.getExpiresAt());
+            }
+            if (resolved.getSid() != null) {
+                userService.revokeFwptAuthSessionBySid(resolved.getSid());
+            }
+            jwtBlacklistService.revokeLoginTokenRedis(resolved.getPrincipal());
+            if (resolved.getSysUser() != null) {
+                for (String id : JwtBlacklistService.collectUserIdentifiers(resolved.getSysUser())) {
+                    jwtBlacklistService.revokeLoginTokenRedis(id);
+                }
+            }
+            try {
+                if (redisTemplate != null && resolved.getPrincipal() != null) {
+                    redisTemplate.delete("login_token:" + resolved.getPrincipal());
+                }
+            } catch (Exception ignored) {}
+        } else {
+            jwtBlacklistService.addToBlacklist(token);
         }
     }
 
@@ -712,27 +759,33 @@ public class AuthService {
      * 获取当前登录用户的详细信息、所属角色与可使用的功能页签权限列表
      */
     public Map<String, Object> getCurrentUserInfo(String authHeader) {
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        String token = jwtTokenResolver.extractBearerToken(authHeader);
+        if (token == null) {
             throw new com.wmdb.exception.BusinessException("A0220", "未登录或登录凭据已过期");
         }
-        String token = authHeader.substring(7).trim();
-        String identifier = jwtUtils.extractIdCard(token);
-        String realName = jwtUtils.extractRealName(token);
-
-        List<SysUser> matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
-                .eq("username", identifier)
-                .last("LIMIT 1"));
-        if (matchedUsers.isEmpty()) {
-            matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
-                    .eq("phone", identifier)
-                    .last("LIMIT 1"));
+        ResolvedPrincipal resolved = jwtTokenResolver.resolve(token);
+        if (resolved == null) {
+            throw new com.wmdb.exception.BusinessException("A0220", "未登录或登录凭据已过期");
         }
-        if (matchedUsers.isEmpty() && !"0".equals(identifier)) {
-            matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
-                    .eq("id_card", identifier)
+        String identifier = resolved.getPrincipal();
+        String realName = resolved.getRealName();
+        SysUser user = resolved.getSysUser();
+        if (user == null) {
+            List<SysUser> matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
+                    .eq("username", identifier)
                     .last("LIMIT 1"));
+            if (matchedUsers.isEmpty()) {
+                matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
+                        .eq("phone", identifier)
+                        .last("LIMIT 1"));
+            }
+            if (matchedUsers.isEmpty() && !"0".equals(identifier)) {
+                matchedUsers = sysUserMapper.selectList(new QueryWrapper<SysUser>()
+                        .eq("id_card", identifier)
+                        .last("LIMIT 1"));
+            }
+            user = matchedUsers.isEmpty() ? null : matchedUsers.get(0);
         }
-        SysUser user = matchedUsers.isEmpty() ? null : matchedUsers.get(0);
 
         String roleStr = (user != null && user.getRole() != null) ? user.getRole() : "DEV";
         List<String> roles = userDisplayNameService.parseRoles(roleStr);

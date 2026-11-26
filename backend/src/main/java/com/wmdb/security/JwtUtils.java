@@ -64,13 +64,22 @@ public class JwtUtils {
      * @return 签发的 JWT 字符串
      */
     public String generateToken(String idCard, String realName) {
+        long nowMillis = System.currentTimeMillis();
         return Jwts.builder()
                 .subject(idCard)
                 .claim("realName", realName)
-                .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + expirationTime))
+                .claim("iat_ms", nowMillis)
+                .issuedAt(new Date(nowMillis))
+                .expiration(new Date(nowMillis + expirationTime))
                 .signWith(getSigningKey())
                 .compact();
+    }
+
+    /**
+     * 获取配置的 Token 有效期（毫秒）
+     */
+    public long getExpirationTime() {
+        return expirationTime;
     }
 
     /**

@@ -4,7 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.wmdb.common.Result;
 import com.wmdb.mapper.SysUserMapper;
 import com.wmdb.model.SysUser;
-import com.wmdb.security.JwtUtils;
+import com.wmdb.security.JwtTokenResolver;
+import com.wmdb.security.JwtTokenResolver.ResolvedPrincipal;
 import com.wmdb.security.SmUtils;
 import com.wmdb.service.UserService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -41,7 +42,7 @@ public class AdminController {
 
     private final SysUserMapper sysUserMapper;
     private final JdbcTemplate jdbcTemplate;
-    private final JwtUtils jwtUtils;
+    private final JwtTokenResolver jwtTokenResolver;
     private final UserService userService;
 
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
@@ -50,27 +51,13 @@ public class AdminController {
      * 校验请求是否具备超级管理员权限
      */
     private boolean checkAdminPrivilege(String authHeader) {
-        if (authHeader == null || authHeader.trim().isEmpty()) {
+        String token = jwtTokenResolver.extractBearerToken(authHeader);
+        if (token == null) {
             return false;
         }
-        String token = authHeader.replace("Bearer ", "").trim();
         try {
-            if (!jwtUtils.isTokenValid(token)) {
-                return false;
-            }
-            String subject = jwtUtils.extractIdCard(token);
-            SysUser user = sysUserMapper.selectOne(new QueryWrapper<SysUser>()
-                    .eq("username", subject)
-                    .last("LIMIT 1"));
-            if (user == null && subject != null && !subject.isEmpty() && !"0".equals(subject)) {
-                user = sysUserMapper.selectOne(new QueryWrapper<SysUser>()
-                        .eq("id_card", subject)
-                        .last("LIMIT 1"));
-            }
-            if (user != null) {
-                return "ADMIN".equalsIgnoreCase(user.getRole()) || "admin".equalsIgnoreCase(user.getUsername());
-            }
-            return "admin".equalsIgnoreCase(subject);
+            ResolvedPrincipal resolved = jwtTokenResolver.resolve(token);
+            return jwtTokenResolver.isAdmin(resolved);
         } catch (Exception e) {
             log.warn("[AdminController] 鉴权解析失败: {}", e.getMessage());
             return false;
@@ -418,6 +405,9 @@ public class AdminController {
         user.setStatus(status);
         sysUserMapper.updateById(user);
         userService.syncUserToFwptAuth(user, null);
+        if (status != null && status == 0) {
+            userService.revokeUserSessionsEverywhere(user);
+        }
 
         return Result.success(status == 1 ? "账号已成功启用" : "账号已成功冻结禁用");
     }
@@ -512,6 +502,7 @@ public class AdminController {
         user.setPasswordHash(hash);
         sysUserMapper.updateById(user);
         userService.syncUserToFwptAuth(user, hash);
+        userService.revokeUserSessionsEverywhere(user);
 
         return Result.success("用户 " + user.getUsername() + " 密码已成功重置");
     }
@@ -544,6 +535,7 @@ public class AdminController {
         }
 
         String targetName = user.getUsername();
+        userService.revokeUserSessionsEverywhere(user);
         sysUserMapper.deleteById(userId);
         userService.disableUserInFwptAuth(userId);
 

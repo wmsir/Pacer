@@ -219,6 +219,16 @@ public class AuthController {
     }
 
     /**
+     * 退出登录，将当前 Token 加入黑名单并吊销对应会话
+     */
+    @Operation(summary = "退出登录", description = "吊销当前登录态令牌及统一认证会话")
+    @PostMapping("/logout")
+    public Result<Map<String, Object>> logout(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        authService.logout(authHeader);
+        return Result.success(Map.of("message", "已安全退出登录"));
+    }
+
+    /**
      * 获取当前登录用户画像、角色与已授权的系统页签功能权限列表
      */
     @Operation(summary = "获取当前登录用户信息及页签权限", description = "解析 JWT Token 并返回用户名、角色、组织及可访问的页签路由清单")
