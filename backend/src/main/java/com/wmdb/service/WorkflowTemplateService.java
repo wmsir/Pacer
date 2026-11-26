@@ -834,14 +834,13 @@ public class WorkflowTemplateService {
         try {
             org.springframework.expression.ExpressionParser parser = new org.springframework.expression.spel.standard.SpelExpressionParser();
             org.springframework.expression.Expression expression = parser.parseExpression(rawExpr);
-            // 使用受限 SimpleEvaluationContext 禁用 T() 类型解析、构造器及方法调用，彻底阻断 SpEL RCE
-            Map<String, Object> rootCtx = request.getContext() != null ? request.getContext() : Collections.emptyMap();
+            // 使用受限 SimpleEvaluationContext + 只读 Map 包装，禁用 T() 类型解析、构造器及方法调用，彻底阻断 SpEL RCE
+            Map<String, Object> rootCtx = request.getContext() != null
+                    ? Collections.unmodifiableMap(request.getContext())
+                    : Collections.emptyMap();
             org.springframework.expression.spel.support.SimpleEvaluationContext context =
                     org.springframework.expression.spel.support.SimpleEvaluationContext
-                            .forPropertyAccessors(
-                                    org.springframework.expression.spel.support.DataBindingPropertyAccessor.forReadOnlyDataAccess(),
-                                    new org.springframework.context.expression.MapAccessor()
-                            )
+                            .forPropertyAccessors(new org.springframework.context.expression.MapAccessor())
                             .withRootObject(rootCtx)
                             .build();
 
