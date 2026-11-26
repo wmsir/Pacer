@@ -333,6 +333,9 @@ export function extractSingleTableTarget(sql: string): { db?: string; table: str
 
 export function quoteIdentifier(ident: string, engineKey: string): string {
   const eng = engineKey.toLowerCase();
+  if (eng.includes('sqlserver') || eng.includes('mssql')) {
+    return `[${ident.replace(/\]/g, ']]')}]`;
+  }
   if (eng.includes('postgres') || eng.includes('kingbase') || eng.includes('gauss') || eng.includes('oracle') || eng.includes('dameng')) {
     return `"${ident.replace(/"/g, '""')}"`;
   }
@@ -378,7 +381,9 @@ export function generateGridMutationSql(opts: GridMutationOptions): GridMutation
       ? `${q(opts.dbName)}.${q(opts.tableName)}`
       : q(opts.tableName);
 
-  const usablePks = opts.primaryKeys.filter((pk) => opts.columns.includes(pk));
+  const usablePks = opts.primaryKeys
+    .map((pk) => opts.columns.find((col) => col.toLowerCase() === pk.toLowerCase()))
+    .filter((col): col is string => Boolean(col));
   const usedPrimaryKey = usablePks.length > 0;
   const keyColumns = usedPrimaryKey ? usablePks : opts.columns;
   const warning = usedPrimaryKey
@@ -432,6 +437,44 @@ export function generateGridMutationSql(opts: GridMutationOptions): GridMutation
   }
 
   return { statements, usedPrimaryKey, keyColumns, warning };
+}
+
+export interface SingleCellUpdatePlan {
+  sql: string;
+  usedPrimaryKey: boolean;
+  keyColumns: string[];
+  warning: string | null;
+}
+
+/** Generates a single-row UPDATE statement for immediate inline cell confirmation. */
+export function generateSingleCellUpdatePlan(opts: {
+  tableName: string;
+  dbName?: string;
+  engineKey: string;
+  columns: string[];
+  primaryKeys: string[];
+  originalRow: Record<string, unknown>;
+  targetColumn: string;
+  newValue: unknown;
+}): SingleCellUpdatePlan | null {
+  const plan = generateGridMutationSql({
+    tableName: opts.tableName,
+    dbName: opts.dbName,
+    engineKey: opts.engineKey,
+    columns: opts.columns,
+    primaryKeys: opts.primaryKeys,
+    originalRows: [opts.originalRow],
+    modifiedCells: { 0: { [opts.targetColumn]: opts.newValue } },
+    deletedRowIndices: [],
+    insertedRows: [],
+  });
+  if (plan.statements.length === 0) return null;
+  return {
+    sql: plan.statements[0],
+    usedPrimaryKey: plan.usedPrimaryKey,
+    keyColumns: plan.keyColumns,
+    warning: plan.warning,
+  };
 }
 
 export interface SqlSnippet {

@@ -41,6 +41,7 @@ import {
   downloadTextFile,
   formatSqlLiteral,
   generateGridMutationSql,
+  generateSingleCellUpdatePlan,
   quoteIdentifier,
   toCsvWithBom,
   toInsertSql,
@@ -130,6 +131,15 @@ const emit = defineEmits<{
   (e: 'close-other-result-tabs', id: string): void;
   (e: 'load-history-sql', entry: QueryHistoryEntry): void;
   (e: 'preview-grid-mutations', payload: GridMutationPreviewPayload): void;
+  (
+    e: 'execute-grid-sql-direct',
+    payload: GridMutationPreviewPayload,
+    sql: string,
+    opts?: {
+      inPlaceCell?: { origIdx: number; col: string; newVal: unknown };
+      onDone?: (ok: boolean, errorMessage?: string) => void;
+    },
+  ): void;
   (e: 'clear-console-logs', projectId: string): void;
   (e: 'run-console-sql', sql: string): void;
   (e: 'send-sql-to-editor', sql: string): void;
@@ -190,14 +200,44 @@ const selectedRowIndices = ref<number[]>([]);
 const lastClickedDisplayIdx = ref<number | null>(null);
 const pinnedColsByTab = reactive<Record<string, string[]>>({});
 
-// Inline editing state
-const editingCell = ref<{
+interface FloatingCellEditorState {
   isInserted: boolean;
   rowIdx: number;
   col: string;
   draftText: string;
-} | null>(null);
-const inlineInputRef = ref<HTMLInputElement | null>(null);
+  setNullFlag: boolean;
+  multiline: boolean;
+  customSqlMode: boolean;
+  customSqlText: string;
+  top: number;
+  left: number;
+  width: number;
+  submitting: boolean;
+  errorMsg: string | null;
+}
+
+const instantEditExecute = ref<boolean>(localStorage.getItem('pacer.gridInstantExecute') !== '0');
+function toggleInstantEditExecute() {
+  instantEditExecute.value = !instantEditExecute.value;
+  localStorage.setItem('pacer.gridInstantExecute', instantEditExecute.value ? '1' : '0');
+}
+
+const savedFlashCellKey = ref<string>('');
+let savedFlashTimer: number | null = null;
+function triggerSavedFlash(origIdx: number, col: string) {
+  savedFlashCellKey.value = `${origIdx}:${col}`;
+  if (savedFlashTimer !== null) {
+    window.clearTimeout(savedFlashTimer);
+  }
+  savedFlashTimer = window.setTimeout(() => {
+    savedFlashCellKey.value = '';
+    savedFlashTimer = null;
+  }, 1300);
+}
+
+// Floating inline cell editor state (single mounted input ref outside v-for)
+const editingCell = ref<FloatingCellEditorState | null>(null);
+const cellEditorInputRef = ref<HTMLInputElement | HTMLTextAreaElement | null>(null);
 
 // Column visibility & drag-width state
 const hiddenColsByTab = reactive<Record<string, string[]>>({});
@@ -596,7 +636,12 @@ function coerceInputValue(rawText: string, originalSample: unknown): unknown {
   return rawText;
 }
 
-async function startEditCell(isInserted: boolean, rowIdx: number, col: string) {
+async function startEditCell(
+  isInserted: boolean,
+  rowIdx: number,
+  col: string,
+  ev?: MouseEvent,
+) {
   const res = currentResult.value;
   if (!res) return;
   if (res.readOnly) {
@@ -610,36 +655,112 @@ async function startEditCell(isInserted: boolean, rowIdx: number, col: string) {
       ? draft.modified[rowIdx][col]
       : res.rows[rowIdx]?.[col];
 
+  const draftText =
+    currentVal === null || currentVal === undefined
+      ? ''
+      : typeof currentVal === 'object'
+        ? JSON.stringify(currentVal, null, 2)
+        : String(currentVal);
+
+  let anchorRect: DOMRect | null = null;
+  if (ev?.currentTarget instanceof HTMLElement) {
+    anchorRect = ev.currentTarget.getBoundingClientRect();
+  } else if (gridScrollRef.value) {
+    const sel = gridScrollRef.value.querySelector('td.selected-cell');
+    if (sel instanceof HTMLElement) {
+      anchorRect = sel.getBoundingClientRect();
+    } else {
+      anchorRect = gridScrollRef.value.getBoundingClientRect();
+    }
+  }
+
+  const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const multiline = draftText.includes('\n') || draftText.length > 80;
+  const popW = Math.min(500, Math.max(400, (anchorRect?.width ?? 160) + 180));
+  const estH = multiline ? 350 : 285;
+  const rawLeft = anchorRect ? anchorRect.left : Math.round((vw - popW) / 2);
+  const left = Math.max(12, Math.min(rawLeft, Math.max(12, vw - popW - 14)));
+  let top = anchorRect ? anchorRect.bottom + 6 : Math.round((vh - estH) / 2);
+  if (top + estH > vh - 14 && anchorRect && anchorRect.top > estH + 14) {
+    top = Math.max(12, anchorRect.top - estH - 6);
+  } else {
+    top = Math.max(12, Math.min(top, Math.max(12, vh - estH - 14)));
+  }
+
   editingCell.value = {
     isInserted,
     rowIdx,
     col,
-    draftText:
-      currentVal === null || currentVal === undefined
-        ? ''
-        : typeof currentVal === 'object'
-          ? JSON.stringify(currentVal)
-          : String(currentVal),
+    draftText,
+    setNullFlag: currentVal === null || currentVal === undefined,
+    multiline,
+    customSqlMode: false,
+    customSqlText: '',
+    top,
+    left,
+    width: popW,
+    submitting: false,
+    errorMsg: null,
   };
   await nextTick();
-  inlineInputRef.value?.focus();
-  inlineInputRef.value?.select();
+  cellEditorInputRef.value?.focus();
+  cellEditorInputRef.value?.select();
 }
 
-function commitInlineEdit(setNull = false) {
+const editingCellLivePreview = computed(() => {
+  const ed = editingCell.value;
+  const res = currentResult.value;
+  if (!ed || !res || ed.isInserted) return null;
+  const origRow = res.rows[ed.rowIdx];
+  if (!origRow) return null;
+  const origVal = origRow[ed.col];
+  const nextVal = ed.setNullFlag ? null : coerceInputValue(ed.draftText, origVal);
+  const tableName = effectiveTargetTable.value.trim();
+  const plan = generateSingleCellUpdatePlan({
+    tableName: tableName || 'target_table',
+    dbName: res.dbName,
+    engineKey: res.engineKey,
+    columns: res.columns,
+    primaryKeys: res.primaryKeys,
+    originalRow: origRow,
+    targetColumn: ed.col,
+    newValue: nextVal,
+  });
+  return {
+    hasTargetTable: Boolean(tableName),
+    unchanged: nextVal === origVal,
+    nextVal,
+    plan,
+  };
+});
+
+function toggleEditingCellCustomSql() {
+  const ed = editingCell.value;
+  if (!ed) return;
+  if (!ed.customSqlMode) {
+    ed.customSqlText = editingCellLivePreview.value?.plan?.sql ?? '';
+    ed.customSqlMode = true;
+  } else {
+    ed.customSqlMode = false;
+  }
+}
+
+function commitInlineEdit(setNull?: boolean) {
   const ed = editingCell.value;
   const res = currentResult.value;
   if (!ed || !res) return;
+  const useNull = setNull ?? ed.setNullFlag;
   const draft = ensureDraft(res.id);
 
   if (ed.isInserted) {
     const targetRow = draft.inserted[ed.rowIdx];
     if (targetRow) {
-      targetRow[ed.col] = setNull ? null : ed.draftText;
+      targetRow[ed.col] = useNull ? null : ed.draftText;
     }
   } else {
     const origVal = res.rows[ed.rowIdx]?.[ed.col];
-    const nextVal = setNull ? null : coerceInputValue(ed.draftText, origVal);
+    const nextVal = useNull ? null : coerceInputValue(ed.draftText, origVal);
     if (nextVal === origVal) {
       if (draft.modified[ed.rowIdx]) {
         delete draft.modified[ed.rowIdx][ed.col];
@@ -656,7 +777,87 @@ function commitInlineEdit(setNull = false) {
   syncValueViewerDraft();
 }
 
+function confirmEditingCell(forceStageOnly = false) {
+  const ed = editingCell.value;
+  const res = currentResult.value;
+  if (!ed || !res || ed.submitting) return;
+  if (ed.isInserted || !instantEditExecute.value || forceStageOnly) {
+    commitInlineEdit();
+    return;
+  }
+
+  const tableName = effectiveTargetTable.value.trim();
+  if (!tableName) {
+    ed.errorMsg = '当前为自定义 SQL 结果，请先在上方下拉框选择或输入目标表名，再执行更新 SQL';
+    return;
+  }
+
+  const preview = editingCellLivePreview.value;
+  const sqlToRun = (ed.customSqlMode ? ed.customSqlText : preview?.plan?.sql ?? '').trim();
+  if (!sqlToRun) {
+    if (preview?.unchanged) {
+      editingCell.value = null;
+      return;
+    }
+    ed.errorMsg = '未能生成可执行的 UPDATE SQL，请检查目标表与单元格值';
+    return;
+  }
+
+  const nextVal = preview?.nextVal;
+  const rowIdx = ed.rowIdx;
+  const col = ed.col;
+  const singlePlan = preview?.plan ?? {
+    statements: [sqlToRun],
+    usedPrimaryKey: res.primaryKeys.length > 0,
+    keyColumns: res.primaryKeys,
+    warning: null,
+  };
+
+  ed.submitting = true;
+  ed.errorMsg = null;
+
+  emit(
+    'execute-grid-sql-direct',
+    {
+      resultTabId: res.id,
+      profileId: res.profileId,
+      profileName: res.profileName,
+      profileEnv: res.profileEnv,
+      dbName: res.dbName,
+      tableName,
+      plan: {
+        statements: [sqlToRun],
+        usedPrimaryKey: singlePlan.usedPrimaryKey,
+        keyColumns: singlePlan.keyColumns,
+        warning: singlePlan.warning,
+      },
+    },
+    sqlToRun,
+    {
+      inPlaceCell: ed.customSqlMode ? undefined : { origIdx: rowIdx, col, newVal: nextVal },
+      onDone: (ok, errMsg) => {
+        if (ok) {
+          const draft = ensureDraft(res.id);
+          if (draft.modified[rowIdx]) {
+            delete draft.modified[rowIdx][col];
+            if (Object.keys(draft.modified[rowIdx]).length === 0) {
+              delete draft.modified[rowIdx];
+            }
+          }
+          editingCell.value = null;
+          syncValueViewerDraft();
+          triggerSavedFlash(rowIdx, col);
+        } else if (editingCell.value) {
+          editingCell.value.submitting = false;
+          editingCell.value.errorMsg = errMsg || 'SQL 执行失败';
+        }
+      },
+    },
+  );
+}
+
 function cancelInlineEdit() {
+  if (editingCell.value?.submitting) return;
   editingCell.value = null;
 }
 
@@ -890,6 +1091,31 @@ function triggerPreviewMutations() {
     tableName: effectiveTargetTable.value.trim(),
     plan,
   });
+}
+
+function triggerDirectBatchMutations() {
+  const res = currentResult.value;
+  if (!res) return;
+  const plan = buildCurrentMutationPlan();
+  if (!plan) return;
+  if (res.profileEnv === 'PROD') {
+    triggerPreviewMutations();
+    return;
+  }
+  const sqlText = plan.statements.join('\n');
+  emit(
+    'execute-grid-sql-direct',
+    {
+      resultTabId: res.id,
+      profileId: res.profileId,
+      profileName: res.profileName,
+      profileEnv: res.profileEnv,
+      dbName: res.dbName,
+      tableName: effectiveTargetTable.value.trim(),
+      plan,
+    },
+    sqlText,
+  );
 }
 
 function copyMutationsSql() {
@@ -1219,13 +1445,73 @@ function applyValueViewerEdit(setNull = false) {
   if (selectedIsInserted.value) {
     const row = draft.inserted[selectedRowOrigIdx.value];
     if (row) row[selectedColName.value] = setNull ? null : valueViewerDraft.value;
-  } else {
-    const origVal = res.rows[selectedRowOrigIdx.value]?.[selectedColName.value];
-    const nextVal = setNull ? null : coerceInputValue(valueViewerDraft.value, origVal);
-    if (!draft.modified[selectedRowOrigIdx.value]) draft.modified[selectedRowOrigIdx.value] = {};
-    draft.modified[selectedRowOrigIdx.value][selectedColName.value] = nextVal;
+    emit('notify', `已更新新增行单元格 [${selectedColName.value}]，确认后提交`);
+    return;
   }
-  emit('notify', `已更新单元格 [${selectedColName.value}]，点击「预览并执行 SQL」提交`);
+
+  const origRow = res.rows[selectedRowOrigIdx.value];
+  const origVal = origRow?.[selectedColName.value];
+  const nextVal = setNull ? null : coerceInputValue(valueViewerDraft.value, origVal);
+  const tableName = effectiveTargetTable.value.trim();
+
+  if (instantEditExecute.value && tableName && origRow) {
+    const plan = generateSingleCellUpdatePlan({
+      tableName,
+      dbName: res.dbName,
+      engineKey: res.engineKey,
+      columns: res.columns,
+      primaryKeys: res.primaryKeys,
+      originalRow: origRow,
+      targetColumn: selectedColName.value,
+      newValue: nextVal,
+    });
+    if (!plan) {
+      emit('notify', '当前值未发生变化，无需执行 SQL');
+      return;
+    }
+    const colName = selectedColName.value;
+    const rowIdx = selectedRowOrigIdx.value;
+    emit(
+      'execute-grid-sql-direct',
+      {
+        resultTabId: res.id,
+        profileId: res.profileId,
+        profileName: res.profileName,
+        profileEnv: res.profileEnv,
+        dbName: res.dbName,
+        tableName,
+        plan: {
+          statements: [plan.sql],
+          usedPrimaryKey: plan.usedPrimaryKey,
+          keyColumns: plan.keyColumns,
+          warning: plan.warning,
+        },
+      },
+      plan.sql,
+      {
+        inPlaceCell: { origIdx: rowIdx, col: colName, newVal: nextVal },
+        onDone: (ok, err) => {
+          if (ok) {
+            if (draft.modified[rowIdx]) {
+              delete draft.modified[rowIdx][colName];
+              if (Object.keys(draft.modified[rowIdx]).length === 0) {
+                delete draft.modified[rowIdx];
+              }
+            }
+            syncValueViewerDraft();
+            triggerSavedFlash(rowIdx, colName);
+          } else if (err) {
+            emit('notify', `SQL 执行失败: ${err}`);
+          }
+        },
+      },
+    );
+    return;
+  }
+
+  if (!draft.modified[selectedRowOrigIdx.value]) draft.modified[selectedRowOrigIdx.value] = {};
+  draft.modified[selectedRowOrigIdx.value][selectedColName.value] = nextVal;
+  emit('notify', `已更新单元格 [${selectedColName.value}]，可点击变更栏直接执行`);
 }
 
 watch(
@@ -1555,13 +1841,82 @@ function copyContextRowInsertSql() {
   void copyText(toInsertSql(tableName, res.columns, [row], res.engineKey));
 }
 
+function handleGridKeydown(ev: KeyboardEvent) {
+  if (editingCell.value) return;
+  const tgt = ev.target;
+  if (
+    tgt instanceof HTMLInputElement ||
+    tgt instanceof HTMLTextAreaElement ||
+    tgt instanceof HTMLSelectElement
+  ) {
+    return;
+  }
+  if (ev.key === 'F2' || (ev.key === 'Enter' && !ev.ctrlKey && !ev.metaKey && !ev.altKey)) {
+    if (!currentResult.value || currentResult.value.readOnly || !selectedColName.value) return;
+    ev.preventDefault();
+    void startEditCell(selectedIsInserted.value, selectedRowOrigIdx.value, selectedColName.value);
+  }
+}
+
 function setContextCellNull() {
   const res = currentResult.value;
   if (!res || res.readOnly || !cellCtxMenu.col) return;
+  const origIdx = cellCtxMenu.origIdx;
+  const col = cellCtxMenu.col;
+  const origRow = res.rows[origIdx];
+  const tableName = effectiveTargetTable.value.trim();
+
+  if (instantEditExecute.value && tableName && origRow) {
+    const plan = generateSingleCellUpdatePlan({
+      tableName,
+      dbName: res.dbName,
+      engineKey: res.engineKey,
+      columns: res.columns,
+      primaryKeys: res.primaryKeys,
+      originalRow: origRow,
+      targetColumn: col,
+      newValue: null,
+    });
+    if (!plan) {
+      emit('notify', `单元格 [${col}] 已经是 NULL`);
+      return;
+    }
+    emit(
+      'execute-grid-sql-direct',
+      {
+        resultTabId: res.id,
+        profileId: res.profileId,
+        profileName: res.profileName,
+        profileEnv: res.profileEnv,
+        dbName: res.dbName,
+        tableName,
+        plan: {
+          statements: [plan.sql],
+          usedPrimaryKey: plan.usedPrimaryKey,
+          keyColumns: plan.keyColumns,
+          warning: plan.warning,
+        },
+      },
+      plan.sql,
+      {
+        inPlaceCell: { origIdx, col, newVal: null },
+        onDone: (ok, err) => {
+          if (ok) {
+            triggerSavedFlash(origIdx, col);
+            syncValueViewerDraft();
+          } else if (err) {
+            emit('notify', `置 NULL 执行失败: ${err}`);
+          }
+        },
+      },
+    );
+    return;
+  }
+
   const draft = ensureDraft(res.id);
-  if (!draft.modified[cellCtxMenu.origIdx]) draft.modified[cellCtxMenu.origIdx] = {};
-  draft.modified[cellCtxMenu.origIdx][cellCtxMenu.col] = null;
-  emit('notify', `已将 [${cellCtxMenu.col}] 标记为 NULL，点击「预览并执行 SQL」提交`);
+  if (!draft.modified[origIdx]) draft.modified[origIdx] = {};
+  draft.modified[origIdx][col] = null;
+  emit('notify', `已将 [${col}] 标记为 NULL，可点击变更栏直接执行`);
 }
 
 async function copyText(text: string) {
@@ -2330,8 +2685,15 @@ function exportQuickChartSvg() {
                 <IdeIcon name="copy" :size="12" /> {{ t('copyChangesSql') }}
               </button>
               <button class="btn btn-sm" @click="revertCurrentDraft">↩ {{ t('revertChanges') }}</button>
-              <button class="btn btn-sm btn-primary" @click="triggerPreviewMutations">
-                <IdeIcon name="bolt" :size="12" /> {{ t('submitChanges') }}
+              <button class="btn btn-sm" @click="triggerPreviewMutations">
+                预览 / 编辑 SQL
+              </button>
+              <button
+                class="btn btn-sm btn-primary"
+                :title="currentResult.profileEnv === 'PROD' ? '生产环境提交前将弹出 SQL 确认窗' : '直接生成并执行全部待提交 SQL'"
+                @click="triggerDirectBatchMutations"
+              >
+                <IdeIcon name="bolt" :size="12" /> 直接执行 ({{ pendingStats.total }})
               </button>
             </div>
           </div>
@@ -2366,6 +2728,18 @@ function exportQuickChartSvg() {
                 @click="toggleDeleteSelectedRow"
               >
                 <IdeIcon name="trash" :size="12" /> {{ t('deleteRow') }}
+              </button>
+              <button
+                class="icon-btn compact"
+                :class="{ active: instantEditExecute }"
+                :title="
+                  instantEditExecute
+                    ? '当前模式：双击或按 F2 编辑单元格并确认后立即生成并执行 UPDATE SQL（点击可切换为批量暂存模式）'
+                    : '当前模式：修改先暂存，手动点执行提交（点击切换为确认即执行）'
+                "
+                @click="toggleInstantEditExecute"
+              >
+                {{ instantEditExecute ? '⚡ 确认即执行' : '📝 批量暂存' }}
               </button>
               <button
                 class="icon-btn compact"
@@ -2684,9 +3058,10 @@ function exportQuickChartSvg() {
               ref="gridScrollRef"
               class="grid-scroll"
               tabindex="0"
-              title="点击单元格可选中，Shift+点击可框选矩形区域，Ctrl+V/Cmd+V 可直接粘贴 Excel/TSV 多格矩阵"
+              title="点击选中单元格（F2 / Enter / 双击编辑），Shift+点击框选矩形区域，Ctrl+V/Cmd+V 粘贴矩阵"
               @scroll.passive="onGridScroll"
               @paste="handleGridPaste"
+              @keydown="handleGridKeydown"
             >
               <!-- Visual EXPLAIN Execution Plan View -->
               <div v-if="visualExplainMode && visualExplainPlan" class="explain-visual-pane">
@@ -3199,37 +3574,15 @@ function exportQuickChartSvg() {
                         'range-selected-cell': isCellInRange(rowWindow.start + localIdx, pc.col),
                         'watch-cell-changed': Boolean(currentWatchDiff?.changedCells.has(`${item.origIdx}:${pc.col}`)),
                         'cell-dirty': isCellModified(item.origIdx, pc.col),
+                        'cell-saved-flash': savedFlashCellKey === `${item.origIdx}:${pc.col}`,
                       }"
                       :style="{ left: `${pc.left}px` }"
                       @mouseenter="onCellMouseEnter($event, item.origIdx, pc.col)"
                       @click="selectCell(false, item.origIdx, pc.col, $event, rowWindow.start + localIdx)"
-                      @dblclick="startEditCell(false, item.origIdx, pc.col)"
+                      @dblclick="startEditCell(false, item.origIdx, pc.col, $event)"
                       @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, pc.col)"
                     >
-                      <div
-                        v-if="
-                          editingCell &&
-                          !editingCell.isInserted &&
-                          editingCell.rowIdx === item.origIdx &&
-                          editingCell.col === pc.col
-                        "
-                        class="cell-inline-editor"
-                        @click.stop
-                      >
-                        <input
-                          ref="inlineInputRef"
-                          v-model="editingCell.draftText"
-                          @keydown.enter.prevent="commitInlineEdit(false)"
-                          @keydown.esc.prevent="cancelInlineEdit"
-                        />
-                        <button class="cell-inline-btn" title="设为 NULL" @click="commitInlineEdit(true)">
-                          NULL
-                        </button>
-                        <button class="cell-inline-btn" title="确认修改 (Enter)" @click="commitInlineEdit(false)">
-                          ✓
-                        </button>
-                      </div>
-                      <div v-else class="cell-value-wrap">
+                      <div class="cell-value-wrap">
                         <span v-if="item.row[pc.col] === null || item.row[pc.col] === undefined" class="null-pill">
                           &lt;NULL&gt;
                         </span>
@@ -3258,36 +3611,14 @@ function exportQuickChartSvg() {
                         'range-selected-cell': isCellInRange(rowWindow.start + localIdx, rc.col),
                         'watch-cell-changed': Boolean(currentWatchDiff?.changedCells.has(`${item.origIdx}:${rc.col}`)),
                         'cell-dirty': isCellModified(item.origIdx, rc.col),
+                        'cell-saved-flash': savedFlashCellKey === `${item.origIdx}:${rc.col}`,
                       }"
                       @mouseenter="onCellMouseEnter($event, item.origIdx, rc.col)"
                       @click="selectCell(false, item.origIdx, rc.col, $event, rowWindow.start + localIdx)"
-                      @dblclick="startEditCell(false, item.origIdx, rc.col)"
+                      @dblclick="startEditCell(false, item.origIdx, rc.col, $event)"
                       @contextmenu.prevent.stop="openCellContextMenu($event, item.origIdx, rc.col)"
                     >
-                      <div
-                        v-if="
-                          editingCell &&
-                          !editingCell.isInserted &&
-                          editingCell.rowIdx === item.origIdx &&
-                          editingCell.col === rc.col
-                        "
-                        class="cell-inline-editor"
-                        @click.stop
-                      >
-                        <input
-                          ref="inlineInputRef"
-                          v-model="editingCell.draftText"
-                          @keydown.enter.prevent="commitInlineEdit(false)"
-                          @keydown.esc.prevent="cancelInlineEdit"
-                        />
-                        <button class="cell-inline-btn" title="设为 NULL" @click="commitInlineEdit(true)">
-                          NULL
-                        </button>
-                        <button class="cell-inline-btn" title="确认修改 (Enter)" @click="commitInlineEdit(false)">
-                          ✓
-                        </button>
-                      </div>
-                      <div v-else class="cell-value-wrap">
+                      <div class="cell-value-wrap">
                         <span v-if="item.row[rc.col] === null || item.row[rc.col] === undefined" class="null-pill">
                           &lt;NULL&gt;
                         </span>
@@ -3331,34 +3662,13 @@ function exportQuickChartSvg() {
                       }"
                       :style="{ left: `${pc.left}px` }"
                       @click="selectCell(true, insIdx, pc.col)"
-                      @dblclick="startEditCell(true, insIdx, pc.col)"
+                      @dblclick="startEditCell(true, insIdx, pc.col, $event)"
                     >
-                      <div
-                        v-if="
-                          editingCell &&
-                          editingCell.isInserted &&
-                          editingCell.rowIdx === insIdx &&
-                          editingCell.col === pc.col
-                        "
-                        class="cell-inline-editor"
-                        @click.stop
-                      >
-                        <input
-                          ref="inlineInputRef"
-                          v-model="editingCell.draftText"
-                          @keydown.enter.prevent="commitInlineEdit(false)"
-                          @keydown.esc.prevent="cancelInlineEdit"
-                        />
-                        <button class="cell-inline-btn" @click="commitInlineEdit(true)">NULL</button>
-                        <button class="cell-inline-btn" @click="commitInlineEdit(false)">✓</button>
-                      </div>
-                      <template v-else>
-                        <span v-if="insRow[pc.col] === null" class="null-pill">&lt;NULL&gt;</span>
-                        <span v-else-if="insRow[pc.col] === ''" style="color: var(--text-muted); font-style: italic">
-                          &lt;双击填写&gt;
-                        </span>
-                        <span v-else>{{ formatCell(insRow[pc.col]) }}</span>
-                      </template>
+                      <span v-if="insRow[pc.col] === null" class="null-pill">&lt;NULL&gt;</span>
+                      <span v-else-if="insRow[pc.col] === ''" style="color: var(--text-muted); font-style: italic">
+                        &lt;双击填写&gt;
+                      </span>
+                      <span v-else>{{ formatCell(insRow[pc.col]) }}</span>
                     </td>
                     <td v-if="colWindow.beforeSize > 0" class="virtual-spacer-cell" />
                     <td
@@ -3368,34 +3678,13 @@ function exportQuickChartSvg() {
                         'selected-cell': selectedIsInserted && selectedRowOrigIdx === insIdx && selectedColName === rc.col,
                       }"
                       @click="selectCell(true, insIdx, rc.col)"
-                      @dblclick="startEditCell(true, insIdx, rc.col)"
+                      @dblclick="startEditCell(true, insIdx, rc.col, $event)"
                     >
-                      <div
-                        v-if="
-                          editingCell &&
-                          editingCell.isInserted &&
-                          editingCell.rowIdx === insIdx &&
-                          editingCell.col === rc.col
-                        "
-                        class="cell-inline-editor"
-                        @click.stop
-                      >
-                        <input
-                          ref="inlineInputRef"
-                          v-model="editingCell.draftText"
-                          @keydown.enter.prevent="commitInlineEdit(false)"
-                          @keydown.esc.prevent="cancelInlineEdit"
-                        />
-                        <button class="cell-inline-btn" @click="commitInlineEdit(true)">NULL</button>
-                        <button class="cell-inline-btn" @click="commitInlineEdit(false)">✓</button>
-                      </div>
-                      <template v-else>
-                        <span v-if="insRow[rc.col] === null" class="null-pill">&lt;NULL&gt;</span>
-                        <span v-else-if="insRow[rc.col] === ''" style="color: var(--text-muted); font-style: italic">
-                          &lt;双击填写&gt;
-                        </span>
-                        <span v-else>{{ formatCell(insRow[rc.col]) }}</span>
-                      </template>
+                      <span v-if="insRow[rc.col] === null" class="null-pill">&lt;NULL&gt;</span>
+                      <span v-else-if="insRow[rc.col] === ''" style="color: var(--text-muted); font-style: italic">
+                        &lt;双击填写&gt;
+                      </span>
+                      <span v-else>{{ formatCell(insRow[rc.col]) }}</span>
                     </td>
                     <td v-if="colWindow.afterSize > 0" class="virtual-spacer-cell" />
                   </tr>
@@ -3513,10 +3802,10 @@ function exportQuickChartSvg() {
                 "
               >
                 <button class="btn btn-sm" @click="applyValueViewerEdit(true)">
-                  {{ t('setNull') }}
+                  {{ instantEditExecute && !selectedIsInserted ? '设为 NULL 并执行' : t('setNull') }}
                 </button>
                 <button class="btn btn-sm btn-primary" @click="applyValueViewerEdit(false)">
-                  应用修改
+                  {{ instantEditExecute && !selectedIsInserted ? '⚡ 应用并执行 SQL' : '应用修改到暂存' }}
                 </button>
               </div>
             </div>
@@ -4190,6 +4479,188 @@ function exportQuickChartSvg() {
           <span>标记 / 取消删除整行</span>
         </button>
       </template>
+    </div>
+
+    <!-- Floating Cell Editor Popover (Single mounted input + live SQL preview + instant execute) -->
+    <div
+      v-if="editingCell && currentResult"
+      class="cell-editor-popover"
+      :style="{
+        top: `${editingCell.top}px`,
+        left: `${editingCell.left}px`,
+        width: `${editingCell.width}px`,
+      }"
+      @click.stop
+    >
+      <div class="cell-editor-header">
+        <div style="display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap">
+          <span
+            class="pill"
+            :class="
+              currentResult.profileEnv === 'PROD'
+                ? 'pill-prod'
+                : currentResult.profileEnv === 'TEST'
+                  ? 'pill-test'
+                  : 'pill-dev'
+            "
+          >
+            {{ currentResult.profileEnv }}
+          </span>
+          <strong style="font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary)">
+            {{ editingCell.col }}
+          </strong>
+          <span style="font-size: 11px; color: var(--text-secondary)">
+            {{ editingCell.isInserted ? `新增行 #${editingCell.rowIdx + 1}` : `第 ${editingCell.rowIdx + 1} 行` }}
+          </span>
+          <span
+            v-if="!editingCell.isInserted && currentResult.primaryKeys.length > 0"
+            class="pill pill-dev"
+            title="将按表主键精确定位此行"
+          >
+            PK: {{ currentResult.primaryKeys.join(', ') }}
+          </span>
+          <span
+            v-else-if="!editingCell.isInserted"
+            class="pill pill-neutral"
+            title="未检测到主键，将按全列原始值匹配 WHERE"
+          >
+            全列匹配
+          </span>
+        </div>
+        <button
+          class="icon-btn compact"
+          :disabled="editingCell.submitting"
+          title="关闭 (Esc)"
+          @click="cancelInlineEdit"
+        >
+          ×
+        </button>
+      </div>
+
+      <div v-if="!editingCell.isInserted && !currentResult.sourceTable && activeDraft" class="cell-editor-target-row">
+        <span style="font-size: 11px; color: var(--text-secondary); flex-shrink: 0">目标表:</span>
+        <select
+          v-if="currentResult.availableTables.length > 0"
+          v-model="activeDraft.overrideTable"
+          class="field"
+          style="flex: 1; padding: 2px 6px; font-size: 11.5px"
+        >
+          <option value="">请选择要写入的数据表...</option>
+          <option v-for="tb in currentResult.availableTables" :key="tb" :value="tb">
+            {{ tb }}
+          </option>
+        </select>
+        <input
+          v-else
+          v-model="activeDraft.overrideTable"
+          class="field"
+          style="flex: 1; padding: 2px 6px; font-size: 11.5px"
+          placeholder="输入目标表名（如 users）..."
+        />
+      </div>
+
+      <div class="cell-editor-body">
+        <textarea
+          v-if="editingCell.multiline"
+          ref="cellEditorInputRef"
+          v-model="editingCell.draftText"
+          class="field cell-editor-textarea"
+          rows="4"
+          :disabled="editingCell.submitting"
+          placeholder="输入新值（Ctrl/Cmd+Enter 确认，Esc 取消）"
+          @input="editingCell.setNullFlag = false; editingCell.errorMsg = null"
+          @keydown.ctrl.enter.prevent="confirmEditingCell(false)"
+          @keydown.meta.enter.prevent="confirmEditingCell(false)"
+          @keydown.esc.prevent="cancelInlineEdit"
+        />
+        <input
+          v-else
+          ref="cellEditorInputRef"
+          v-model="editingCell.draftText"
+          class="field cell-editor-input"
+          :disabled="editingCell.submitting"
+          placeholder="输入新值（Enter 确认，Esc 取消）"
+          @input="editingCell.setNullFlag = false; editingCell.errorMsg = null"
+          @keydown.enter.prevent="confirmEditingCell(false)"
+          @keydown.esc.prevent="cancelInlineEdit"
+        />
+      </div>
+
+      <div v-if="!editingCell.isInserted" class="cell-editor-sql-box">
+        <div class="cell-editor-sql-head">
+          <span>
+            {{
+              editingCell.setNullFlag
+                ? '将更新为 <NULL>'
+                : editingCellLivePreview?.unchanged && !editingCell.customSqlMode
+                  ? '值尚未变更（修改后将实时生成 UPDATE SQL）'
+                  : '即将生成的执行 SQL'
+            }}
+          </span>
+          <button class="icon-btn compact" @click="toggleEditingCellCustomSql">
+            {{ editingCell.customSqlMode ? '恢复自动生成' : '微调 SQL' }}
+          </button>
+        </div>
+        <textarea
+          v-if="editingCell.customSqlMode"
+          v-model="editingCell.customSqlText"
+          class="field"
+          rows="3"
+          style="font-family: var(--font-mono); font-size: 11px; margin-top: 4px"
+        />
+        <pre v-else class="cell-editor-sql-code">{{ editingCellLivePreview?.plan?.sql || '-- 修改字段值后显示 UPDATE 语句' }}</pre>
+      </div>
+
+      <div v-if="currentResult.profileEnv === 'PROD' && instantEditExecute && !editingCell.isInserted" class="cell-editor-warn">
+        ⚠ 当前为 <strong>PROD 生产库</strong>：确认后将直接向数据库执行上述 SQL！
+      </div>
+
+      <div v-if="editingCell.errorMsg" class="cell-editor-error">
+        ✕ {{ editingCell.errorMsg }}
+      </div>
+
+      <div class="cell-editor-footer">
+        <button
+          class="btn btn-sm"
+          :class="{ active: editingCell.setNullFlag }"
+          :disabled="editingCell.submitting"
+          title="将当前编辑值标记为 SQL NULL"
+          @click="
+            editingCell.setNullFlag = !editingCell.setNullFlag;
+            if (editingCell.setNullFlag) editingCell.draftText = '';
+            editingCell.errorMsg = null;
+          "
+        >
+          {{ editingCell.setNullFlag ? '已选 NULL ✓' : '设为 NULL' }}
+        </button>
+        <div style="display: flex; align-items: center; gap: 6px">
+          <button
+            class="btn btn-sm"
+            :disabled="editingCell.submitting"
+            @click="cancelInlineEdit"
+          >
+            取消
+          </button>
+          <button
+            v-if="instantEditExecute && !editingCell.isInserted"
+            class="btn btn-sm"
+            :disabled="editingCell.submitting"
+            title="先暂存本次改动，稍后批量一起提交"
+            @click="confirmEditingCell(true)"
+          >
+            仅暂存
+          </button>
+          <button
+            class="btn btn-sm btn-primary"
+            :disabled="editingCell.submitting"
+            @click="confirmEditingCell(false)"
+          >
+            <template v-if="editingCell.submitting">执行中...</template>
+            <template v-else-if="instantEditExecute && !editingCell.isInserted">⚡ 确认并执行 SQL</template>
+            <template v-else>✓ 确认写入暂存</template>
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </template>

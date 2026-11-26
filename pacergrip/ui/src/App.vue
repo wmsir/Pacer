@@ -3638,15 +3638,28 @@ function handlePreviewGridMutations(payload: GridMutationPreviewPayload) {
   activeModal.value = 'grid-sql';
 }
 
-async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedSql: string) {
+async function runGridSqlExecution(
+  payload: GridMutationPreviewPayload,
+  editedSql: string,
+  opts?: {
+    closeModal?: boolean;
+    inPlaceCell?: { origIdx: number; col: string; newVal: unknown };
+    onDone?: (ok: boolean, errorMessage?: string) => void;
+  },
+) {
   const profile = connections.value.find((c) => c.id === payload.profileId);
   if (!profile) {
-    setStatus('未找到对应的目标数据源', true);
+    const msg = '未找到对应的目标数据源';
+    setStatus(msg, true);
+    opts?.onDone?.(false, msg);
     return;
   }
-  activeModal.value = 'none';
+  if (opts?.closeModal) {
+    activeModal.value = 'none';
+  }
   busy.value = true;
   const targetProjectId = profile.projectId || activeProjectId.value;
+  const timeoutLimit = queryTimeoutSec.value > 0 ? queryTimeoutSec.value : undefined;
   let totalAffected = 0;
   let failedErr: string | null = null;
 
@@ -3659,6 +3672,13 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
             .split(';')
             .map((s) => s.trim())
             .filter(Boolean);
+
+    if (stmts.length === 0) {
+      failedErr = '没有可执行的数据修改 SQL 语句';
+      setStatus(failedErr, true);
+      opts?.onDone?.(false, failedErr);
+      return;
+    }
 
     for (const stmt of stmts) {
       pushProjectLog({
@@ -3677,6 +3697,8 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
         stmt,
         null,
         () => {},
+        undefined,
+        timeoutLimit,
       );
       if (summary.success) {
         totalAffected += summary.affectedRows ?? 0;
@@ -3705,36 +3727,53 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
     }
 
     if (failedErr) {
-      activeServiceTab.value = 'output';
-      setStatus(`数据修改失败: ${failedErr}`, true);
-    } else {
-      resultGridRef.value?.clearDraft(payload.resultTabId);
-      setStatus(`数据修改成功 · 共执行 ${stmts.length} 条 SQL，影响 ${totalAffected} 行`);
-
-      // Automatically refresh the originating SELECT result tab in-place
-      const targetTab = resultTabs.value.find((r) => r.id === payload.resultTabId);
-      if (targetTab) {
-        const refreshedCols: string[] = [];
-        const refreshedRows: Record<string, unknown>[] = [];
-        const summary = await executeSql(
-          profile.id,
-          targetTab.dbName || null,
-          targetTab.sql,
-          maxRowsLimit.value,
-          (chunk) => {
-            if (refreshedCols.length === 0 && chunk.columns.length > 0) {
-              refreshedCols.push(...chunk.columns);
-            }
-            if (chunk.rows.length > 0) {
-              refreshedRows.push(...chunk.rows);
-            }
-          },
-        );
-        targetTab.columns = refreshedCols.length > 0 ? refreshedCols : targetTab.columns;
-        targetTab.rows = refreshedRows;
-        targetTab.summary = summary;
+      if (!opts?.onDone) {
+        activeServiceTab.value = 'output';
       }
-      await refreshHistory();
+      setStatus(`数据修改失败: ${failedErr}`, true);
+      opts?.onDone?.(false, failedErr);
+    } else {
+      const targetTab = resultTabs.value.find((r) => r.id === payload.resultTabId);
+      if (opts?.inPlaceCell && targetTab) {
+        const { origIdx, col, newVal } = opts.inPlaceCell;
+        const existingRow = targetTab.rows[origIdx];
+        if (existingRow) {
+          const nextRows = [...targetTab.rows];
+          nextRows[origIdx] = { ...existingRow, [col]: newVal };
+          targetTab.rows = markRaw(nextRows);
+        }
+        setStatus(`单元格 [${col}] 已生成并执行 SQL（影响 ${totalAffected} 行）`);
+      } else {
+        resultGridRef.value?.clearDraft(payload.resultTabId);
+        setStatus(`数据修改成功 · 共执行 ${stmts.length} 条 SQL，影响 ${totalAffected} 行`);
+
+        if (targetTab) {
+          const refreshedCols: string[] = [];
+          const refreshedRows: Record<string, unknown>[] = [];
+          const summary = await executeSql(
+            profile.id,
+            targetTab.dbName || null,
+            targetTab.sql,
+            maxRowsLimit.value,
+            (chunk) => {
+              if (refreshedCols.length === 0 && chunk.columns.length > 0) {
+                refreshedCols.push(...chunk.columns);
+              }
+              if (chunk.rows.length > 0) {
+                refreshedRows.push(...chunk.rows);
+              }
+            },
+            undefined,
+            timeoutLimit,
+            true,
+          );
+          targetTab.columns = markRaw(refreshedCols.length > 0 ? refreshedCols : targetTab.columns);
+          targetTab.rows = markRaw(refreshedRows);
+          targetTab.summary = summary;
+        }
+      }
+      void refreshHistory();
+      opts?.onDone?.(true);
     }
   } catch (err) {
     const msg = String(err);
@@ -3747,11 +3786,29 @@ async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedS
       summary: '结果集修改提交异常',
       detail: msg,
     });
-    activeServiceTab.value = 'output';
+    if (!opts?.onDone) {
+      activeServiceTab.value = 'output';
+    }
     setStatus(`数据修改异常: ${msg}`, true);
+    opts?.onDone?.(false, msg);
   } finally {
     busy.value = false;
   }
+}
+
+async function handleExecuteGridSql(payload: GridMutationPreviewPayload, editedSql: string) {
+  await runGridSqlExecution(payload, editedSql, { closeModal: true });
+}
+
+async function handleExecuteGridSqlDirect(
+  payload: GridMutationPreviewPayload,
+  sql: string,
+  opts?: {
+    inPlaceCell?: { origIdx: number; col: string; newVal: unknown };
+    onDone?: (ok: boolean, errorMessage?: string) => void;
+  },
+) {
+  await runGridSqlExecution(payload, sql, opts);
 }
 
 async function handleRerunResultTab(tab: ResultTabItem, silent = false) {
@@ -6988,6 +7045,7 @@ onBeforeUnmount(() => {
             @close-other-result-tabs="closeOtherResultTabs"
             @load-history-sql="loadHistorySqlIntoEditor"
             @preview-grid-mutations="handlePreviewGridMutations"
+            @execute-grid-sql-direct="handleExecuteGridSqlDirect"
             @clear-console-logs="clearConsoleLogs"
             @run-console-sql="handleRunConsoleQuickSql"
             @send-sql-to-editor="createNewConsoleTab($event)"
