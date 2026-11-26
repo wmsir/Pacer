@@ -1,6 +1,7 @@
 package com.wmdb.controller;
 
 import com.wmdb.common.Result;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.ExternalSyncService;
 import lombok.Data;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,9 +23,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class SyncController {
 
     private final ExternalSyncService externalSyncService;
+    private final PrivilegeGuard privilegeGuard;
 
-    public SyncController(ExternalSyncService externalSyncService) {
+    public SyncController(ExternalSyncService externalSyncService, PrivilegeGuard privilegeGuard) {
         this.externalSyncService = externalSyncService;
+        this.privilegeGuard = privilegeGuard;
     }
 
     /**
@@ -38,6 +41,7 @@ public class SyncController {
      */
     @PostMapping("/users")
     public Result<String> syncUsers(@RequestBody UserSyncRequest request) {
+        privilegeGuard.requireAdmin();
         externalSyncService.syncUser(
             request.getRealName(),
             request.getIdCard(),

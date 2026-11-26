@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.WorkflowTemplate;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.WorkflowTemplateService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +25,7 @@ import java.util.List;
 public class WorkflowTemplateController {
 
     private final WorkflowTemplateService workflowTemplateService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "查询审批流模板列表（全量兼容）")
     @GetMapping("/list")
@@ -44,6 +46,7 @@ public class WorkflowTemplateController {
     @Operation(summary = "保存审批流模板（新建或编辑）")
     @PostMapping("/save")
     public Result<Void> saveTemplate(@RequestBody WorkflowTemplate template) {
+        privilegeGuard.requireAdminOrDba();
         workflowTemplateService.saveTemplate(template);
         return Result.success(null);
     }
@@ -51,6 +54,7 @@ public class WorkflowTemplateController {
     @Operation(summary = "删除审批流模板")
     @DeleteMapping("/{id:\\d+}")
     public Result<Void> deleteTemplate(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         workflowTemplateService.deleteTemplate(id);
         return Result.success(null);
     }
@@ -58,6 +62,7 @@ public class WorkflowTemplateController {
     @Operation(summary = "切换审批流模板启用状态")
     @PostMapping("/{id:\\d+}/toggle-status")
     public Result<Void> toggleStatus(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         workflowTemplateService.toggleStatus(id);
         return Result.success(null);
     }
@@ -65,12 +70,14 @@ public class WorkflowTemplateController {
     @Operation(summary = "预估工单路由的审批流模板与节点链路", description = "根据资源组、工单类型、目标实例（含固定流与标签）及影响行数计算匹配的审批流")
     @PostMapping("/preview-routing")
     public Result<com.wmdb.model.RoutingPreviewDTO> previewRouting(@RequestBody com.wmdb.model.RoutingPreviewRequestDTO request) {
+        privilegeGuard.requireAuthenticatedUser();
         return Result.success(workflowTemplateService.previewRouting(request));
     }
 
     @Operation(summary = "SpEL 条件规则在线沙箱测试与求值", description = "支持输入 SpEL 表达式与模拟上下文变量测试判定结果与语法合法性")
     @PostMapping("/evaluate-spel")
     public Result<com.wmdb.model.SpelEvaluationResultDTO> evaluateSpel(@RequestBody com.wmdb.model.SpelEvaluationRequestDTO request) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(workflowTemplateService.evaluateSpel(request));
     }
 }

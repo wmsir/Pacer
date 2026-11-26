@@ -834,14 +834,19 @@ public class WorkflowTemplateService {
         try {
             org.springframework.expression.ExpressionParser parser = new org.springframework.expression.spel.standard.SpelExpressionParser();
             org.springframework.expression.Expression expression = parser.parseExpression(rawExpr);
-            org.springframework.expression.spel.support.StandardEvaluationContext context = new org.springframework.expression.spel.support.StandardEvaluationContext();
-            context.addPropertyAccessor(new org.springframework.context.expression.MapAccessor());
+            // 使用受限 SimpleEvaluationContext 禁用 T() 类型解析、构造器及方法调用，彻底阻断 SpEL RCE
+            Map<String, Object> rootCtx = request.getContext() != null ? request.getContext() : Collections.emptyMap();
+            org.springframework.expression.spel.support.SimpleEvaluationContext context =
+                    org.springframework.expression.spel.support.SimpleEvaluationContext
+                            .forPropertyAccessors(
+                                    org.springframework.expression.spel.support.DataBindingPropertyAccessor.forReadOnlyDataAccess(),
+                                    new org.springframework.context.expression.MapAccessor()
+                            )
+                            .withRootObject(rootCtx)
+                            .build();
 
-            if (request.getContext() != null) {
-                context.setRootObject(request.getContext());
-                for (Map.Entry<String, Object> entry : request.getContext().entrySet()) {
-                    context.setVariable(entry.getKey(), entry.getValue());
-                }
+            for (Map.Entry<String, Object> entry : rootCtx.entrySet()) {
+                context.setVariable(entry.getKey(), entry.getValue());
             }
 
             Object evaluated = expression.getValue(context);

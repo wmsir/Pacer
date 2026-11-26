@@ -18,6 +18,8 @@ import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestTemplate;
 
+import java.net.InetAddress;
+import java.net.URI;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -301,12 +303,31 @@ public class AiConfigService {
         String endpoint = req.getEndpoint().trim();
         String model = (req.getModel() != null && !req.getModel().trim().isEmpty()) ? req.getModel().trim() : "gpt-3.5-turbo";
 
-        // 获取真实的 API Key
+        // SSRF 防护：仅允许 http/https，且禁止非 Ollama 通道访问回环/内网/云元数据地址
+        String ssrfError = validateLlmEndpoint(endpoint, req.getProviderId());
+        if (ssrfError != null) {
+            return TestConnectionResult.builder()
+                    .success(false)
+                    .latencyMs(0L)
+                    .message("测试失败: " + ssrfError)
+                    .errorDetails(ssrfError)
+                    .build();
+        }
+
+        // 获取真实的 API Key：仅当测试目标端点与已保存配置一致时才允许复用已存储密钥，防止通过篡改 endpoint 窃取 API Key
         String apiKey = req.getApiKey();
         if (apiKey != null && apiKey.contains("****")) {
             ProviderDetail exist = providerStore.get(req.getProviderId());
-            if (exist != null) {
+            if (exist != null && exist.getEndpoint() != null
+                    && normalizeEndpoint(endpoint).equalsIgnoreCase(normalizeEndpoint(exist.getEndpoint()))) {
                 apiKey = exist.getApiKey();
+            } else {
+                return TestConnectionResult.builder()
+                        .success(false)
+                        .latencyMs(0L)
+                        .message("安全拦截: 修改接口端点后请重新输入完整 API Key，禁止复用脱敏密钥探测外部地址")
+                        .errorDetails("Endpoint mismatch for masked API key")
+                        .build();
             }
         }
         if (apiKey == null) apiKey = "";
@@ -417,6 +438,49 @@ public class AiConfigService {
                     .message("连通性测试失败: " + e.getMessage())
                     .errorDetails(e.toString())
                     .build();
+        }
+    }
+
+    private String normalizeEndpoint(String endpoint) {
+        if (endpoint == null) return "";
+        String t = endpoint.trim();
+        while (t.endsWith("/")) {
+            t = t.substring(0, t.length() - 1);
+        }
+        return t;
+    }
+
+    private String validateLlmEndpoint(String endpoint, String providerId) {
+        try {
+            URI uri = URI.create(endpoint);
+            String scheme = uri.getScheme();
+            if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+                return "仅支持 http 或 https 协议的大模型端点";
+            }
+            if (uri.getUserInfo() != null) {
+                return "端点 URL 不允许包含认证用户信息";
+            }
+            String host = uri.getHost();
+            if (host == null || host.trim().isEmpty()) {
+                return "端点 URL 缺少有效主机名";
+            }
+            boolean isLocalOllama = "ollama".equalsIgnoreCase(providerId)
+                    && ("localhost".equalsIgnoreCase(host) || "127.0.0.1".equals(host))
+                    && (uri.getPort() == -1 || uri.getPort() == 11434);
+            if (isLocalOllama) {
+                return null;
+            }
+            InetAddress[] addrs = InetAddress.getAllByName(host);
+            for (InetAddress addr : addrs) {
+                if (addr.isAnyLocalAddress() || addr.isLoopbackAddress()
+                        || addr.isLinkLocalAddress() || addr.isSiteLocalAddress()
+                        || addr.isMulticastAddress()) {
+                    return "禁止探测内网、回环或元数据服务地址";
+                }
+            }
+            return null;
+        } catch (Exception e) {
+            return "端点 URL 格式不合法: " + e.getMessage();
         }
     }
 

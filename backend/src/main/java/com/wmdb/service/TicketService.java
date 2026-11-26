@@ -319,6 +319,22 @@ public class TicketService {
         return ticket;
     }
 
+    private boolean isSameApplicant(SqlTicket ticket, String operatorIdCard, SysUser operator) {
+        String appId = ticket.getApplicantIdCard() != null ? ticket.getApplicantIdCard().trim() : "";
+        if (appId.isEmpty()) {
+            return false;
+        }
+        if (operatorIdCard != null && operatorIdCard.trim().equalsIgnoreCase(appId)) {
+            return true;
+        }
+        if (operator != null) {
+            if (operator.getIdCard() != null && operator.getIdCard().trim().equalsIgnoreCase(appId)) return true;
+            if (operator.getUsername() != null && operator.getUsername().trim().equalsIgnoreCase(appId)) return true;
+            if (operator.getPhone() != null && operator.getPhone().trim().equalsIgnoreCase(appId)) return true;
+        }
+        return false;
+    }
+
     public AsyncTicketExecutor.ExecutionResult approveTicket(Long ticketId, String operatorIdCard,
             String executionMode, String scheduledTime, Integer batchSize, Integer intervalMs, String comment) {
         SqlTicket ticket = sqlTicketMapper.selectById(ticketId);
@@ -327,6 +343,24 @@ public class TicketService {
             throw new BusinessException("A0400", "当前工单状态为 " + ticket.getStatus() + "，无法进行审批操作");
 
         SysUser operator = getSysUserByIdentifier(operatorIdCard);
+        List<String> opRoles = operator != null ? userDisplayNameService.parseRoles(operator.getRole()) : Collections.emptyList();
+        boolean canApprove = opRoles.contains("ADMIN") || opRoles.contains("SUPER_ADMIN")
+                || opRoles.contains("DBA") || opRoles.contains("DEV_LEAD") || opRoles.contains("LEAD") || opRoles.contains("AUDITOR")
+                || "system_admin".equalsIgnoreCase(operatorIdCard)
+                || "admin".equalsIgnoreCase(operatorIdCard) || "testadmin1".equalsIgnoreCase(operatorIdCard)
+                || "testadmin2".equalsIgnoreCase(operatorIdCard) || "testadmin3".equalsIgnoreCase(operatorIdCard)
+                || "leader_sales".equalsIgnoreCase(operatorIdCard) || "test_auditor".equalsIgnoreCase(operatorIdCard);
+        if (!canApprove) {
+            throw new BusinessException("A0301", "权限不足，当前账号无工单审批权限");
+        }
+        DbInstance targetInst = ticket.getInstanceId() != null ? dbInstanceMapper.selectById(ticket.getInstanceId()) : null;
+        boolean isTestOrDevEnv = targetInst != null && targetInst.getEnv() != null
+                && ("TEST".equalsIgnoreCase(targetInst.getEnv()) || "DEV".equalsIgnoreCase(targetInst.getEnv())
+                || "UAT".equalsIgnoreCase(targetInst.getEnv()) || "SIT".equalsIgnoreCase(targetInst.getEnv())
+                || "LOCAL".equalsIgnoreCase(targetInst.getEnv()));
+        if (!isTestOrDevEnv && isSameApplicant(ticket, operatorIdCard, operator)) {
+            throw new BusinessException("A0301", "生产环境工单严禁申请人自审自批，请交由其他授权审批人审核");
+        }
         String opName = operator != null ? userDisplayNameService.getDisplayName(operator) : operatorIdCard;
 
         // 获取已完成的中间审批阶段记录
@@ -507,11 +541,11 @@ public class TicketService {
         SqlTicket ticket = sqlTicketMapper.selectById(ticketId);
         if (ticket == null) throw new BusinessException("A0400", "ticket not found");
         SysUser operator = getSysUserByIdentifier(operatorIdCard);
-        String role = operator != null && operator.getRole() != null ? operator.getRole().toUpperCase() : "DEV";
-        boolean isAdmin = "ADMIN".equals(role) || "admin".equals(operatorIdCard) || "testadmin1".equals(operatorIdCard);
-        boolean isDba = "DBA".equals(role) || "testadmin3".equals(operatorIdCard);
-        boolean isDevLead = "DEV_LEAD".equals(role) || "testadmin2".equals(operatorIdCard) || "leader_sales".equals(operatorIdCard);
-        boolean isAuditor = "AUDITOR".equals(role) || "test_auditor".equals(operatorIdCard);
+        List<String> opRoles = operator != null ? userDisplayNameService.parseRoles(operator.getRole()) : Collections.emptyList();
+        boolean isAdmin = opRoles.contains("ADMIN") || opRoles.contains("SUPER_ADMIN") || "admin".equalsIgnoreCase(operatorIdCard) || "testadmin1".equalsIgnoreCase(operatorIdCard);
+        boolean isDba = opRoles.contains("DBA") || "testadmin3".equalsIgnoreCase(operatorIdCard);
+        boolean isDevLead = opRoles.contains("DEV_LEAD") || opRoles.contains("LEAD") || "testadmin2".equalsIgnoreCase(operatorIdCard) || "leader_sales".equalsIgnoreCase(operatorIdCard);
+        boolean isAuditor = opRoles.contains("AUDITOR") || "test_auditor".equalsIgnoreCase(operatorIdCard);
         if (!isAdmin && !isDba && !isDevLead && !isAuditor) throw new BusinessException("A0403", "no permission to reject");
         ticket.setStatus("REJECTED");
         ticket.setReason((ticket.getReason() != null ? ticket.getReason() + " | " : "") + "[reject: " + (reason != null ? reason : "not compliant") + "]");

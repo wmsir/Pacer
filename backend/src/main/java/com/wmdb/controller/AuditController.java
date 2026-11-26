@@ -1,6 +1,7 @@
 package com.wmdb.controller;
 
 import com.wmdb.common.Result;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.AuditService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +25,7 @@ import java.util.Map;
 public class AuditController {
 
     private final AuditService auditService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "多维度检索 SQL 审计日志列表")
     @GetMapping("/logs")
@@ -35,12 +37,14 @@ public class AuditController {
             @RequestParam(value = "maxDuration", required = false) Long maxDuration,
             @RequestParam(value = "page", defaultValue = "1") Integer page,
             @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "AUDITOR");
         return Result.success(auditService.listAuditLogs(keyword, status, ticketId, minDuration, maxDuration, page, size));
     }
 
     @Operation(summary = "获取企业数据安全与 SQL 合规分析大屏指标")
     @GetMapping("/dashboard-stats")
     public Result<Map<String, Object>> getDashboardStats() {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "AUDITOR");
         return Result.success(auditService.getDashboardStats());
     }
 
@@ -51,6 +55,7 @@ public class AuditController {
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "ticketId", required = false) Long ticketId,
             HttpServletResponse response) {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "AUDITOR");
         auditService.exportAuditLogs(keyword, status, ticketId, response);
     }
 
@@ -66,18 +71,21 @@ public class AuditController {
             @RequestParam(value = "maxDuration", required = false) Long maxDuration,
             @RequestParam(value = "page", defaultValue = "1") Integer page,
             @RequestParam(value = "size", defaultValue = "20") Integer size) {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "AUDITOR");
         return Result.success(auditService.listQueryAuditLogs(keyword, opType, dbName, status, username, minDuration, maxDuration, page, size));
     }
 
     @Operation(summary = "获取在线查询审计策略配置")
     @GetMapping("/query-config")
     public Result<com.wmdb.service.QueryAuditConfigService.AuditPolicyConfig> getQueryAuditConfig() {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "AUDITOR");
         return Result.success(auditService.getQueryAuditConfig());
     }
 
     @Operation(summary = "更新在线查询审计策略配置")
     @PostMapping("/query-config")
     public Result<String> updateQueryAuditConfig(@RequestBody com.wmdb.service.QueryAuditConfigService.AuditPolicyConfig config) {
+        privilegeGuard.requireAdminOrDba();
         auditService.updateQueryAuditConfig(config);
         return Result.success("查询审计策略已成功更新生效");
     }

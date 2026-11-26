@@ -4,6 +4,7 @@ import com.wmdb.common.Result;
 import com.wmdb.model.AiModelConfigDTO;
 import com.wmdb.model.AiModelConfigDTO.TestConnectionRequest;
 import com.wmdb.model.AiModelConfigDTO.TestConnectionResult;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.AiConfigService;
 import com.wmdb.service.AiService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -29,10 +30,12 @@ public class AiController {
 
     private final AiService aiService;
     private final AiConfigService aiConfigService;
+    private final PrivilegeGuard privilegeGuard;
 
-    public AiController(AiService aiService, AiConfigService aiConfigService) {
+    public AiController(AiService aiService, AiConfigService aiConfigService, PrivilegeGuard privilegeGuard) {
         this.aiService = aiService;
         this.aiConfigService = aiConfigService;
+        this.privilegeGuard = privilegeGuard;
     }
 
     /**
@@ -41,6 +44,7 @@ public class AiController {
     @Operation(summary = "获取全量 AI 模型配置 (包含 API Key 脱敏)")
     @GetMapping("/config")
     public Result<AiModelConfigDTO> getAiConfig() {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(aiConfigService.getConfig(true));
     }
 
@@ -50,6 +54,7 @@ public class AiController {
     @Operation(summary = "保存/更新 AI 模型配置与切换激活模型")
     @PostMapping("/config")
     public Result<Void> updateAiConfig(@RequestBody AiModelConfigDTO config) {
+        privilegeGuard.requireAdminOrDba();
         aiConfigService.updateConfig(config);
         return Result.success(null);
     }
@@ -60,6 +65,7 @@ public class AiController {
     @Operation(summary = "实时探测测试大模型接口连通性与 API Key 有效性")
     @PostMapping("/test-connection")
     public Result<TestConnectionResult> testConnection(@RequestBody TestConnectionRequest request) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(aiConfigService.testConnection(request));
     }
 

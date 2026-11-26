@@ -45,14 +45,16 @@ public class AuthController {
      * @param sendCodeRequest 手机号封装
      * @return 包含发送状态与测试验证码的响应实体
      */
-    @Operation(summary = "发送手机短信验证码", description = "输入11位手机号获取短信验证码（测试通用码：123456）")
+    @Operation(summary = "发送手机短信验证码", description = "输入11位手机号获取短信验证码")
     @RateLimit(time = 60, count = 10) // 1分钟内限制发送10次
     @PostMapping("/send-code")
     public Result<Map<String, String>> sendCode(@RequestBody SendCodeRequest sendCodeRequest) {
         String code = authService.sendSmsCode(sendCodeRequest.getPhone());
         Map<String, String> response = new HashMap<>();
         response.put("phone", sendCodeRequest.getPhone());
-        response.put("code", code); // 开发/测试环境返回，便于调试
+        if (authService.isDevEnvironment()) {
+            response.put("code", code); // 仅开发/本地环境返回，生产环境严禁透出验证码
+        }
         response.put("message", "验证码发送成功");
         return Result.success(response);
     }

@@ -4,6 +4,12 @@ import com.baomidou.dynamic.datasource.DynamicRoutingDataSource;
 import com.baomidou.dynamic.datasource.creator.DataSourceProperty;
 import com.baomidou.dynamic.datasource.creator.DefaultDataSourceCreator;
 import com.baomidou.dynamic.datasource.toolkit.DynamicDataSourceContextHolder;
+import com.alibaba.druid.sql.SQLUtils;
+import com.alibaba.druid.sql.ast.SQLStatement;
+import com.alibaba.druid.sql.ast.statement.SQLSelectStatement;
+import com.alibaba.druid.sql.ast.statement.SQLShowTablesStatement;
+import com.alibaba.druid.sql.visitor.SchemaStatVisitor;
+import com.alibaba.druid.stat.TableStat;
 import com.wmdb.exception.BusinessException;
 import com.wmdb.mapper.DbInstanceMapper;
 import com.wmdb.mapper.QueryAuditLogMapper;
@@ -115,9 +121,13 @@ public class SqlQueryService {
         if (sql == null || sql.trim().isEmpty()) {
             throw new BusinessException("A0400", "请输入待分析执行计划的 SQL 语句");
         }
-        String explainSql = sql.trim();
-        if (!explainSql.toUpperCase().startsWith("EXPLAIN")) {
-            explainSql = "EXPLAIN " + explainSql;
+        String stripped = stripLeadingComments(sql.trim());
+        String explainSql = stripped;
+        if (!explainSql.toUpperCase(Locale.ROOT).startsWith("EXPLAIN")) {
+            validateReadOnlySql(stripped, false);
+            explainSql = "EXPLAIN " + stripped;
+        } else {
+            validateReadOnlySql(stripped, true);
         }
         return executeQueryInternal(instanceId, dbName, explainSql, 100, true);
     }
@@ -143,16 +153,17 @@ public class SqlQueryService {
             throw new BusinessException("A0400", "请输入待执行的 SQL 查询语句");
         }
 
-        String trimmedSql = sql.trim();
-        if (!isExplain) {
-            validateReadOnlySql(trimmedSql);
-        }
+        String trimmedSql = stripLeadingComments(sql.trim());
+        validateReadOnlySql(trimmedSql, isExplain);
 
         int maxLimit = limit != null && limit > 0 && limit <= 1000 ? limit : 200;
         long startTime = System.currentTimeMillis();
 
         String password = dbInstanceService.resolvePassword(instance);
         String targetDb = (dbName != null && !dbName.trim().isEmpty()) ? dbName.trim() : "";
+        if (!targetDb.isEmpty() && !targetDb.matches("^[a-zA-Z0-9_-]{1,64}$")) {
+            throw new BusinessException("A0400", "非法数据库名称【" + targetDb + "】");
+        }
         String dbType = instance.getDbType() != null ? instance.getDbType().toLowerCase() : "mysql";
 
         // 主从读写分离智能路由：若配置了只读从库，只读 DQL 查询优先路由至只读从库执行；若未配置或从库故障则平滑回退至主库
@@ -348,13 +359,92 @@ public class SqlQueryService {
         }
     }
 
-    private void validateReadOnlySql(String sql) {
-        String upper = sql.trim().toUpperCase();
-        if (upper.startsWith("INSERT") || upper.startsWith("UPDATE") || upper.startsWith("DELETE") ||
-            upper.startsWith("DROP") || upper.startsWith("ALTER") || upper.startsWith("TRUNCATE") ||
-            upper.startsWith("CREATE") || upper.startsWith("REPLACE") || upper.startsWith("GRANT") ||
-            upper.startsWith("REVOKE")) {
-            throw new BusinessException("A0403", "安全管控拦截：数据查询控制台仅支持安全只读查询（SELECT/SHOW/DESC/EXPLAIN），严禁在此直接执行 DDL/DML 修改操作！请前往工单中心提交变更审核工单。");
+    private String stripLeadingComments(String sql) {
+        if (sql == null) return "";
+        String s = sql.trim();
+        while (!s.isEmpty()) {
+            if (s.startsWith("--") || s.startsWith("#")) {
+                int nl = s.indexOf('\n');
+                if (nl < 0) {
+                    return "";
+                }
+                s = s.substring(nl + 1).trim();
+            } else if (s.startsWith("/*")) {
+                int end = s.indexOf("*/", 2);
+                if (end < 0) {
+                    return "";
+                }
+                s = s.substring(end + 2).trim();
+            } else {
+                break;
+            }
+        }
+        return s;
+    }
+
+    private void validateReadOnlySql(String sql, boolean allowExplain) {
+        String clean = stripLeadingComments(sql);
+        if (clean.isEmpty()) {
+            throw new BusinessException("A0400", "SQL 查询语句不能为空");
+        }
+
+        List<String> splitStmts = com.wmdb.utils.SqlSplitUtils.split(clean);
+        if (splitStmts.size() != 1) {
+            throw new BusinessException("A0403", "安全管控拦截：只读查询控制台仅允许单条只读语句，禁止多语句拼接执行！");
+        }
+
+        String single = stripLeadingComments(splitStmts.get(0));
+        String upper = single.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("EXPLAIN")) {
+            if (!allowExplain) {
+                // EXPLAIN in /query is allowed only when non-ANALYZE and wrapping a read-only query
+            }
+            if (upper.matches("(?is)^EXPLAIN\\s+(?:FORMAT\\s*=\\s*\\w+\\s+)?ANALYZE\\b.*")) {
+                throw new BusinessException("A0403", "安全管控拦截：禁止在只读查询中执行 EXPLAIN ANALYZE！");
+            }
+            String inner = stripLeadingComments(single.substring(7));
+            if (inner.toUpperCase(Locale.ROOT).startsWith("FORMAT")) {
+                inner = inner.replaceFirst("(?is)^FORMAT\\s*=\\s*\\S+\\s*", "");
+            }
+            validateReadOnlySql(inner, false);
+            return;
+        }
+
+        boolean allowedPrefix = upper.startsWith("SELECT")
+                || upper.startsWith("SHOW")
+                || upper.startsWith("DESC")
+                || upper.startsWith("DESCRIBE")
+                || upper.startsWith("WITH");
+        if (!allowedPrefix) {
+            throw new BusinessException("A0403", "安全管控拦截：数据查询控制台仅支持安全只读查询（SELECT/SHOW/DESC/EXPLAIN），严禁执行变更或存储过程调用指令！");
+        }
+
+        if (upper.matches("(?is).*\\bINTO\\s+(OUTFILE|DUMPFILE)\\b.*")) {
+            throw new BusinessException("A0403", "安全管控拦截：禁止使用 INTO OUTFILE / DUMPFILE！");
+        }
+
+        // 针对 WITH CTE 及标准 SELECT，使用 Druid AST 校验仅包含只读查询且无写表操作
+        if (upper.startsWith("WITH") || upper.startsWith("SELECT")) {
+            try {
+                List<SQLStatement> parsed = SQLUtils.parseStatements(single, com.alibaba.druid.DbType.mysql);
+                if (parsed == null || parsed.size() != 1 || !(parsed.get(0) instanceof SQLSelectStatement)) {
+                    throw new BusinessException("A0403", "安全管控拦截：仅允许单条只读 SELECT/WITH 查询！");
+                }
+                SchemaStatVisitor visitor = SQLUtils.createSchemaStatVisitor(com.alibaba.druid.DbType.mysql);
+                parsed.get(0).accept(visitor);
+                for (TableStat stat : visitor.getTables().values()) {
+                    if (stat.getInsertCount() > 0 || stat.getUpdateCount() > 0 || stat.getDeleteCount() > 0
+                            || stat.getCreateCount() > 0 || stat.getDropCount() > 0 || stat.getAlterCount() > 0) {
+                        throw new BusinessException("A0403", "安全管控拦截：检测到 WITH/CTE 或子查询包含写入/DDL 操作！");
+                    }
+                }
+            } catch (BusinessException be) {
+                throw be;
+            } catch (Exception parseEx) {
+                if (upper.matches("(?is).*\\b(INSERT|UPDATE|DELETE|MERGE|REPLACE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE|CALL|EXEC|EXECUTE|LOAD)\\b.*")) {
+                    throw new BusinessException("A0403", "安全管控拦截：检测到潜在写操作或高危关键字！");
+                }
+            }
         }
     }
 

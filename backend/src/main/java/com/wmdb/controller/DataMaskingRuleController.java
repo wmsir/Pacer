@@ -4,6 +4,7 @@ import com.wmdb.common.Result;
 import com.wmdb.model.DataMaskingRule;
 import com.wmdb.model.MaskingAlgorithmDTO;
 import com.wmdb.model.MaskingPreviewRequestDTO;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.DataMaskingRuleService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -26,6 +27,7 @@ import java.util.List;
 public class DataMaskingRuleController {
 
     private final DataMaskingRuleService dataMaskingRuleService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "获取支持的脱敏算法清单与样例")
     @GetMapping("/algorithms")
@@ -61,6 +63,7 @@ public class DataMaskingRuleController {
     @Operation(summary = "保存/批量保存表字段的脱敏规则")
     @PostMapping("/save")
     public Result<Void> saveRules(@RequestBody List<DataMaskingRule> rules) {
+        privilegeGuard.requireAdminOrDba();
         dataMaskingRuleService.saveRules(rules);
         return Result.success(null);
     }
@@ -68,6 +71,7 @@ public class DataMaskingRuleController {
     @Operation(summary = "删除脱敏规则")
     @DeleteMapping("/{id:\\d+}")
     public Result<Void> deleteRule(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         dataMaskingRuleService.deleteRule(id);
         return Result.success(null);
     }
@@ -75,6 +79,7 @@ public class DataMaskingRuleController {
     @Operation(summary = "切换脱敏规则启用/停用状态")
     @PostMapping("/{id:\\d+}/toggle-status")
     public Result<Void> toggleStatus(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         dataMaskingRuleService.toggleStatus(id);
         return Result.success(null);
     }

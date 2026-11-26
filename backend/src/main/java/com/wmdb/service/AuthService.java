@@ -11,6 +11,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
+import java.security.SecureRandom;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -28,11 +29,16 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class AuthService {
 
-    @org.springframework.beans.factory.annotation.Value("${spring.profiles.active:dev}")
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
+
+    @org.springframework.beans.factory.annotation.Value("${spring.profiles.active:prod}")
     private String activeProfile;
 
-    private boolean isDevEnvironment() {
-        return "dev".equalsIgnoreCase(activeProfile) || "local".equalsIgnoreCase(activeProfile);
+    public boolean isDevEnvironment() {
+        if (activeProfile == null) return false;
+        return Arrays.stream(activeProfile.split(","))
+                .map(String::trim)
+                .anyMatch(p -> "dev".equalsIgnoreCase(p) || "local".equalsIgnoreCase(p));
     }
 
     private final JwtUtils jwtUtils;
@@ -98,8 +104,8 @@ public class AuthService {
         }
         email = email.trim().toLowerCase();
 
-        // 生成6位随机验证码
-        String code = String.valueOf((int) ((Math.random() * 9 + 1) * 100000));
+        // 生成6位安全随机验证码
+        String code = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
 
         // 存入内存备用缓存 (5分钟有效)
         EMAIL_CODE_CACHE.put(email, new SmsCodeRecord(code, TimeUnit.MINUTES.toMillis(5)));
@@ -116,12 +122,14 @@ public class AuthService {
         // 调用邮件服务发送或降级输出
         if (emailService != null) {
             emailService.sendVerificationCode(email, code);
-        } else {
+        } else if (isDevEnvironment()) {
             log.info("==================================================");
-            log.info("【Email 验证码服务 (降级模式)】");
+            log.info("【Email 验证码服务 (开发降级模式)】");
             log.info("收件邮箱: " + email);
-            log.info("验证码: " + code + " (有效期5分钟，测试通用验证码: 123456)");
+            log.info("验证码: " + code + " (有效期5分钟)");
             log.info("==================================================");
+        } else {
+            log.warn("EmailService not configured; verification email not dispatched");
         }
 
         return code;
@@ -131,7 +139,7 @@ public class AuthService {
      * 发送手机短信验证码
      *
      * @param phone 11位手机号码
-     * @return 生成的验证码（方便测试与调试）
+     * @return 生成的验证码
      */
     public String sendSmsCode(String phone) {
         if (phone == null || phone.trim().length() != 11) {
@@ -139,8 +147,8 @@ public class AuthService {
         }
         phone = phone.trim();
 
-        // 默认生成 6 位验证码，测试环境同时支持 123456
-        String code = "123456";
+        // 生产环境生成随机6位验证码，仅 dev/local 环境允许固定测试码
+        String code = isDevEnvironment() ? "123456" : String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
         long ttlMillis = 5 * 60 * 1000L; // 5 分钟有效
 
         // 缓存到内存
@@ -155,11 +163,11 @@ public class AuthService {
             log.error("Redis write sms_code failed (fallback to memory): " + e.getMessage());
         }
 
-        log.info("==================================================");
-        log.info("【SMS 短信验证码服务】");
-        log.info("手机号码: " + phone);
-        log.info("验证码: " + code + " (有效期5分钟，测试通用验证码: 123456)");
-        log.info("==================================================");
+        if (isDevEnvironment()) {
+            log.info("【SMS 短信验证码服务 (DEV)】手机号: {}, 验证码: {} (有效期5分钟)", phone, code);
+        } else {
+            log.info("【SMS 短信验证码服务】已生成 5 分钟有效验证码");
+        }
 
         return code;
     }
@@ -215,7 +223,7 @@ public class AuthService {
             user.setUsername("user_" + phone.substring(7));
             user.setRealName("手机用户" + phone.substring(7));
             user.setIdCard("M" + phone);
-            user.setPasswordCipher(SmUtils.sm3Hash("123456"));
+            user.setPasswordCipher(SmUtils.sm3Hash(UUID.randomUUID().toString()));
             user.setStatus(1);
             user.setPhoneVerified(1);
             user.setEmailVerified(0);
@@ -478,7 +486,12 @@ public class AuthService {
         String phone = req.getPhone() != null && !req.getPhone().trim().isEmpty() ? req.getPhone().trim() : null;
         String email = req.getEmail() != null && !req.getEmail().trim().isEmpty() ? req.getEmail().trim().toLowerCase() : null;
         String idCard = req.getIdCard() != null && !req.getIdCard().trim().isEmpty() ? req.getIdCard().trim() : null;
-        String password = req.getPassword() != null && !req.getPassword().trim().isEmpty() ? req.getPassword().trim() : "123456";
+        String password = (req.getPassword() != null && !req.getPassword().trim().isEmpty())
+                ? req.getPassword().trim()
+                : UUID.randomUUID().toString();
+        if (req.getPassword() != null && !req.getPassword().trim().isEmpty() && password.length() < 6) {
+            throw new com.wmdb.exception.BusinessException("A0400", "密码长度至少需 6 位");
+        }
         String regType = req.getRegisterType() != null && !req.getRegisterType().trim().isEmpty()
                 ? req.getRegisterType().trim().toUpperCase()
                 : (email != null && req.getCode() != null && !req.getCode().trim().isEmpty() ? "EMAIL"
@@ -586,7 +599,8 @@ public class AuthService {
         newUser.setEmail(email);
         newUser.setPasswordCipher(passwordHash);
         newUser.setPasswordHash(passwordHash);
-        newUser.setRole(req.getRole() != null && !req.getRole().isEmpty() ? req.getRole() : "DEV");
+        // 公开自助注册严禁采信客户端传入的高权限角色，统一分配基础角色 DEV
+        newUser.setRole("DEV");
         newUser.setResourceGroup(req.getResourceGroup() != null && !req.getResourceGroup().isEmpty() ? req.getResourceGroup() : "车险承保资源组");
         newUser.setStatus(1);
         newUser.setEmailVerified(emailVerified);

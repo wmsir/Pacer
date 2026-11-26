@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.*;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.DbInstanceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +30,7 @@ import java.util.Map;
 public class DbInstanceController {
 
     private final DbInstanceService dbInstanceService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "获取实例列表（全量兼容）")
     @GetMapping("/list")
@@ -75,18 +77,21 @@ public class DbInstanceController {
     @Operation(summary = "根据参数实时测试数据库连通性", description = "用于新建/编辑表单输入 IP、端口、账号、密码后进行实时连接探测")
     @PostMapping("/test-connection-params")
     public Result<DbInstanceTestResultDTO> testConnectionWithParams(@RequestBody DbInstanceTestRequestDTO request) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(dbInstanceService.testConnectionWithParams(request));
     }
 
     @Operation(summary = "获取单实例详细配置")
     @GetMapping("/{id:\\d+}")
     public Result<DbInstance> getInstanceById(@PathVariable("id") Long id) {
+        privilegeGuard.requireAuthenticatedUser();
         return Result.success(dbInstanceService.getInstanceById(id));
     }
 
     @Operation(summary = "测试已保存实例的连通性")
     @PostMapping("/{id:\\d+}/test-connection")
     public Result<DbInstanceTestResultDTO> testConnection(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(dbInstanceService.testConnection(id));
     }
 
@@ -97,12 +102,14 @@ public class DbInstanceController {
     @Operation(summary = "查询实例下所有数据库/Schema详细元数据")
     @GetMapping("/{id:\\d+}/databases-detail")
     public Result<List<DbSchemaDetailDTO>> listDatabasesDetail(@PathVariable("id") Long id) {
+        privilegeGuard.requireAuthenticatedUser();
         return Result.success(dbInstanceService.listDatabasesDetail(id));
     }
 
     @Operation(summary = "在指定实例上创建新数据库")
     @PostMapping("/{id:\\d+}/databases/create")
     public Result<Void> createDatabase(@PathVariable("id") Long id, @RequestBody CreateDbRequestDTO request) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.createDatabase(id, request);
         return Result.success(null);
     }
@@ -110,6 +117,7 @@ public class DbInstanceController {
     @Operation(summary = "在指定实例上删除数据库")
     @DeleteMapping("/{id:\\d+}/databases/{dbName}")
     public Result<Void> dropDatabase(@PathVariable("id") Long id, @PathVariable("dbName") String dbName) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.dropDatabase(id, dbName);
         return Result.success(null);
     }
@@ -121,12 +129,14 @@ public class DbInstanceController {
     @Operation(summary = "查询实例当前活动会话与进程列表")
     @GetMapping("/{id:\\d+}/sessions")
     public Result<List<DbSessionDTO>> listSessions(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(dbInstanceService.listSessions(id));
     }
 
     @Operation(summary = "终止/Kill 指定会话进程")
     @PostMapping("/{id:\\d+}/sessions/{processId:\\d+}/kill")
     public Result<Void> killSession(@PathVariable("id") Long id, @PathVariable("processId") Long processId) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.killSession(id, processId);
         return Result.success(null);
     }
@@ -138,12 +148,14 @@ public class DbInstanceController {
     @Operation(summary = "查询数据库实例账号与主机权限列表")
     @GetMapping("/{id:\\d+}/accounts")
     public Result<List<DbAccountDTO>> listAccounts(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(dbInstanceService.listAccounts(id));
     }
 
     @Operation(summary = "创建新数据库账号并授权")
     @PostMapping("/{id:\\d+}/accounts/create")
     public Result<Void> createAccount(@PathVariable("id") Long id, @RequestBody CreateAccountRequestDTO request) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.createAccount(id, request);
         return Result.success(null);
     }
@@ -153,6 +165,7 @@ public class DbInstanceController {
     public Result<Void> dropAccount(@PathVariable("id") Long id,
                                     @RequestParam("user") String user,
                                     @RequestParam(value = "host", required = false, defaultValue = "%") String host) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.dropAccount(id, user, host);
         return Result.success(null);
     }
@@ -161,6 +174,7 @@ public class DbInstanceController {
     @PostMapping("/{id:\\d+}/accounts/reset-password")
     public Result<Void> resetAccountPassword(@PathVariable("id") Long id,
                                              @RequestBody Map<String, String> body) {
+        privilegeGuard.requireAdminOrDba();
         String user = body.get("user");
         String host = body.getOrDefault("host", "%");
         String newPassword = body.get("newPassword");
@@ -217,6 +231,7 @@ public class DbInstanceController {
     @Operation(summary = "保存数据库实例")
     @PostMapping("/save")
     public Result<Void> saveInstance(@RequestBody DbInstance instance) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.saveInstance(instance);
         return Result.success(null);
     }
@@ -224,6 +239,7 @@ public class DbInstanceController {
     @Operation(summary = "删除数据库实例")
     @DeleteMapping("/{id:\\d+}")
     public Result<Void> deleteInstance(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.deleteInstance(id);
         return Result.success(null);
     }
@@ -231,6 +247,7 @@ public class DbInstanceController {
     @Operation(summary = "审核通过实例")
     @PostMapping("/{id:\\d+}/approve")
     public Result<Void> approveInstance(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.approveInstance(id);
         return Result.success(null);
     }
@@ -238,6 +255,7 @@ public class DbInstanceController {
     @Operation(summary = "启用/禁用数据库实例")
     @PostMapping("/{id:\\d+}/toggle-status")
     public Result<Void> toggleStatus(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         dbInstanceService.toggleStatus(id);
         return Result.success(null);
     }

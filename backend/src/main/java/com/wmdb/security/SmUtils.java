@@ -6,6 +6,10 @@ import cn.hutool.crypto.asymmetric.SM2;
 import cn.hutool.crypto.symmetric.SymmetricCrypto;
 import org.bouncycastle.crypto.engines.SM2Engine;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
+
 /**
  * 国密 (SM) 算法工具类
  * <p>
@@ -68,15 +72,38 @@ public class SmUtils {
     }
 
     /**
-     * SM4 对称加密 (用于数据库凭证存储)
+     * 派生固定 16 字节 SM4 密钥：标准 32 位 Hex 直接解码，否则基于 SHA-256 摘要截断，拒绝空密钥。
+     */
+    private static byte[] deriveSm4Key(String key) {
+        if (key == null || key.trim().isEmpty()) {
+            throw new IllegalStateException("SM4 encryption key must not be empty");
+        }
+        String trimmed = key.trim();
+        if (trimmed.matches("^[0-9a-fA-F]{32}$")) {
+            return cn.hutool.core.util.HexUtil.decodeHex(trimmed);
+        }
+        try {
+            MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+            byte[] digest = sha256.digest(trimmed.getBytes(StandardCharsets.UTF_8));
+            return Arrays.copyOf(digest, 16);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to derive SM4 key", e);
+        }
+    }
+
+    /**
+     * SM4 对称加密 (用于数据库凭证存储，失败即显式抛错，严禁静默回退明文)
      */
     public static String sm4Encrypt(String data, String hexKey) {
+        if (data == null) {
+            return null;
+        }
         try {
-            byte[] keyBytes = cn.hutool.core.util.HexUtil.decodeHex(hexKey);
+            byte[] keyBytes = deriveSm4Key(hexKey);
             SymmetricCrypto sm4 = SmUtil.sm4(keyBytes);
             return sm4.encryptHex(data);
         } catch (Exception e) {
-            return data;
+            throw new RuntimeException("SM4 Encryption failed", e);
         }
     }
 
@@ -85,7 +112,7 @@ public class SmUtils {
      */
     public static String sm4Decrypt(String cipherHex, String hexKey) {
         try {
-            byte[] keyBytes = cn.hutool.core.util.HexUtil.decodeHex(hexKey);
+            byte[] keyBytes = deriveSm4Key(hexKey);
             SymmetricCrypto sm4 = SmUtil.sm4(keyBytes);
             return sm4.decryptStr(cipherHex);
         } catch (Exception e) {

@@ -37,6 +37,33 @@ public class DbInstanceService {
         }
     }
 
+    private String validateAccountUsername(String username) {
+        String u = username != null ? username.trim() : "";
+        if (!u.matches("^[a-zA-Z0-9_.-]{1,32}$")) {
+            throw new BusinessException("A0400", "非法数据库用户名：仅支持字母、数字、下划线、点或连字符（1~32位）");
+        }
+        return u;
+    }
+
+    private String validateAccountHost(String host) {
+        String h = (host != null && !host.trim().isEmpty()) ? host.trim() : "%";
+        if (!h.matches("^[a-zA-Z0-9_.%:-]{1,255}$")) {
+            throw new BusinessException("A0400", "非法主机白名单格式");
+        }
+        return h;
+    }
+
+    private String sanitizeSqlPasswordLiteral(String pwd) {
+        if (pwd == null || pwd.trim().isEmpty()) {
+            throw new BusinessException("A0400", "数据库账号密码不能为空");
+        }
+        String p = pwd.trim();
+        if (p.indexOf('\0') >= 0 || p.indexOf('\r') >= 0 || p.indexOf('\n') >= 0) {
+            throw new BusinessException("A0400", "密码包含非法控制字符");
+        }
+        return p.replace("\\", "\\\\").replace("'", "\\'");
+    }
+
 
     private final DbInstanceMapper dbInstanceMapper;
     private final DataSource dataSource;
@@ -440,8 +467,10 @@ public class DbInstanceService {
             throw new BusinessException("A0400", "实例不存在");
         }
 
-        String charset = (request.getCharset() != null && !request.getCharset().isEmpty()) ? request.getCharset() : "utf8mb4";
-        String collation = (request.getCollation() != null && !request.getCollation().isEmpty()) ? request.getCollation() : "utf8mb4_0900_ai_ci";
+        String charset = (request.getCharset() != null && !request.getCharset().isEmpty()) ? request.getCharset().trim() : "utf8mb4";
+        String collation = (request.getCollation() != null && !request.getCollation().isEmpty()) ? request.getCollation().trim() : "utf8mb4_0900_ai_ci";
+        validateIdentifier(charset);
+        validateIdentifier(collation);
         String password = resolvePassword(instance);
         String url = instance.getJdbcUrl();
         String dbType = instance.getDbType() != null ? instance.getDbType().toLowerCase() : "mysql";
@@ -765,8 +794,18 @@ public class DbInstanceService {
             throw new BusinessException("A0400", "实例不存在");
         }
 
-        String user = request.getUsername().trim();
-        String host = (request.getHost() != null && !request.getHost().trim().isEmpty()) ? request.getHost().trim() : "%";
+        String user = validateAccountUsername(request.getUsername());
+        String host = validateAccountHost(request.getHost());
+        String safePwdLiteral = sanitizeSqlPasswordLiteral(request.getPassword());
+        String targetDb = (request.getDatabaseName() != null && !request.getDatabaseName().trim().isEmpty())
+                ? request.getDatabaseName().trim() : "*";
+        String grantScope;
+        if ("*".equals(targetDb)) {
+            grantScope = "*.*";
+        } else {
+            validateIdentifier(targetDb);
+            grantScope = "`" + targetDb + "`.*";
+        }
         String password = resolvePassword(instance);
         String url = instance.getJdbcUrl();
         String dbType = instance.getDbType() != null ? instance.getDbType().toLowerCase() : "mysql";
@@ -782,10 +821,9 @@ public class DbInstanceService {
             try (Connection conn = DriverManager.getConnection(url, instance.getUsername(), password);
                  Statement stmt = conn.createStatement()) {
 
-                String createSql = "CREATE USER '" + user + "'@'" + host + "' IDENTIFIED BY '" + request.getPassword().trim() + "';";
+                String createSql = "CREATE USER '" + user + "'@'" + host + "' IDENTIFIED BY '" + safePwdLiteral + "';";
                 stmt.execute(createSql);
 
-                String targetDb = (request.getDatabaseName() != null && !request.getDatabaseName().isEmpty()) ? request.getDatabaseName() : "*";
                 String priv = "SELECT, INSERT, UPDATE, DELETE";
                 if ("ALL".equalsIgnoreCase(request.getPrivilegeType())) {
                     priv = "ALL PRIVILEGES";
@@ -795,7 +833,7 @@ public class DbInstanceService {
                     priv = "ALL PRIVILEGES";
                 }
 
-                String grantSql = "GRANT " + priv + " ON " + targetDb + ".* TO '" + user + "'@'" + host + "';";
+                String grantSql = "GRANT " + priv + " ON " + grantScope + " TO '" + user + "'@'" + host + "';";
                 stmt.execute(grantSql);
                 stmt.execute("FLUSH PRIVILEGES;");
                 log.info("Successfully created user `{}`@`{}` on instance {}", user, host, instance.getName());
@@ -812,6 +850,8 @@ public class DbInstanceService {
     }
 
     public void dropAccount(Long instanceId, String user, String host) {
+        String safeUser = validateAccountUsername(user);
+        String safeHost = validateAccountHost(host);
         DbInstance instance = dbInstanceMapper.selectById(instanceId);
         if (instance == null) {
             throw new BusinessException("A0400", "实例不存在");
@@ -832,16 +872,16 @@ public class DbInstanceService {
             try (Connection conn = DriverManager.getConnection(url, instance.getUsername(), password);
                  Statement stmt = conn.createStatement()) {
 
-                String sql = "DROP USER '" + user + "'@'" + (host != null ? host : "%") + "';";
+                String sql = "DROP USER '" + safeUser + "'@'" + safeHost + "';";
                 stmt.execute(sql);
                 stmt.execute("FLUSH PRIVILEGES;");
-                log.info("Successfully dropped user `{}`@`{}` on instance {}", user, host, instance.getName());
+                log.info("Successfully dropped user `{}`@`{}` on instance {}", safeUser, safeHost, instance.getName());
             }
         } catch (Exception e) {
-            log.warn("删除账号 {} 失败: {}", user, e.getMessage());
+            log.warn("删除账号 {} 失败: {}", safeUser, e.getMessage());
             String msg = e.getMessage();
             if (msg != null && (msg.contains("Communications link failure") || msg.contains("Connection refused") || msg.contains("Operation DROP USER failed"))) {
-                log.info("离线/演练模式：账号 `{}`@`{}` 删除模拟成功", user, host);
+                log.info("离线/演练模式：账号 `{}`@`{}` 删除模拟成功", safeUser, safeHost);
                 return;
             }
             throw new BusinessException("A0400", "删除账号失败: " + e.getMessage());
@@ -849,9 +889,9 @@ public class DbInstanceService {
     }
 
     public void resetAccountPassword(Long instanceId, String user, String host, String newPassword) {
-        if (newPassword == null || newPassword.trim().isEmpty()) {
-            throw new BusinessException("A0400", "新密码不能为空");
-        }
+        String safeUser = validateAccountUsername(user);
+        String safeHost = validateAccountHost(host);
+        String safePwdLiteral = sanitizeSqlPasswordLiteral(newPassword);
         DbInstance instance = dbInstanceMapper.selectById(instanceId);
         if (instance == null) {
             throw new BusinessException("A0400", "实例不存在");
@@ -872,16 +912,16 @@ public class DbInstanceService {
             try (Connection conn = DriverManager.getConnection(url, instance.getUsername(), password);
                  Statement stmt = conn.createStatement()) {
 
-                String sql = "ALTER USER '" + user + "'@'" + (host != null ? host : "%") + "' IDENTIFIED BY '" + newPassword.trim() + "';";
+                String sql = "ALTER USER '" + safeUser + "'@'" + safeHost + "' IDENTIFIED BY '" + safePwdLiteral + "';";
                 stmt.execute(sql);
                 stmt.execute("FLUSH PRIVILEGES;");
-                log.info("Successfully reset password for `{}`@`{}` on instance {}", user, host, instance.getName());
+                log.info("Successfully reset password for `{}`@`{}` on instance {}", safeUser, safeHost, instance.getName());
             }
         } catch (Exception e) {
             log.warn("重置账号密码失败: {}", e.getMessage());
             String msg = e.getMessage();
             if (msg != null && (msg.contains("Communications link failure") || msg.contains("Connection refused"))) {
-                log.info("离线/演练模式：账号 `{}`@`{}` 密码重置模拟成功", user, host);
+                log.info("离线/演练模式：账号 `{}`@`{}` 密码重置模拟成功", safeUser, safeHost);
                 return;
             }
             throw new BusinessException("A0400", "重置账号密码失败: " + e.getMessage());

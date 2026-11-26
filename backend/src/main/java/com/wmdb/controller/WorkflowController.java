@@ -1,7 +1,9 @@
 package com.wmdb.controller;
 
 import com.wmdb.common.Result;
+import com.wmdb.model.SysUser;
 import com.wmdb.model.WorkflowTemplate;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.TicketService;
 import com.wmdb.service.WorkflowService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,6 +33,7 @@ public class WorkflowController {
 
     private final TicketService ticketService;
     private final WorkflowService workflowService;
+    private final PrivilegeGuard privilegeGuard;
 
     /**
      * 获取系统预置的常用审批流程模板列表
@@ -47,6 +50,7 @@ public class WorkflowController {
     @Operation(summary = "在线部署审批流程", description = "接收 BPMN 2.0 XML 字符串并挂载至 Flowable 引擎")
     @PostMapping("/deploy")
     public Result<Map<String, Object>> deployProcess(@RequestBody DeployRequest request) {
+        privilegeGuard.requireAdminOrDba();
         String deploymentId = workflowService.deployBpmn(request.getProcessName(), request.getBpmnXml());
         Map<String, Object> data = new HashMap<>();
         data.put("deploymentId", deploymentId);
@@ -71,6 +75,7 @@ public class WorkflowController {
     @Operation(summary = "终止并卸载审批流程", description = "从 Flowable 引擎中卸载并终止指定的审批流程定义")
     @PostMapping("/terminate")
     public Result<Map<String, Object>> terminateProcess(@RequestBody TerminateRequest request) {
+        privilegeGuard.requireAdminOrDba();
         workflowService.terminateBpmn(request.getProcessName(), request.getDeploymentId());
         Map<String, Object> data = new HashMap<>();
         data.put("processName", request.getProcessName());
@@ -85,8 +90,11 @@ public class WorkflowController {
     @Operation(summary = "审批流 Webhook 回调", description = "供外部 OA 或审批中心完成审批后回调触发工单执行")
     @PostMapping("/callback")
     public Result<String> callback(@RequestBody WorkflowCallbackRequest request) {
+        SysUser operator = privilegeGuard.requireAdminOrDba();
         if ("APPROVED".equals(request.getStatus())) {
-            ticketService.approveTicket(request.getTicketId());
+            String opId = (operator.getIdCard() != null && !operator.getIdCard().isEmpty())
+                    ? operator.getIdCard() : operator.getUsername();
+            ticketService.approveTicket(request.getTicketId(), opId, "IMMEDIATE", null, request.getComment());
         } else {
             // handle rejection
         }

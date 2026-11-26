@@ -251,23 +251,16 @@ public class AsyncTicketExecutor {
                 targetDb = instance.getDatabaseName();
             }
 
-            // 1. 获取目标数据库直接执行连接
-            if (instance.getJdbcUrl() != null && !instance.getJdbcUrl().trim().isEmpty()) {
-                try {
-                    String finalJdbcUrl = buildJdbcUrlWithDatabase(instance.getJdbcUrl(), targetDb);
-                    String driverClass = getDriverClassName(instance.getDbType());
-                    Class.forName(driverClass);
-                    String pwd = resolvePassword(instance);
-                    conn = DriverManager.getConnection(finalJdbcUrl, instance.getUsername(), pwd);
-                    isExternalConn = true;
-                } catch (Exception e) {
-                    log.warn("Direct JDBC connection failed for instance #{}: {}, fallback to Hikari/master", instance.getId(), e.getMessage());
-                }
+            // 1. 获取目标数据库直接执行连接（严禁静默回退到平台主库 dataSource）
+            if (instance.getJdbcUrl() == null || instance.getJdbcUrl().trim().isEmpty()) {
+                throw new IllegalStateException("目标数据库实例 #" + instance.getId() + " 未配置 JDBC URL，拒绝执行");
             }
-            if (conn == null) {
-                conn = dataSource.getConnection();
-                isExternalConn = false;
-            }
+            String finalJdbcUrl = buildJdbcUrlWithDatabase(instance.getJdbcUrl(), targetDb);
+            String driverClass = getDriverClassName(instance.getDbType());
+            Class.forName(driverClass);
+            String pwd = resolvePassword(instance);
+            conn = DriverManager.getConnection(finalJdbcUrl, instance.getUsername(), pwd);
+            isExternalConn = true;
 
             // 2. 提取待执行 SQL 文本
             String sqlContent = detail.getSqlText();

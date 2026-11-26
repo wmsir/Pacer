@@ -6,6 +6,7 @@ import com.wmdb.model.DryRunResult;
 import com.wmdb.model.SqlQueryResult;
 import com.wmdb.model.SqlTicket;
 import com.wmdb.model.SqlTicketDetail;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.SqlQueryService;
 import com.wmdb.service.TicketService;
 import io.minio.GetPresignedObjectUrlArgs;
@@ -41,6 +42,7 @@ public class TicketController {
 
     private final TicketService ticketService;
     private final SqlQueryService sqlQueryService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Value("${wmdb.minio.endpoint:http://localhost:9000}")
     private String endpoint;
@@ -54,9 +56,10 @@ public class TicketController {
     @Value("${wmdb.minio.bucket:wmdb-sql-bucket}")
     private String bucketName;
 
-    public TicketController(TicketService ticketService, SqlQueryService sqlQueryService) {
+    public TicketController(TicketService ticketService, SqlQueryService sqlQueryService, PrivilegeGuard privilegeGuard) {
         this.ticketService = ticketService;
         this.sqlQueryService = sqlQueryService;
+        this.privilegeGuard = privilegeGuard;
     }
 
     /**
@@ -119,6 +122,7 @@ public class TicketController {
     @PostMapping("/{id}/approve")
     public Result<com.wmdb.service.AsyncTicketExecutor.ExecutionResult> approveTicket(@PathVariable("id") Long id,
                                                                                       @RequestBody(required = false) ApprovalActionRequest request) {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "DEV_LEAD", "LEAD", "AUDITOR");
         String operatorIdCard = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         String executionMode = (request != null && request.getExecutionMode() != null) ? request.getExecutionMode() : "IMMEDIATE";
         String scheduledTime = (request != null) ? request.getScheduledTime() : null;
@@ -137,6 +141,7 @@ public class TicketController {
     @PostMapping("/{id}/feedback")
     public Result<Void> submitDbaFeedback(@PathVariable("id") Long id,
                                           @RequestBody DbaFeedbackRequest request) {
+        privilegeGuard.requireAdminOrDba();
         String operatorIdCard = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         ticketService.submitDbaFeedback(
                 id,
@@ -155,6 +160,7 @@ public class TicketController {
     @Operation(summary = "立即触发执行", description = "针对定时执行或等待中的工单，管理员/DBA 可手动提前立即触发流式执行")
     @PostMapping("/{id}/execute-now")
     public Result<com.wmdb.service.AsyncTicketExecutor.ExecutionResult> executeNow(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         String operatorIdCard = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         com.wmdb.service.AsyncTicketExecutor.ExecutionResult result = ticketService.executeNow(id, operatorIdCard);
         return Result.success(result);
@@ -167,6 +173,7 @@ public class TicketController {
     @PostMapping("/{id}/reject")
     public Result<Void> rejectTicket(@PathVariable("id") Long id,
                                      @RequestBody(required = false) ApprovalActionRequest request) {
+        privilegeGuard.requireAnyRole("ADMIN", "SUPER_ADMIN", "DBA", "DEV_LEAD", "LEAD", "AUDITOR");
         String operatorIdCard = (String) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
         String reason = (request != null && request.getComment() != null) ? request.getComment() : "审核未通过，驳回修改";
         ticketService.rejectTicket(id, operatorIdCard, reason);

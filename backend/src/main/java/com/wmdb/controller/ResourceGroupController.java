@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.ResourceGroup;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.ResourceGroupService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -24,6 +25,7 @@ import java.util.List;
 public class ResourceGroupController {
 
     private final ResourceGroupService resourceGroupService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "查询资源组列表（全量兼容）")
     @GetMapping("/list")
@@ -43,6 +45,7 @@ public class ResourceGroupController {
     @Operation(summary = "保存资源组（新建或修改）")
     @PostMapping("/save")
     public Result<Void> saveResourceGroup(@RequestBody ResourceGroup group) {
+        privilegeGuard.requireAdminOrDba();
         resourceGroupService.saveResourceGroup(group);
         return Result.success(null);
     }
@@ -50,6 +53,7 @@ public class ResourceGroupController {
     @Operation(summary = "删除资源组")
     @DeleteMapping("/{id}")
     public Result<Void> deleteResourceGroup(@PathVariable("id") Long id) {
+        privilegeGuard.requireAdminOrDba();
         resourceGroupService.deleteResourceGroup(id);
         return Result.success(null);
     }

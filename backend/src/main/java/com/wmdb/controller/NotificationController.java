@@ -2,6 +2,7 @@ package com.wmdb.controller;
 
 import com.wmdb.common.Result;
 import com.wmdb.model.NotificationConfigDTO;
+import com.wmdb.security.PrivilegeGuard;
 import com.wmdb.service.NotificationConfigService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,16 +21,19 @@ import org.springframework.web.bind.annotation.*;
 public class NotificationController {
 
     private final NotificationConfigService notificationConfigService;
+    private final PrivilegeGuard privilegeGuard;
 
     @Operation(summary = "获取当前消息通知通道与告警配置")
     @GetMapping("/config")
     public Result<NotificationConfigDTO> getConfig() {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(notificationConfigService.getConfig());
     }
 
     @Operation(summary = "保存更新消息通知通道与告警配置 (管理员/DBA权限)")
     @PostMapping("/config")
     public Result<NotificationConfigDTO> saveConfig(@RequestBody NotificationConfigDTO config) {
+        privilegeGuard.requireAdminOrDba();
         notificationConfigService.saveConfig(config);
         return Result.success(notificationConfigService.getConfig());
     }
@@ -37,6 +41,7 @@ public class NotificationController {
     @Operation(summary = "在线测试指定通道 (企业微信/钉钉/电话语音外呼)")
     @PostMapping("/test-channel")
     public Result<NotificationConfigDTO.TestChannelResponse> testChannel(@RequestBody NotificationConfigDTO.TestChannelRequest request) {
+        privilegeGuard.requireAdminOrDba();
         return Result.success(notificationConfigService.testChannel(request));
     }
 }

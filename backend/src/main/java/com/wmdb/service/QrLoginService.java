@@ -9,8 +9,10 @@ import com.wmdb.model.SysUserDTO;
 import com.wmdb.security.JwtUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -33,6 +35,16 @@ public class QrLoginService {
     private final SysUserMapper sysUserMapper;
     private final UserDisplayNameService userDisplayNameService;
     private final JwtUtils jwtUtils;
+
+    @Value("${spring.profiles.active:prod}")
+    private String activeProfile;
+
+    private boolean isDevEnvironment() {
+        if (activeProfile == null) return false;
+        return Arrays.stream(activeProfile.split(","))
+                .map(String::trim)
+                .anyMatch(p -> "dev".equalsIgnoreCase(p) || "local".equalsIgnoreCase(p));
+    }
 
     // 二维码内存会话缓存
     private static final Map<String, QrSession> QR_CACHE = new ConcurrentHashMap<>();
@@ -136,9 +148,12 @@ public class QrLoginService {
     }
 
     /**
-     * 模拟移动端扫码与确认授权（便于开发/测试与演练）
+     * 模拟移动端扫码与确认授权（仅限 dev/local 开发测试环境）
      */
     public QrLoginDTO mockScanAndConfirm(String qrKey, String account) {
+        if (!isDevEnvironment()) {
+            throw new BusinessException("A0301", "生产环境已禁用模拟扫码授权");
+        }
         if (qrKey == null || !QR_CACHE.containsKey(qrKey)) {
             throw new BusinessException("A0400", "二维码已过期或不存在");
         }
@@ -203,6 +218,9 @@ public class QrLoginService {
      * 开放平台 OAuth2 回调预留入口 (企业微信/钉钉/飞书)
      */
     public String handleOAuthCallback(String channel, String authCode, String stateQrKey) {
+        if (!isDevEnvironment()) {
+            throw new BusinessException("A0301", "生产环境尚未启用开放平台回调登录，请使用统一认证通道");
+        }
         log.info("Received OAuth Callback from {}: code={}, state={}", channel, authCode, stateQrKey);
         if (stateQrKey != null && QR_CACHE.containsKey(stateQrKey)) {
             // 在实际开放平台对接中，此处调用各平台的 get_user_info_by_code API，
