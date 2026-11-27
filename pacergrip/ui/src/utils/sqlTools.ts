@@ -2238,6 +2238,90 @@ export function buildDropTableSql(
   return `DROP TABLE ${full}`;
 }
 
+export function buildDropViewSql(
+  dbName: string | undefined,
+  viewName: string,
+  engineKey: string,
+  isMaterialized = false,
+): string {
+  const q = (id: string) => quoteIdentifier(id, engineKey);
+  const hasDb = Boolean(dbName && dbName !== 'main' && dbName !== 'default');
+  const full = hasDb ? `${q(dbName!)}.${q(viewName)}` : q(viewName);
+  return isMaterialized ? `DROP MATERIALIZED VIEW IF EXISTS ${full}` : `DROP VIEW IF EXISTS ${full}`;
+}
+
+export function isViewTableType(tableType?: string | null): boolean {
+  return (tableType ?? '').toUpperCase().includes('VIEW');
+}
+
+export interface DmlTargetInfo {
+  action: 'UPDATE' | 'INSERT' | 'DELETE' | 'TRUNCATE' | 'ALTER';
+  db?: string;
+  table: string;
+}
+
+export function extractDmlTargetTable(sql: string): DmlTargetInfo | null {
+  const cleaned = sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .trim();
+  if (!cleaned) return null;
+
+  const ident = '([`"\\[]?[A-Za-z0-9_$-]+[`"\\]]?)';
+  const qualified = `(?:${ident}\\s*\\.\\s*)?${ident}`;
+  const stripQuotes = (s: string) => s.replace(/^[`"\[]|[`"\]]$/g, '');
+
+  const matchTarget = (
+    regex: RegExp,
+    action: DmlTargetInfo['action'],
+  ): DmlTargetInfo | null => {
+    const m = cleaned.match(regex);
+    if (!m) return null;
+    const db = m[1] ? stripQuotes(m[1]) : undefined;
+    const table = stripQuotes(m[2]);
+    if (!table) return null;
+    return { action, db, table };
+  };
+
+  return (
+    matchTarget(
+      new RegExp(`^UPDATE\\s+(?:LOW_PRIORITY\\s+)?(?:IGNORE\\s+)?(?:ONLY\\s+)?${qualified}(?=\\s|$|;)`, 'i'),
+      'UPDATE',
+    ) ??
+    matchTarget(
+      new RegExp(
+        `^(?:INSERT|REPLACE)\\s+(?:LOW_PRIORITY\\s+|DELAYED\\s+|HIGH_PRIORITY\\s+)?(?:IGNORE\\s+)?(?:INTO\\s+)?${qualified}(?=\\s|\\(|$|;)`,
+        'i',
+      ),
+      'INSERT',
+    ) ??
+    matchTarget(
+      new RegExp(
+        `^DELETE\\s+(?:LOW_PRIORITY\\s+)?(?:QUICK\\s+)?(?:IGNORE\\s+)?FROM\\s+(?:ONLY\\s+)?${qualified}(?=\\s|$|;)`,
+        'i',
+      ),
+      'DELETE',
+    ) ??
+    matchTarget(
+      new RegExp(`^TRUNCATE\\s+(?:TABLE\\s+)?${qualified}(?=\\s|$|;)`, 'i'),
+      'TRUNCATE',
+    ) ??
+    matchTarget(
+      new RegExp(`^ALTER\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?(?:ONLY\\s+)?${qualified}(?=\\s|$|;)`, 'i'),
+      'ALTER',
+    )
+  );
+}
+
+export function formatViewMutationError(rawError: string, tableName?: string): string | null {
+  const err = (rawError || '').trim();
+  if (!err) return null;
+  const viewErrPattern =
+    /not updatable|target table .* of the (?:update|insert|delete) is not updatable|cannot (?:update|insert into|delete from) view|views that do not select from a single table|cannot modify .* because it is a view|view or function .* is not updatable|data manipulation operation not legal on this view|cannot modify a column which maps to a non key-preserved table|table .* is a view|error\s+1288/i;
+  if (!viewErrPattern.test(err)) return null;
+  return `「${tableName || '当前对象'}」是数据库视图，不能修改数据（${err}）`;
+}
+
 export function minifySqlText(sql: string): string {
   let out = '';
   let i = 0;

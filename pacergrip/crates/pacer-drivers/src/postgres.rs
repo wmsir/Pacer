@@ -267,9 +267,15 @@ impl DbBackend for PostgresBackend {
     async fn list_tables(&self, db: &str) -> CoreResult<Vec<TableMeta>> {
         let schema = if db.is_empty() { "public" } else { db };
         let rows = sqlx::query(
-            "SELECT table_name, table_type \
-             FROM information_schema.tables \
-             WHERE table_schema = $1 \
+            "SELECT table_name, table_type FROM ( \
+               SELECT table_name::text AS table_name, table_type::text AS table_type \
+               FROM information_schema.tables \
+               WHERE table_schema = $1 \
+               UNION ALL \
+               SELECT matviewname::text AS table_name, 'MATERIALIZED VIEW'::text AS table_type \
+               FROM pg_matviews \
+               WHERE schemaname = $1 \
+             ) t \
              ORDER BY table_name",
         )
         .bind(schema)
@@ -589,6 +595,43 @@ impl DbBackend for PostgresBackend {
 
     async fn get_table_ddl(&self, db: &str, table: &str) -> CoreResult<String> {
         let schema = if db.is_empty() { "public" } else { db };
+        let q_schema = schema.replace('"', "\"\"");
+        let q_table = table.replace('"', "\"\"");
+
+        if let Some(def) = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT definition::text FROM pg_views WHERE schemaname = $1 AND viewname = $2",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        {
+            return Ok(format!(
+                "CREATE OR REPLACE VIEW \"{q_schema}\".\"{q_table}\" AS\n{};",
+                def.trim().trim_end_matches(';')
+            ));
+        }
+
+        if let Some(def) = sqlx::query_scalar::<_, Option<String>>(
+            "SELECT definition::text FROM pg_matviews WHERE schemaname = $1 AND matviewname = $2",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        {
+            return Ok(format!(
+                "CREATE MATERIALIZED VIEW \"{q_schema}\".\"{q_table}\" AS\n{};",
+                def.trim().trim_end_matches(';')
+            ));
+        }
+
         let cols = self.list_columns(schema, table).await?;
         if cols.is_empty() {
             return Err(CoreError::ExecutionFailed(format!(

@@ -37,6 +37,7 @@ const emit = defineEmits<{
   (e: 'clear-recent-files'): void;
   (e: 'open-demo-md'): void;
   (e: 'refresh-dir'): void;
+  (e: 'minimize-panel'): void;
 }>();
 
 const { t } = useI18n();
@@ -105,6 +106,13 @@ defineExpose({ scrollToActiveFile });
           @click="emit('toggle-dock-side')"
         >
           <IdeIcon :name="dockSide === 'right' ? 'dock-left' : 'dock-right'" :size="13" />
+        </button>
+        <button
+          class="icon-btn compact"
+          title="最小化本地文件面板"
+          @click="emit('minimize-panel')"
+        >
+          <IdeIcon name="minimize" :size="13" />
         </button>
       </div>
     </div>

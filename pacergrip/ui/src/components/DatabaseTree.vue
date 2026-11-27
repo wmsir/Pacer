@@ -13,6 +13,7 @@ import type {
 } from '../api/ipc';
 import IdeIcon, { type IdeIconName } from './IdeIcon.vue';
 import { buildRedisNamespaceTree, type RedisNamespaceNode } from '../utils/commercialTools';
+import { isViewTableType } from '../utils/sqlTools';
 
 export interface ConnectionHealthInfo {
   status: 'ok' | 'error' | 'testing';
@@ -107,6 +108,7 @@ const emit = defineEmits<{
   (e: 'disconnect-profile', profile: ConnectionProfile): void;
   (e: 'redis-prefix-action', action: 'unlink' | 'expire' | 'bigkeys', profile: ConnectionProfile, dbName: string, prefix: string): void;
   (e: 'copy-text', text: string): void;
+  (e: 'minimize-panel'): void;
 }>();
 
 function connStatusClass(profileId: string): 'ok' | 'error' | 'testing' | 'unknown' {
@@ -131,6 +133,8 @@ function connStatusTitle(profile: ConnectionProfile): string {
 const { t } = useI18n();
 const search = ref('');
 const objectFilter = ref<'all' | 'table' | 'view'>('all');
+const expandedTablesGroup = ref<Record<string, boolean>>({});
+const expandedViewsGroup = ref<Record<string, boolean>>({});
 const expandedRoutinesGroup = ref<Record<string, boolean>>({});
 const expandedRedisFolders = ref<Record<string, boolean>>({});
 const redisTreeMode = ref(true);
@@ -163,12 +167,43 @@ function toggleRedisFolder(profileId: string, dbName: string, nodeId: string) {
   expandedRedisFolders.value[k] = !expandedRedisFolders.value[k];
 }
 
+function isTablesGroupExpanded(key: string): boolean {
+  return expandedTablesGroup.value[key] !== false;
+}
+
+function toggleTablesGroup(key: string) {
+  expandedTablesGroup.value[key] = !isTablesGroupExpanded(key);
+}
+
+function isViewsGroupExpanded(key: string): boolean {
+  return expandedViewsGroup.value[key] !== false;
+}
+
+function toggleViewsGroup(key: string) {
+  expandedViewsGroup.value[key] = !isViewsGroupExpanded(key);
+}
+
 function toggleRoutinesGroup(key: string) {
   expandedRoutinesGroup.value[key] = !expandedRoutinesGroup.value[key];
 }
 
 function isViewTable(tbl: TableMeta): boolean {
-  return (tbl.tableType ?? '').toUpperCase().includes('VIEW');
+  return isViewTableType(tbl.tableType);
+}
+
+function isMaterializedView(tbl: TableMeta): boolean {
+  return (tbl.tableType ?? '').toUpperCase().includes('MATERIALIZED');
+}
+
+function findTableMeta(profileId: string, dbName: string, tableName: string): TableMeta | undefined {
+  const list = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
+  const lower = tableName.toLowerCase();
+  return list.find((t) => t.name === tableName) ?? list.find((t) => t.name.toLowerCase() === lower);
+}
+
+function isViewByName(profileId: string, dbName: string, tableName: string): boolean {
+  const meta = findTableMeta(profileId, dbName, tableName);
+  return meta ? isViewTable(meta) : false;
 }
 
 function isFavorited(profileId: string, dbName: string, tableName: string): boolean {
@@ -192,6 +227,7 @@ const ctxMenu = ref<{
   profile?: ConnectionProfile;
   dbName?: string;
   tableName?: string;
+  isView?: boolean;
   redisPrefix?: string;
 }>({
   visible: false,
@@ -267,6 +303,21 @@ const visibleProjects = computed(() => {
   );
 });
 
+function filterBySearch(
+  profileId: string,
+  dbName: string,
+  list: TableMeta[],
+): TableMeta[] {
+  const q = search.value.trim().toLowerCase();
+  if (!q) return list;
+  const matched = list.filter((tb) => tb.name.toLowerCase().includes(q));
+  if (matched.length > 0) return matched;
+  const prof = props.connections.find((c) => c.id === profileId);
+  const ancestorHit =
+    dbName.toLowerCase().includes(q) || Boolean(prof && prof.name.toLowerCase().includes(q));
+  return ancestorHit ? list : [];
+}
+
 function filterTables(profileId: string, dbName: string): TableMeta[] {
   const rawList = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
   const typeFiltered =
@@ -275,10 +326,27 @@ function filterTables(profileId: string, dbName: string): TableMeta[] {
       : objectFilter.value === 'view'
         ? rawList.filter((tb) => isViewTable(tb))
         : rawList.filter((tb) => !isViewTable(tb));
-  const q = search.value.trim().toLowerCase();
-  if (!q) return typeFiltered;
-  const matched = typeFiltered.filter((tb) => tb.name.toLowerCase().includes(q));
-  return matched.length > 0 ? matched : typeFiltered;
+  return filterBySearch(profileId, dbName, typeFiltered);
+}
+
+function filterBaseTables(profileId: string, dbName: string): TableMeta[] {
+  if (objectFilter.value === 'view') return [];
+  const rawList = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
+  return filterBySearch(
+    profileId,
+    dbName,
+    rawList.filter((tb) => !isViewTable(tb)),
+  );
+}
+
+function filterViewTables(profileId: string, dbName: string): TableMeta[] {
+  if (objectFilter.value === 'table') return [];
+  const rawList = props.tablesByKey[`${profileId}:${dbName}`] ?? [];
+  return filterBySearch(
+    profileId,
+    dbName,
+    rawList.filter((tb) => isViewTable(tb)),
+  );
 }
 
 function openProjectContext(ev: MouseEvent, project: WorkspaceProject) {
@@ -330,6 +398,7 @@ function openTableContext(
     profile,
     dbName,
     tableName,
+    isView: !isRedisProfile(profile) && isViewByName(profile.id, dbName, tableName),
   };
 }
 
@@ -393,6 +462,9 @@ function closeContext() {
         </button>
         <button class="icon-btn compact" :title="t('openDemoDb')" @click="emit('init-demo', activeProjectId)">
           <IdeIcon name="bolt" :size="13" />
+        </button>
+        <button class="icon-btn compact" title="最小化数据库面板" @click="emit('minimize-panel')">
+          <IdeIcon name="minimize" :size="13" />
         </button>
       </div>
     </div>
@@ -461,8 +533,17 @@ function closeContext() {
               })()
             "
           >
-            <IdeIcon :name="fav.isRedis ? 'key' : 'table'" :size="13" />
+            <IdeIcon
+              :name="fav.isRedis ? 'key' : isViewByName(fav.profileId, fav.dbName, fav.tableName) ? 'view' : 'table'"
+              :size="13"
+            />
             <span class="tree-label">{{ fav.tableName }}</span>
+            <span
+              v-if="!fav.isRedis && isViewByName(fav.profileId, fav.dbName, fav.tableName)"
+              class="tree-view-badge"
+            >
+              视图
+            </span>
             <span class="tree-meta">{{ fav.dbName }}</span>
             <span class="tree-hover-actions" @click.stop>
               <button
@@ -743,98 +824,223 @@ function closeContext() {
                   </template>
 
                   <template v-else>
-                  <div v-for="tbl in filterTables(p.id, db.name)" :key="tbl.name">
+                    <!-- Base Tables Group -->
                     <div
-                      class="tree-row"
-                      style="padding-left: 48px"
-                      :class="{ selected: selectedNodeKey === `t:${p.id}:${db.name}:${tbl.name}` }"
-                      :title="tbl.comment ? `${tbl.name} — ${tbl.comment}` : tbl.name"
-                      @click="
-                        selectedNodeKey = `t:${p.id}:${db.name}:${tbl.name}`;
-                        emit('select-table', p, db.name, tbl.name);
-                        emit('toggle-table', p, db.name, tbl.name);
+                      v-if="
+                        objectFilter !== 'view' &&
+                        (filterBaseTables(p.id, db.name).length > 0 ||
+                          (filterViewTables(p.id, db.name).length === 0 && !search.trim()))
                       "
-                      @dblclick="emit('query-top100', p, db.name, tbl.name)"
-                      @contextmenu="openTableContext($event, p, db.name, tbl.name)"
                     >
-                      <span class="tree-chevron">
-                        <IdeIcon :name="expandedTables[`${p.id}:${db.name}:${tbl.name}`] ? 'chevron-down' : 'chevron-right'" :size="11" />
-                      </span>
-                      <IdeIcon :name="isRedisProfile(p) ? 'key' : 'table'" :size="13" />
-                      <span class="tree-label">{{ tbl.name }}</span>
-                      <span
-                        v-if="!isRedisProfile(p) && isViewTable(tbl)"
-                        class="tree-view-badge"
+                      <div
+                        class="tree-row tree-group-row"
+                        style="padding-left: 44px"
+                        @click="toggleTablesGroup(`${p.id}:${db.name}`)"
                       >
-                        VIEW
-                      </span>
-                      <span class="tree-meta">
-                        {{
-                          isRedisProfile(p)
-                            ? [tbl.tableType, tbl.engine].filter(Boolean).join(' · ')
-                            : (tbl.estimatedRows ?? '')
-                        }}
-                      </span>
-                      <span class="tree-hover-actions" @click.stop>
-                        <button
-                          class="icon-btn compact"
-                          :title="isRedisProfile(p) ? '读取键值 (GET / HGETALL / LRANGE ...)' : t('ctxQueryTop100')"
-                          @click="emit('query-top100', p, db.name, tbl.name)"
+                        <span class="tree-chevron">
+                          <IdeIcon
+                            :name="isTablesGroupExpanded(`${p.id}:${db.name}`) ? 'chevron-down' : 'chevron-right'"
+                            :size="11"
+                          />
+                        </span>
+                        <IdeIcon name="table" :size="12" />
+                        <span class="tree-label">
+                          表 ({{ filterBaseTables(p.id, db.name).length }})
+                        </span>
+                      </div>
+
+                      <div v-if="isTablesGroupExpanded(`${p.id}:${db.name}`)">
+                        <div
+                          v-if="filterBaseTables(p.id, db.name).length === 0"
+                          class="tree-row"
+                          style="padding-left: 60px; color: var(--text-muted); font-size: 11px"
                         >
-                          <IdeIcon name="run" :size="11" color="var(--run-green-bright)" />
-                        </button>
-                        <button
-                          class="icon-btn compact"
-                          :title="isRedisProfile(p) ? '查看 Key 详细信息与命令模板' : t('ctxViewDdl')"
-                          @click="emit('view-ddl', p, db.name, tbl.name)"
-                        >
-                          {{ isRedisProfile(p) ? 'INFO' : 'DDL' }}
-                        </button>
-                      </span>
+                          <span>暂无数据表</span>
+                        </div>
+                        <div v-for="tbl in filterBaseTables(p.id, db.name)" :key="`tbl-${tbl.name}`">
+                          <div
+                            class="tree-row"
+                            style="padding-left: 56px"
+                            :class="{ selected: selectedNodeKey === `t:${p.id}:${db.name}:${tbl.name}` }"
+                            :title="tbl.comment ? `${tbl.name} — ${tbl.comment}` : tbl.name"
+                            @click="
+                              selectedNodeKey = `t:${p.id}:${db.name}:${tbl.name}`;
+                              emit('select-table', p, db.name, tbl.name);
+                              emit('toggle-table', p, db.name, tbl.name);
+                            "
+                            @dblclick="emit('query-top100', p, db.name, tbl.name)"
+                            @contextmenu="openTableContext($event, p, db.name, tbl.name)"
+                          >
+                            <span class="tree-chevron">
+                              <IdeIcon
+                                :name="expandedTables[`${p.id}:${db.name}:${tbl.name}`] ? 'chevron-down' : 'chevron-right'"
+                                :size="11"
+                              />
+                            </span>
+                            <IdeIcon :name="isRedisProfile(p) ? 'key' : 'table'" :size="13" />
+                            <span class="tree-label">{{ tbl.name }}</span>
+                            <span class="tree-meta">
+                              {{
+                                isRedisProfile(p)
+                                  ? [tbl.tableType, tbl.engine].filter(Boolean).join(' · ')
+                                  : (tbl.estimatedRows ?? '')
+                              }}
+                            </span>
+                            <span class="tree-hover-actions" @click.stop>
+                              <button
+                                class="icon-btn compact"
+                                :title="isRedisProfile(p) ? '读取键值 (GET / HGETALL / LRANGE ...)' : t('ctxQueryTop100')"
+                                @click="emit('query-top100', p, db.name, tbl.name)"
+                              >
+                                <IdeIcon name="run" :size="11" color="var(--run-green-bright)" />
+                              </button>
+                              <button
+                                class="icon-btn compact"
+                                :title="isRedisProfile(p) ? '查看 Key 详细信息与命令模板' : t('ctxViewDdl')"
+                                @click="emit('view-ddl', p, db.name, tbl.name)"
+                              >
+                                {{ isRedisProfile(p) ? 'INFO' : 'DDL' }}
+                              </button>
+                            </span>
+                          </div>
+
+                          <!-- Columns, Indexes & Foreign Keys -->
+                          <div v-if="expandedTables[`${p.id}:${db.name}:${tbl.name}`]">
+                            <div
+                              v-for="col in columnsByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
+                              :key="col.name"
+                              class="tree-row"
+                              style="padding-left: 74px"
+                              @dblclick="emit('copy-text', col.name)"
+                            >
+                              <IdeIcon :name="col.isPrimaryKey ? 'key' : 'column'" :size="12" />
+                              <span class="tree-label">{{ col.name }}</span>
+                              <span class="tree-meta">{{ col.dataType }}</span>
+                            </div>
+
+                            <div
+                              v-for="idx in indexesByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
+                              :key="`idx-${idx.name}`"
+                              class="tree-row"
+                              style="padding-left: 74px"
+                            >
+                              <IdeIcon name="index" :size="12" />
+                              <span class="tree-label" style="color: var(--text-secondary)">
+                                {{ idx.name }}
+                              </span>
+                              <span class="tree-meta">{{ idx.columns.join(',') }}</span>
+                            </div>
+
+                            <div
+                              v-for="fk in foreignKeysByKey?.[`${p.id}:${db.name}:${tbl.name}`] ?? []"
+                              :key="`fk-${fk.name}-${fk.columnName}`"
+                              class="tree-row"
+                              style="padding-left: 74px"
+                              :title="`外键 ${fk.name}: ${fk.columnName} -> ${fk.referencedTable}.${fk.referencedColumn}`"
+                            >
+                              <span style="font-size: 11px; flex-shrink: 0">🔗</span>
+                              <span class="tree-label" style="color: var(--accent)">
+                                {{ fk.columnName }}
+                              </span>
+                              <span class="tree-meta">→ {{ fk.referencedTable }}.{{ fk.referencedColumn }}</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
-                    <!-- Columns, Indexes & Foreign Keys -->
-                    <div v-if="expandedTables[`${p.id}:${db.name}:${tbl.name}`]">
+                    <!-- Dedicated Views Group (Visually separated from tables) -->
+                    <div
+                      v-if="
+                        objectFilter !== 'table' &&
+                        (filterViewTables(p.id, db.name).length > 0 || objectFilter === 'view')
+                      "
+                    >
                       <div
-                        v-for="col in columnsByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
-                        :key="col.name"
-                        class="tree-row"
-                        style="padding-left: 66px"
-                        @dblclick="emit('copy-text', col.name)"
+                        class="tree-row tree-group-row tree-group-view"
+                        style="padding-left: 44px"
+                        @click="toggleViewsGroup(`${p.id}:${db.name}`)"
                       >
-                        <IdeIcon :name="col.isPrimaryKey ? 'key' : 'column'" :size="12" />
-                        <span class="tree-label">{{ col.name }}</span>
-                        <span class="tree-meta">{{ col.dataType }}</span>
+                        <span class="tree-chevron">
+                          <IdeIcon
+                            :name="isViewsGroupExpanded(`${p.id}:${db.name}`) ? 'chevron-down' : 'chevron-right'"
+                            :size="11"
+                          />
+                        </span>
+                        <IdeIcon name="view" :size="12" />
+                        <span class="tree-label">
+                          视图 ({{ filterViewTables(p.id, db.name).length }})
+                        </span>
                       </div>
 
-                      <div
-                        v-for="idx in indexesByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
-                        :key="`idx-${idx.name}`"
-                        class="tree-row"
-                        style="padding-left: 66px"
-                      >
-                        <IdeIcon name="index" :size="12" />
-                        <span class="tree-label" style="color: var(--text-secondary)">
-                          {{ idx.name }}
-                        </span>
-                        <span class="tree-meta">{{ idx.columns.join(',') }}</span>
-                      </div>
+                      <div v-if="isViewsGroupExpanded(`${p.id}:${db.name}`)">
+                        <div
+                          v-if="filterViewTables(p.id, db.name).length === 0"
+                          class="tree-row"
+                          style="padding-left: 60px; color: var(--text-muted); font-size: 11px"
+                        >
+                          <span>暂无视图</span>
+                        </div>
+                        <div v-for="tbl in filterViewTables(p.id, db.name)" :key="`view-${tbl.name}`">
+                          <div
+                            class="tree-row tree-row-view"
+                            style="padding-left: 56px"
+                            :class="{ selected: selectedNodeKey === `t:${p.id}:${db.name}:${tbl.name}` }"
+                            :title="`${tbl.name}（${isMaterializedView(tbl) ? '物化视图' : '视图'} · 只读不可修改数据）${tbl.comment ? ` — ${tbl.comment}` : ''}`"
+                            @click="
+                              selectedNodeKey = `t:${p.id}:${db.name}:${tbl.name}`;
+                              emit('select-table', p, db.name, tbl.name);
+                              emit('toggle-table', p, db.name, tbl.name);
+                            "
+                            @dblclick="emit('query-top100', p, db.name, tbl.name)"
+                            @contextmenu="openTableContext($event, p, db.name, tbl.name)"
+                          >
+                            <span class="tree-chevron">
+                              <IdeIcon
+                                :name="expandedTables[`${p.id}:${db.name}:${tbl.name}`] ? 'chevron-down' : 'chevron-right'"
+                                :size="11"
+                              />
+                            </span>
+                            <IdeIcon name="view" :size="13" />
+                            <span class="tree-label">{{ tbl.name }}</span>
+                            <span :class="isMaterializedView(tbl) ? 'tree-mview-badge' : 'tree-view-badge'">
+                              {{ isMaterializedView(tbl) ? '物化视图' : '视图' }}
+                            </span>
+                            <span class="tree-hover-actions" @click.stop>
+                              <button
+                                class="icon-btn compact"
+                                :title="t('ctxQueryTop100')"
+                                @click="emit('query-top100', p, db.name, tbl.name)"
+                              >
+                                <IdeIcon name="run" :size="11" color="var(--run-green-bright)" />
+                              </button>
+                              <button
+                                class="icon-btn compact"
+                                title="查看视图定义 (DDL)"
+                                @click="emit('view-ddl', p, db.name, tbl.name)"
+                              >
+                                DDL
+                              </button>
+                            </span>
+                          </div>
 
-                      <div
-                        v-for="fk in foreignKeysByKey?.[`${p.id}:${db.name}:${tbl.name}`] ?? []"
-                        :key="`fk-${fk.name}-${fk.columnName}`"
-                        class="tree-row"
-                        style="padding-left: 66px"
-                        :title="`外键 ${fk.name}: ${fk.columnName} -> ${fk.referencedTable}.${fk.referencedColumn}`"
-                      >
-                        <span style="font-size: 11px; flex-shrink: 0">🔗</span>
-                        <span class="tree-label" style="color: var(--accent)">
-                          {{ fk.columnName }}
-                        </span>
-                        <span class="tree-meta">→ {{ fk.referencedTable }}.{{ fk.referencedColumn }}</span>
+                          <!-- View Columns -->
+                          <div v-if="expandedTables[`${p.id}:${db.name}:${tbl.name}`]">
+                            <div
+                              v-for="col in columnsByKey[`${p.id}:${db.name}:${tbl.name}`] ?? []"
+                              :key="col.name"
+                              class="tree-row"
+                              style="padding-left: 74px"
+                              @dblclick="emit('copy-text', col.name)"
+                            >
+                              <IdeIcon name="column" :size="12" />
+                              <span class="tree-label">{{ col.name }}</span>
+                              <span class="tree-meta">{{ col.dataType }}</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
                   </template>
 
                   <!-- Routines / Functions / Triggers Group -->
@@ -845,8 +1051,8 @@ function closeContext() {
                     "
                   >
                     <div
-                      class="tree-row"
-                      style="padding-left: 48px"
+                      class="tree-row tree-group-row"
+                      style="padding-left: 44px"
                       @click="toggleRoutinesGroup(`${p.id}:${db.name}`)"
                     >
                       <span class="tree-chevron">
@@ -856,7 +1062,7 @@ function closeContext() {
                         />
                       </span>
                       <span style="font-size: 11px">⚙️</span>
-                      <span class="tree-label" style="color: var(--text-secondary)">
+                      <span class="tree-label">
                         过程 / 函数 / 触发器 ({{ routinesByKey?.[`${p.id}:${db.name}`]?.length ?? 0 }})
                       </span>
                     </div>
@@ -1017,6 +1223,13 @@ function closeContext() {
       </template>
 
       <template v-else-if="ctxMenu.kind === 'table' && ctxMenu.profile && ctxMenu.dbName && ctxMenu.tableName">
+        <div
+          v-if="ctxMenu.isView"
+          class="dropdown-item"
+          style="color: #8b5cf6; font-size: 11px; cursor: default; font-weight: 600"
+        >
+          <span>🔒 数据库视图（只读，不可修改数据）</span>
+        </div>
         <button
           class="dropdown-item"
           @click="emit('query-top100', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
@@ -1027,19 +1240,19 @@ function closeContext() {
           class="dropdown-item"
           @click="emit('count-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ isRedisProfile(ctxMenu.profile) ? '统计长度 / 元素数量' : '统计表总行数 (COUNT(*))' }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '统计长度 / 元素数量' : ctxMenu.isView ? '统计视图总行数 (COUNT(*))' : '统计表总行数 (COUNT(*))' }}</span>
         </button>
         <button
           class="dropdown-item"
           @click="emit('view-ddl', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ isRedisProfile(ctxMenu.profile) ? '查看 Key 详情与操作命令' : t('ctxViewDdl') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '查看 Key 详情与操作命令' : ctxMenu.isView ? '查看视图定义 (DDL)' : t('ctxViewDdl') }}</span>
         </button>
         <button
           class="dropdown-item"
           @click="emit('select-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ isRedisProfile(ctxMenu.profile) ? '在右侧查看 Key 属性结构' : t('ctxViewStructure') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '在右侧查看 Key 属性结构' : ctxMenu.isView ? '在右侧查看视图字段结构' : t('ctxViewStructure') }}</span>
         </button>
         <button
           class="dropdown-item"
@@ -1065,24 +1278,28 @@ function closeContext() {
         <template v-else>
           <div class="dropdown-sep" />
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('open-alter-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
             <span>🛠️ 可视化修改表结构...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('open-schema-diff', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
             <span>⚖️ 表结构对比与同步...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('open-data-diff', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
             <span>🧬 数据内容对比与同步 SQL...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('open-data-transfer', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
@@ -1092,15 +1309,17 @@ function closeContext() {
             class="dropdown-item"
             @click="emit('open-data-dict', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
-            <span>📘 导出此表数据字典...</span>
+            <span>📘 导出数据字典...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('dump-sql', ctxMenu.profile, ctxMenu.dbName, [ctxMenu.tableName], true)"
           >
             <span>💾 转储此表 SQL（结构 + 数据 .sql）...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('import-table-data', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
@@ -1113,6 +1332,7 @@ function closeContext() {
             <span>💻 生成实体代码 (Java/Go/TS/Py/Rust)...</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('gen-mock-data', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
@@ -1128,12 +1348,14 @@ function closeContext() {
         </button>
         <template v-if="!isRedisProfile(ctxMenu.profile)">
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('gen-insert', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
             <span>生成 INSERT 模板到编辑器</span>
           </button>
           <button
+            v-if="!ctxMenu.isView"
             class="dropdown-item"
             @click="emit('gen-update', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
           >
@@ -1154,17 +1376,18 @@ function closeContext() {
           <span>{{ isRedisProfile(ctxMenu.profile) ? '刷新 Key 属性与 TTL' : '刷新字段与索引元数据' }}</span>
         </button>
         <button
+          v-if="!ctxMenu.isView"
           class="dropdown-item"
           @click="emit('rename-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
           <span>{{ isRedisProfile(ctxMenu.profile) ? '✏️ 重命名 Key...' : '✏️ 重命名表...' }}</span>
         </button>
         <button class="dropdown-item" @click="emit('copy-text', ctxMenu.tableName)">
-          <span>{{ isRedisProfile(ctxMenu.profile) ? '复制 Key 名称' : t('ctxCopyName') }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '复制 Key 名称' : ctxMenu.isView ? '复制视图名称' : t('ctxCopyName') }}</span>
         </button>
         <div class="dropdown-sep" />
         <button
-          v-if="!isRedisProfile(ctxMenu.profile)"
+          v-if="!isRedisProfile(ctxMenu.profile) && !ctxMenu.isView"
           class="dropdown-item"
           style="color: var(--prod)"
           @click="emit('truncate-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
@@ -1176,7 +1399,7 @@ function closeContext() {
           style="color: var(--prod)"
           @click="emit('drop-table', ctxMenu.profile, ctxMenu.dbName, ctxMenu.tableName)"
         >
-          <span>{{ isRedisProfile(ctxMenu.profile) ? '🗑️ 删除 Key (DEL)' : '🗑️ 删除表 (DROP TABLE)' }}</span>
+          <span>{{ isRedisProfile(ctxMenu.profile) ? '🗑️ 删除 Key (DEL)' : ctxMenu.isView ? '🗑️ 删除视图 (DROP VIEW)' : '🗑️ 删除表 (DROP TABLE)' }}</span>
         </button>
       </template>
 

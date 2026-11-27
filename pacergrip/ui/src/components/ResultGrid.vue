@@ -64,7 +64,10 @@ export interface ResultTabItem {
   readOnly: boolean;
   pinned?: boolean;
   sourceTable: string | null;
+  sourceIsView?: boolean;
+  sourceTableType?: string | null;
   availableTables: string[];
+  viewNames?: string[];
   primaryKeys: string[];
   foreignKeys?: ForeignKeyMeta[];
   columns: string[];
@@ -121,10 +124,16 @@ const props = defineProps<{
   historyEntries: QueryHistoryEntry[];
   astAnalysis: ScriptAnalysis | null;
   executing?: boolean;
+  minimized?: boolean;
+  maximized?: boolean;
+  toggleShortcutHint?: string;
 }>();
 
 const emit = defineEmits<{
   (e: 'update:activeServiceTab', tab: 'result' | 'output' | 'ddl' | 'history' | 'problems'): void;
+  (e: 'select-service-tab', tab: 'result' | 'output' | 'ddl' | 'history' | 'problems'): void;
+  (e: 'toggle-minimize'): void;
+  (e: 'toggle-maximize'): void;
   (e: 'update:activeResultTabId', id: string): void;
   (e: 'close-result-tab', id: string): void;
   (e: 'toggle-pin-result-tab', id: string): void;
@@ -156,7 +165,7 @@ const emit = defineEmits<{
   (e: 'toggle-history-pin', entry: QueryHistoryEntry): void;
   (e: 'delete-history-entry', entry: QueryHistoryEntry): void;
   (e: 'rerun-history-sql', entry: QueryHistoryEntry): void;
-  (e: 'notify', message: string): void;
+  (e: 'notify', message: string, level?: 'info' | 'warn' | 'error'): void;
 }>();
 
 const { t } = useI18n();
@@ -522,6 +531,38 @@ const effectiveTargetTable = computed(() => {
   return activeDraft.value?.overrideTable || res.sourceTable || '';
 });
 
+function isTableNameAView(res: ResultTabItem, tableName: string): boolean {
+  const clean = tableName.trim().replace(/^[`"\[]|[`"\]]$/g, '').toLowerCase();
+  const views = res.viewNames ?? [];
+  if (clean && views.length > 0) {
+    const bare = clean.includes('.') ? clean.split('.').pop() ?? clean : clean;
+    const hit = views.some((v) => {
+      const vl = v.toLowerCase();
+      return vl === clean || vl === bare || vl.endsWith(`.${bare}`);
+    });
+    if (hit) return true;
+  }
+  if (res.sourceIsView) {
+    if (!clean) return true;
+    const src = (res.sourceTable ?? '').trim().toLowerCase();
+    return clean === src;
+  }
+  return false;
+}
+
+const isTargetView = computed(() => {
+  const res = currentResult.value;
+  if (!res) return false;
+  const tgt = effectiveTargetTable.value.trim();
+  if (tgt) return isTableNameAView(res, tgt);
+  return Boolean(res.sourceIsView);
+});
+
+function notifyViewReadOnly(actionDesc = '修改数据') {
+  const target = effectiveTargetTable.value.trim() || currentResult.value?.sourceTable || '当前对象';
+  emit('notify', `「${target}」是数据库视图，不能${actionDesc}！`, 'warn');
+}
+
 interface IndexedRow {
   origIdx: number;
   row: Record<string, unknown>;
@@ -613,6 +654,9 @@ function originalCellTooltip(origIdx: number, col: string): string {
   if (!res) return '';
   const origVal = res.rows[origIdx]?.[col];
   const tsHint = decodeUnixTimestampHint(origVal);
+  if (isTargetView.value) {
+    return tsHint ? `Unix 时间解析: ${tsHint}\n当前为数据库视图，不能修改数据` : '当前为数据库视图，不能修改数据';
+  }
   if (!isCellModified(origIdx, col)) {
     return tsHint ? `Unix 时间解析: ${tsHint}\n双击编辑单元格` : '双击编辑单元格';
   }
@@ -644,8 +688,12 @@ async function startEditCell(
 ) {
   const res = currentResult.value;
   if (!res) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('修改单元格数据');
+    return;
+  }
   if (res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法修改结果集');
+    emit('notify', '当前数据源为只读模式，无法修改结果集', 'warn');
     return;
   }
   const draft = ensureDraft(res.id);
@@ -791,6 +839,11 @@ function confirmEditingCell(forceStageOnly = false) {
     ed.errorMsg = '当前为自定义 SQL 结果，请先在上方下拉框选择或输入目标表名，再执行更新 SQL';
     return;
   }
+  if (isTableNameAView(res, tableName)) {
+    ed.errorMsg = `「${tableName}」是数据库视图，不能修改数据！`;
+    notifyViewReadOnly('修改数据');
+    return;
+  }
 
   const preview = editingCellLivePreview.value;
   const sqlToRun = (ed.customSqlMode ? ed.customSqlText : preview?.plan?.sql ?? '').trim();
@@ -864,8 +917,12 @@ function cancelInlineEdit() {
 function addNewRow() {
   const res = currentResult.value;
   if (!res) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('新增数据行');
+    return;
+  }
   if (res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法新增行');
+    emit('notify', '当前数据源为只读模式，无法新增行', 'warn');
     return;
   }
   const draft = ensureDraft(res.id);
@@ -885,8 +942,12 @@ function addNewRow() {
 function toggleDeleteSelectedRow() {
   const res = currentResult.value;
   if (!res) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('删除数据行');
+    return;
+  }
   if (res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法删除行');
+    emit('notify', '当前数据源为只读模式，无法删除行', 'warn');
     return;
   }
   const draft = ensureDraft(res.id);
@@ -955,8 +1016,12 @@ function toggleSelectAllDisplayedRows() {
 function duplicateRowsByIndices(indices: number[]) {
   const res = currentResult.value;
   if (!res) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('复制新增行');
+    return;
+  }
   if (res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法新增复制行');
+    emit('notify', '当前数据源为只读模式，无法新增复制行', 'warn');
     return;
   }
   const unique = Array.from(new Set(indices)).filter((i) => i >= 0 && i < res.rows.length);
@@ -982,8 +1047,13 @@ function duplicateRowsByIndices(indices: number[]) {
 
 function markSelectedRowsDeleted() {
   const res = currentResult.value;
-  if (!res || res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法标记删除');
+  if (!res) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('标记删除行');
+    return;
+  }
+  if (res.readOnly) {
+    emit('notify', '当前数据源为只读模式，无法标记删除', 'warn');
     return;
   }
   if (selectedRowIndices.value.length === 0) return;
@@ -1056,7 +1126,11 @@ function buildCurrentMutationPlan(): GridMutationPlan | null {
   if (!res || !draft) return null;
   const tableName = effectiveTargetTable.value.trim();
   if (!tableName) {
-    emit('notify', '请先在变更栏中选择目标表名，再生成修改 SQL');
+    emit('notify', '请先在变更栏中选择目标表名，再生成修改 SQL', 'warn');
+    return null;
+  }
+  if (isTableNameAView(res, tableName)) {
+    notifyViewReadOnly('提交数据变更');
     return null;
   }
   const plan = generateGridMutationSql({
@@ -1261,8 +1335,13 @@ function handleGridPaste(ev: ClipboardEvent) {
   }
   const res = currentResult.value;
   if (!res) return;
+  if (isTargetView.value) {
+    ev.preventDefault();
+    notifyViewReadOnly('粘贴修改数据');
+    return;
+  }
   if (res.readOnly) {
-    emit('notify', '当前数据源为只读模式，无法粘贴填充单元格');
+    emit('notify', '当前数据源为只读模式，无法粘贴填充单元格', 'warn');
     return;
   }
   const clipText = ev.clipboardData?.getData('text/plain') ?? '';
@@ -1440,7 +1519,12 @@ function formatValueViewerJson(pretty: boolean) {
 
 function applyValueViewerEdit(setNull = false) {
   const res = currentResult.value;
-  if (!res || !selectedColName.value || res.readOnly) return;
+  if (!res || !selectedColName.value) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly(setNull ? '设为 NULL' : '修改数据');
+    return;
+  }
+  if (res.readOnly) return;
   const draft = ensureDraft(res.id);
   if (selectedIsInserted.value) {
     const row = draft.inserted[selectedRowOrigIdx.value];
@@ -1852,7 +1936,13 @@ function handleGridKeydown(ev: KeyboardEvent) {
     return;
   }
   if (ev.key === 'F2' || (ev.key === 'Enter' && !ev.ctrlKey && !ev.metaKey && !ev.altKey)) {
-    if (!currentResult.value || currentResult.value.readOnly || !selectedColName.value) return;
+    if (!currentResult.value || !selectedColName.value) return;
+    if (isTargetView.value) {
+      ev.preventDefault();
+      notifyViewReadOnly('修改单元格数据');
+      return;
+    }
+    if (currentResult.value.readOnly) return;
     ev.preventDefault();
     void startEditCell(selectedIsInserted.value, selectedRowOrigIdx.value, selectedColName.value);
   }
@@ -1860,7 +1950,12 @@ function handleGridKeydown(ev: KeyboardEvent) {
 
 function setContextCellNull() {
   const res = currentResult.value;
-  if (!res || res.readOnly || !cellCtxMenu.col) return;
+  if (!res || !cellCtxMenu.col) return;
+  if (isTargetView.value) {
+    notifyViewReadOnly('设为 NULL');
+    return;
+  }
+  if (res.readOnly) return;
   const origIdx = cellCtxMenu.origIdx;
   const col = cellCtxMenu.col;
   const origRow = res.rows[origIdx];
@@ -2509,12 +2604,16 @@ function exportQuickChartSvg() {
       showExportMenu = false;
     "
   >
-    <div class="services-tabs">
+    <div
+      class="services-tabs"
+      @dblclick.self="minimized ? emit('toggle-minimize') : emit('toggle-maximize')"
+    >
       <div class="services-tab-list">
         <button
           class="services-tab"
-          :class="{ active: activeServiceTab === 'result' }"
-          @click="emit('update:activeServiceTab', 'result')"
+          :class="{ active: !minimized && activeServiceTab === 'result', 'dock-active': minimized && activeServiceTab === 'result' }"
+          :title="!minimized && activeServiceTab === 'result' ? '当前已展开，再次点击可最小化结果集面板' : '展开并切换到结果集'"
+          @click="emit('select-service-tab', 'result')"
         >
           {{ t('tabResult') }}
           <span v-if="currentResult" style="opacity: 0.7">({{ displayedRows.length }})</span>
@@ -2525,8 +2624,9 @@ function exportQuickChartSvg() {
 
         <button
           class="services-tab"
-          :class="{ active: activeServiceTab === 'output' }"
-          @click="emit('update:activeServiceTab', 'output')"
+          :class="{ active: !minimized && activeServiceTab === 'output', 'dock-active': minimized && activeServiceTab === 'output' }"
+          :title="!minimized && activeServiceTab === 'output' ? '当前已展开，再次点击可最小化控制台输出' : '展开并切换到控制台输出'"
+          @click="emit('select-service-tab', 'output')"
         >
           {{ t('tabOutput') }} ({{ consoleLogs.length }})
           <span v-if="errorLogCount > 0" class="pill pill-prod" style="margin-left: 4px">
@@ -2536,24 +2636,27 @@ function exportQuickChartSvg() {
 
         <button
           class="services-tab"
-          :class="{ active: activeServiceTab === 'ddl' }"
-          @click="emit('update:activeServiceTab', 'ddl')"
+          :class="{ active: !minimized && activeServiceTab === 'ddl', 'dock-active': minimized && activeServiceTab === 'ddl' }"
+          :title="!minimized && activeServiceTab === 'ddl' ? '当前已展开，再次点击可最小化建表 DDL' : '展开并切换到建表 DDL'"
+          @click="emit('select-service-tab', 'ddl')"
         >
           {{ t('tabDdl') }}
         </button>
 
         <button
           class="services-tab"
-          :class="{ active: activeServiceTab === 'history' }"
-          @click="emit('update:activeServiceTab', 'history')"
+          :class="{ active: !minimized && activeServiceTab === 'history', 'dock-active': minimized && activeServiceTab === 'history' }"
+          :title="!minimized && activeServiceTab === 'history' ? '当前已展开，再次点击可最小化执行历史' : '展开并切换到执行历史'"
+          @click="emit('select-service-tab', 'history')"
         >
           {{ t('tabHistory') }} ({{ historyEntries.length }})
         </button>
 
         <button
           class="services-tab"
-          :class="{ active: activeServiceTab === 'problems' }"
-          @click="emit('update:activeServiceTab', 'problems')"
+          :class="{ active: !minimized && activeServiceTab === 'problems', 'dock-active': minimized && activeServiceTab === 'problems' }"
+          :title="!minimized && activeServiceTab === 'problems' ? '当前已展开，再次点击可最小化 SQL 检查' : '展开并切换到 SQL 检查'"
+          @click="emit('select-service-tab', 'problems')"
         >
           {{ t('tabProblems') }}
           <span v-if="astWarnings.length > 0" class="pill pill-test" style="margin-left: 4px">
@@ -2564,22 +2667,41 @@ function exportQuickChartSvg() {
 
       <div class="services-tabs-meta">
         <span
-          v-if="activeServiceTab === 'result' && resultTabs.length > 0"
+          v-if="!minimized && activeServiceTab === 'result' && resultTabs.length > 0"
           style="font-size: 11px; color: var(--text-muted)"
         >
           {{ resultTabs.length }} 个结果页
         </span>
         <button
-          v-if="activeServiceTab === 'result' && resultTabs.length > 1 && currentResult"
+          v-if="!minimized && activeServiceTab === 'result' && resultTabs.length > 1 && currentResult"
           class="icon-btn compact"
           title="关闭其他未固定的结果页"
           @click="emit('close-other-result-tabs', currentResult.id)"
         >
           清其他
         </button>
+        <span class="panel-win-controls">
+          <button
+            v-if="!minimized"
+            class="icon-btn compact"
+            :class="{ active: maximized }"
+            :title="maximized ? '还原分栏布局（同时显示控制台编辑器与结果集）' : '最大化底部面板（收起上方 SQL 控制台）'"
+            @click="emit('toggle-maximize')"
+          >
+            <IdeIcon :name="maximized ? 'restore' : 'maximize'" :size="13" />
+          </button>
+          <button
+            class="icon-btn compact"
+            :title="minimized ? `展开底部面板${toggleShortcutHint ? ` (${toggleShortcutHint})` : ''}` : `最小化底部面板${toggleShortcutHint ? ` (${toggleShortcutHint})` : ''}`"
+            @click="emit('toggle-minimize')"
+          >
+            <IdeIcon :name="minimized ? 'chevron-up' : 'minimize'" :size="13" />
+          </button>
+        </span>
       </div>
     </div>
 
+    <div v-show="!minimized" class="services-body-wrap">
     <div
       v-if="activeServiceTab === 'result' && resultTabs.length >= 1"
       class="result-tabs-strip"
@@ -2698,6 +2820,13 @@ function exportQuickChartSvg() {
             </div>
           </div>
 
+          <div v-if="isTargetView" class="grid-view-banner">
+            <IdeIcon name="view" :size="13" />
+            <span>
+              当前对象「<strong>{{ effectiveTargetTable || currentResult.sourceTable }}</strong>」是数据库视图（{{ currentResult.sourceTableType || 'VIEW' }}），视图不能修改数据，仅支持查询、筛选与导出。
+            </span>
+          </div>
+
           <div class="grid-toolbar">
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap">
               <button
@@ -2715,16 +2844,18 @@ function exportQuickChartSvg() {
               />
               <button
                 class="icon-btn compact"
+                :class="{ 'is-view-blocked': isTargetView }"
                 :disabled="currentResult.readOnly"
-                title="在结果集底部新增一行（生成 INSERT SQL）"
+                :title="isTargetView ? '当前为数据库视图，不能新增数据行' : '在结果集底部新增一行（生成 INSERT SQL）'"
                 @click="addNewRow"
               >
                 <IdeIcon name="plus" :size="12" /> {{ t('addRow') }}
               </button>
               <button
                 class="icon-btn compact"
+                :class="{ 'is-view-blocked': isTargetView }"
                 :disabled="currentResult.readOnly"
-                title="标记/取消标记选中行删除（生成 DELETE SQL）"
+                :title="isTargetView ? '当前为数据库视图，不能删除数据行' : '标记/取消标记选中行删除（生成 DELETE SQL）'"
                 @click="toggleDeleteSelectedRow"
               >
                 <IdeIcon name="trash" :size="12" /> {{ t('deleteRow') }}
@@ -2827,7 +2958,8 @@ function exportQuickChartSvg() {
                 {{ currentResult.profileName }} · {{ currentResult.summary.durationMs }} ms ·
                 {{ t('rowsCount', { count: displayedRows.length }) }}
                 <template v-if="visibleColumns.length > 0"> · {{ visibleColumns.length }} 列</template>
-                <template v-if="!currentResult.readOnly"> · 双击单元格可直接修改</template>
+                <template v-if="isTargetView"> · 🔒 视图（不可修改）</template>
+                <template v-else-if="!currentResult.readOnly"> · 双击单元格可直接修改</template>
                 <template v-else> · <IdeIcon name="lock" :size="11" /> 只读</template>
               </span>
             </div>
@@ -3527,7 +3659,7 @@ function exportQuickChartSvg() {
                       <template v-else>
                         <span>查询结果为空（0 行）— 已保留当前查询字段结构</span>
                         <button
-                          v-if="!currentResult.readOnly"
+                          v-if="!currentResult.readOnly && !isTargetView"
                           class="btn btn-sm"
                           style="margin-left: 10px"
                           @click="addNewRow"
@@ -3760,7 +3892,7 @@ function exportQuickChartSvg() {
                   font-size: 12px;
                   resize: none;
                 "
-                :readonly="currentResult.readOnly"
+                :readonly="currentResult.readOnly || isTargetView"
                 placeholder="点击任意单元格查看/编辑完整内容或 JSON..."
               />
               <div v-else-if="viewerDecoderTab === 'base64'" class="viewer-decoder-body">
@@ -3792,7 +3924,7 @@ function exportQuickChartSvg() {
                 <span v-else style="color: var(--text-secondary)">未检测到 Data URI 或 PNG/JPEG/GIF/WebP 十六进制图片头</span>
               </div>
               <div
-                v-if="!currentResult.readOnly && selectedColName && viewerDecoderTab === 'raw'"
+                v-if="!currentResult.readOnly && !isTargetView && selectedColName && viewerDecoderTab === 'raw'"
                 style="
                   display: flex;
                   justify-content: flex-end;
@@ -3807,6 +3939,17 @@ function exportQuickChartSvg() {
                 <button class="btn btn-sm btn-primary" @click="applyValueViewerEdit(false)">
                   {{ instantEditExecute && !selectedIsInserted ? '⚡ 应用并执行 SQL' : '应用修改到暂存' }}
                 </button>
+              </div>
+              <div
+                v-else-if="isTargetView && selectedColName && viewerDecoderTab === 'raw'"
+                style="
+                  padding: 6px 8px;
+                  font-size: 11px;
+                  color: #8b5cf6;
+                  border-top: 1px solid var(--border);
+                "
+              >
+                🔒 当前为数据库视图，仅可查看与复制，不能修改数据
               </div>
             </div>
           </div>
@@ -4276,10 +4419,11 @@ function exportQuickChartSvg() {
         </div>
       </template>
     </div>
+    </div>
 
     <!-- Result Grid Cell Right-Click Context Menu -->
     <div
-      v-if="cellCtxMenu.visible && currentResult"
+      v-if="!minimized && cellCtxMenu.visible && currentResult"
       class="context-menu"
       :style="{ left: `${cellCtxMenu.x}px`, top: `${cellCtxMenu.y}px`, zIndex: 96 }"
       @click.stop
@@ -4437,7 +4581,16 @@ function exportQuickChartSvg() {
       >
         <span>在值检视器打开 / 格式化 JSON</span>
       </button>
-      <template v-if="!currentResult.readOnly">
+      <template v-if="isTargetView">
+        <div class="dropdown-sep" />
+        <div
+          class="dropdown-item"
+          style="color: #8b5cf6; font-size: 11.5px; cursor: default; font-weight: 600"
+        >
+          <span>🔒 当前为数据库视图，不能修改数据</span>
+        </div>
+      </template>
+      <template v-else-if="!currentResult.readOnly">
         <div class="dropdown-sep" />
         <button
           class="dropdown-item"
@@ -4483,7 +4636,7 @@ function exportQuickChartSvg() {
 
     <!-- Floating Cell Editor Popover (Single mounted input + live SQL preview + instant execute) -->
     <div
-      v-if="editingCell && currentResult"
+      v-if="!minimized && editingCell && currentResult"
       class="cell-editor-popover"
       :style="{
         top: `${editingCell.top}px`,

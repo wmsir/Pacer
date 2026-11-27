@@ -86,6 +86,7 @@ import {
 import {
   BUILTIN_SNIPPETS,
   buildDropTableSql,
+  buildDropViewSql,
   buildExplainPlanSql,
   buildRedisCountCommand,
   buildRedisInspectCommand,
@@ -94,16 +95,19 @@ import {
   countLines,
   escapeSqlAsCodeString,
   estimateUtf8Bytes,
+  extractDmlTargetTable,
   extractMarkdownSqlBlocksLocal,
   extractRedisCommandAtLine,
   extractSingleTableTarget,
   extractSqlParameters,
   formatBytes,
   formatSqlLiteral,
+  formatViewMutationError,
   generateMockInsertSql,
   getEngineDisplayName,
   getExplainModesForEngine,
   isRedisEngineKey,
+  isViewTableType,
   isWriteOrDdlStatement,
   matchesFilterPattern,
   minifySqlText,
@@ -214,7 +218,8 @@ const leftTool = ref<'database' | 'files' | 'snippets' | null>('database');
 const rightTool = ref<'files' | 'structure' | 'extensions' | null>(
   filesDockSide.value === 'right' ? 'files' : 'structure',
 );
-const bottomVisible = ref<boolean>(true);
+const bottomVisible = ref<boolean>(localStorage.getItem('pacer.bottomVisible') !== '0');
+const editorCollapsed = ref<boolean>(localStorage.getItem('pacer.editorCollapsed') === '1');
 const leftWidth = ref<number>(Number(localStorage.getItem('pacergrip.leftWidth')) || 276);
 const rightWidth = ref<number>(Number(localStorage.getItem('pacergrip.rightWidth')) || 286);
 const bottomHeight = ref<number>(Number(localStorage.getItem('pacergrip.bottomHeight')) || 270);
@@ -266,6 +271,57 @@ function openFilesPanel() {
   }
 }
 
+function setBottomVisible(visible: boolean) {
+  bottomVisible.value = visible;
+  localStorage.setItem('pacer.bottomVisible', visible ? '1' : '0');
+}
+
+function setEditorCollapsed(collapsed: boolean) {
+  editorCollapsed.value = collapsed;
+  localStorage.setItem('pacer.editorCollapsed', collapsed ? '1' : '0');
+}
+
+function openServiceTab(tab: 'result' | 'output' | 'ddl' | 'history' | 'problems') {
+  activeServiceTab.value = tab;
+  setBottomVisible(true);
+}
+
+function handleSelectServiceTab(tab: 'result' | 'output' | 'ddl' | 'history' | 'problems') {
+  if (!bottomVisible.value) {
+    activeServiceTab.value = tab;
+    setBottomVisible(true);
+  } else if (activeServiceTab.value === tab) {
+    setBottomVisible(false);
+  } else {
+    activeServiceTab.value = tab;
+  }
+}
+
+function toggleBottomMinimize() {
+  setBottomVisible(!bottomVisible.value);
+}
+
+function toggleBottomMaximize() {
+  if (!bottomVisible.value) {
+    setBottomVisible(true);
+    setEditorCollapsed(true);
+  } else {
+    setEditorCollapsed(!editorCollapsed.value);
+  }
+}
+
+function toggleEditorMinimize() {
+  setEditorCollapsed(!editorCollapsed.value);
+}
+
+function minimizeFilesPanel() {
+  if (filesDockSide.value === 'left') {
+    leftTool.value = null;
+  } else {
+    rightTool.value = null;
+  }
+}
+
 function toggleFilesPanel() {
   if (filesDockSide.value === 'left') {
     leftTool.value = leftTool.value === 'files' ? null : 'files';
@@ -298,7 +354,9 @@ function onResizeMove(e: MouseEvent) {
     const next = Math.max(210, Math.min(460, dragStartSize - (e.clientX - dragStartPos)));
     rightWidth.value = next;
   } else if (draggingPane.value === 'bottom') {
-    const next = Math.max(130, Math.min(540, dragStartSize - (e.clientY - dragStartPos)));
+    const maxBottomH =
+      typeof window !== 'undefined' ? Math.max(540, Math.round(window.innerHeight * 0.72)) : 540;
+    const next = Math.max(130, Math.min(maxBottomH, dragStartSize - (e.clientY - dragStartPos)));
     bottomHeight.value = next;
   }
 }
@@ -757,6 +815,8 @@ const activeTxStatus = computed<TransactionStatus>(() => {
 });
 const statusMessage = ref('就绪 · 支持多项目多数据源管理、DBeaver 导入、结果集直接修改与 Markdown 选中执行 SQL');
 const statusIsError = ref(false);
+const toastNotice = ref<{ message: string; tone: 'info' | 'warn' | 'error' } | null>(null);
+let toastTimer: number | null = null;
 
 // Modals State
 const activeModal = ref<ActiveModalKind>('none');
@@ -875,6 +935,24 @@ const encodingModalContext = computed<EncodingModalContext | null>(() => {
 function setStatus(msg: string, isError = false) {
   statusMessage.value = msg;
   statusIsError.value = isError;
+}
+
+function showToast(message: string, tone: 'info' | 'warn' | 'error' = 'warn', durationMs = 4500) {
+  toastNotice.value = { message, tone };
+  if (toastTimer !== null) {
+    window.clearTimeout(toastTimer);
+  }
+  toastTimer = window.setTimeout(() => {
+    toastNotice.value = null;
+    toastTimer = null;
+  }, durationMs);
+}
+
+function handleGridNotify(message: string, level: 'info' | 'warn' | 'error' = 'info') {
+  setStatus(message, level === 'warn' || level === 'error');
+  if (level === 'warn' || level === 'error') {
+    showToast(message, level);
+  }
 }
 
 function pushProjectLog(opts: {
@@ -1324,6 +1402,58 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
   } catch (err) {
     setStatus(`加载表列表失败 (${dbName}): ${String(err)}`, true);
   }
+}
+
+function matchTableMetaInList(list: TableMeta[], tableName: string): TableMeta | undefined {
+  const clean = tableName.trim().replace(/^[`"\[]|[`"\]]$/g, '');
+  if (!clean) return undefined;
+  const lower = clean.toLowerCase();
+  const bare = lower.includes('.') ? lower.split('.').pop() ?? lower : lower;
+  return (
+    list.find((t) => t.name.toLowerCase() === lower) ??
+    list.find((t) => {
+      const tl = t.name.toLowerCase();
+      return tl === bare || tl.endsWith(`.${bare}`);
+    })
+  );
+}
+
+async function ensureDbTablesMeta(
+  profile: ConnectionProfile,
+  dbName: string,
+): Promise<TableMeta[]> {
+  if (!dbName || isRedisProfile(profile)) return [];
+  const key = `${profile.id}:${dbName}`;
+  const cached = tablesByKey[key];
+  if (cached && cached.length > 0) return cached;
+  try {
+    const rawTables = await listTables(profile.id, dbName);
+    const cfg = (profile.mode?.config ?? {}) as Partial<DirectConfig>;
+    const filtered = cfg.objectFilter?.trim()
+      ? rawTables.filter((t) => matchesFilterPattern(t.name, cfg.objectFilter))
+      : rawTables;
+    tablesByKey[key] = filtered;
+    return filtered;
+  } catch {
+    return cached ?? [];
+  }
+}
+
+async function findTableMetaInDb(
+  profile: ConnectionProfile,
+  dbName: string,
+  tableName: string,
+): Promise<TableMeta | undefined> {
+  if (!tableName.trim() || isRedisProfile(profile)) return undefined;
+  const list = await ensureDbTablesMeta(profile, dbName);
+  return matchTableMetaInList(list, tableName);
+}
+
+function isCachedView(profileId: string, dbName: string, tableName: string): boolean {
+  const list = tablesByKey[`${profileId}:${dbName}`];
+  if (!list || list.length === 0) return false;
+  const meta = matchTableMetaInList(list, tableName);
+  return isViewTableType(meta?.tableType);
 }
 
 function connectionsInProjectById(projectId: string): ConnectionProfile[] {
@@ -1947,6 +2077,9 @@ async function ensureTableColumns(
 }
 
 function insertGeneratedSqlSnippet(profile: ConnectionProfile, dbName: string, snippet: string) {
+  if (editorCollapsed.value) {
+    setEditorCollapsed(false);
+  }
   if (!activeTab.value) {
     createNewConsoleTab(snippet, profile.id, dbName);
   } else {
@@ -2001,7 +2134,7 @@ async function handleViewDdl(profile: ConnectionProfile, dbName: string, tableNa
     const ddl = await getTableDdl(profile.id, dbName, tableName);
     ddlText.value = ddl;
     ddlTitle.value = `${profile.name} · ${dbName}.${tableName}`;
-    activeServiceTab.value = 'ddl';
+    openServiceTab('ddl');
     setStatus(
       isRedisProfile(profile) ? `已加载 Redis Key 详情: ${tableName}` : `已加载表 DDL: ${tableName}`,
     );
@@ -2202,6 +2335,13 @@ async function handleOpenImportTableData(
   dbName: string,
   tableName: string,
 ) {
+  const meta = await findTableMetaInDb(profile, dbName, tableName);
+  if (isViewTableType(meta?.tableType)) {
+    const msg = `「${tableName}」是数据库视图，不能导入或修改数据！`;
+    setStatus(msg, true);
+    showToast(msg, 'warn');
+    return;
+  }
   const cols = await ensureTableColumns(profile, dbName, tableName);
   toolTableContext.value = {
     profileId: profile.id,
@@ -2238,6 +2378,13 @@ async function handleGenMockData(
   dbName: string,
   tableName: string,
 ) {
+  const meta = await findTableMetaInDb(profile, dbName, tableName);
+  if (isViewTableType(meta?.tableType)) {
+    const msg = `「${tableName}」是数据库视图，不能生成写入数据的 INSERT 语句！`;
+    setStatus(msg, true);
+    showToast(msg, 'warn');
+    return;
+  }
   const cols = await ensureTableColumns(profile, dbName, tableName);
   if (cols.length === 0) {
     setStatus(`未能读取 ${tableName} 的字段定义，请先刷新元数据`, true);
@@ -2253,6 +2400,12 @@ async function handleOpenRenameTable(
   dbName: string,
   tableName: string,
 ) {
+  if (!isRedisProfile(profile) && isCachedView(profile.id, dbName, tableName)) {
+    const msg = `「${tableName}」是数据库视图，请通过视图 DDL 修改定义！`;
+    setStatus(msg, true);
+    showToast(msg, 'warn');
+    return;
+  }
   toolTableContext.value = {
     profileId: profile.id,
     profileName: profile.name,
@@ -2270,6 +2423,13 @@ async function handleTruncateTable(
   dbName: string,
   tableName: string,
 ) {
+  const meta = await findTableMetaInDb(profile, dbName, tableName);
+  if (isViewTableType(meta?.tableType)) {
+    const msg = `「${tableName}」是数据库视图，不能执行 TRUNCATE 清空操作！`;
+    setStatus(msg, true);
+    showToast(msg, 'warn');
+    return;
+  }
   const sql = buildTruncateTableSql(dbName, tableName, engineKeyOf(profile));
   await runStatementsWithGuard([sql], `清空 ${tableName}`, profile, dbName, true);
 }
@@ -2279,14 +2439,18 @@ async function handleDropTable(
   dbName: string,
   tableName: string,
 ) {
-  const sql = buildDropTableSql(dbName, tableName, engineKeyOf(profile));
-  await runStatementsWithGuard(
-    [sql],
-    isRedisProfile(profile) ? `删除 Key ${tableName}` : `删除表 ${tableName}`,
-    profile,
-    dbName,
-    true,
-  );
+  const meta = isRedisProfile(profile) ? undefined : await findTableMetaInDb(profile, dbName, tableName);
+  const isView = isViewTableType(meta?.tableType);
+  const isMatView = (meta?.tableType ?? '').toUpperCase().includes('MATERIALIZED');
+  const sql = isView
+    ? buildDropViewSql(dbName, tableName, engineKeyOf(profile), isMatView)
+    : buildDropTableSql(dbName, tableName, engineKeyOf(profile));
+  const label = isRedisProfile(profile)
+    ? `删除 Key ${tableName}`
+    : isView
+      ? `删除视图 ${tableName}`
+      : `删除表 ${tableName}`;
+  await runStatementsWithGuard([sql], label, profile, dbName, true);
 }
 
 async function handleRunToolStatements(
@@ -2432,6 +2596,12 @@ function handleOpenSchemaDiff(
 function handleOpenAlterTable(profile: ConnectionProfile, dbName: string, tableName: string) {
   if (isRedisProfile(profile)) {
     void handleOpenRedisEditKey(profile, dbName, tableName);
+    return;
+  }
+  if (isCachedView(profile.id, dbName, tableName)) {
+    const msg = `「${tableName}」是数据库视图，不能修改表结构！`;
+    setStatus(msg, true);
+    showToast(msg, 'warn');
     return;
   }
   syncActiveProjectForProfile(profile);
@@ -2985,6 +3155,32 @@ async function runStatementsWithGuard(
     }
   }
 
+  // Guard direct DML / ALTER TABLE / TRUNCATE against views
+  if (!isRedis) {
+    for (const stmt of statements) {
+      const dmlTarget = extractDmlTargetTable(stmt);
+      if (!dmlTarget) continue;
+      const targetDb = dmlTarget.db || dbName;
+      if (!targetDb) continue;
+      const meta = await findTableMetaInDb(profile, targetDb, dmlTarget.table);
+      if (meta && isViewTableType(meta.tableType)) {
+        const msg = `「${meta.name}」是数据库视图（${meta.tableType || 'VIEW'}），不能执行 ${dmlTarget.action} 修改操作！`;
+        setStatus(msg, true);
+        showToast(msg, 'warn');
+        pushProjectLog({
+          projectId: profile.projectId || activeProjectId.value,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: targetDb,
+          level: 'error',
+          summary: '已阻止修改视图',
+          detail: `${msg}\n${stmt}`,
+        });
+        return;
+      }
+    }
+  }
+
   let analysis: ScriptAnalysis | null = null;
   try {
     analysis = await analyzeSql(joined, profile.dbType);
@@ -3168,14 +3364,12 @@ async function executeStatementsBatch(
   busy.value = true;
   queryExecuting.value = true;
   const queryId = startQueryTimer();
-  activeServiceTab.value = 'result';
-  bottomVisible.value = true;
+  openServiceTab('result');
   const newTabs: ResultTabItem[] = [];
   let totalRowsAll = 0;
   let totalMsAll = 0;
   let lastError: string | null = null;
   const targetProjectId = profile.projectId || activeProjectId.value;
-  const availableTables = (tablesByKey[`${profile.id}:${dbName}`] ?? []).map((t) => t.name);
   const engineKey = engineKeyOf(profile);
   const readOnly = isProfileReadOnly(profile);
   const isRedis = isRedisProfile(profile);
@@ -3198,7 +3392,11 @@ async function executeStatementsBatch(
       const effectiveDb = detected?.db || dbName;
       const sourceTable = isRedis ? null : (detected?.table ?? null);
 
-      // Kick off primary key & FK metadata lookup in parallel so wide queries never stall waiting for SHOW COLUMNS.
+      // Kick off table/view, primary key & FK metadata lookup in parallel so wide queries never stall.
+      const tablesMetaPromise =
+        !isRedis && effectiveDb
+          ? ensureDbTablesMeta(profile, effectiveDb).catch(() => [] as TableMeta[])
+          : Promise.resolve([] as TableMeta[]);
       const pkPromise =
         !isRedis && sourceTable && effectiveDb
           ? resolveTablePrimaryKeys(profile, effectiveDb, sourceTable).catch(() => [] as string[])
@@ -3266,7 +3464,19 @@ async function executeStatementsBatch(
         }
       }
 
-      const [primaryKeys, foreignKeys] = await Promise.all([pkPromise, fkPromise]);
+      const [tablesMeta, primaryKeys, foreignKeys] = await Promise.all([
+        tablesMetaPromise,
+        pkPromise,
+        fkPromise,
+      ]);
+      const availableTables = tablesMeta
+        .filter((t) => !isViewTableType(t.tableType))
+        .map((t) => t.name);
+      const viewNames = tablesMeta
+        .filter((t) => isViewTableType(t.tableType))
+        .map((t) => t.name);
+      const sourceMeta = sourceTable ? matchTableMetaInList(tablesMeta, sourceTable) : undefined;
+      const sourceIsView = isViewTableType(sourceMeta?.tableType);
       const normalizedPageSize = [50, 100, 200, 500, 1000].includes(maxRowsLimit.value ?? 100)
         ? (maxRowsLimit.value ?? 100)
         : 100;
@@ -3281,7 +3491,10 @@ async function executeStatementsBatch(
         dbName: effectiveDb,
         readOnly: readOnly || isRedis,
         sourceTable,
+        sourceIsView,
+        sourceTableType: sourceMeta?.tableType ?? null,
         availableTables: isRedis ? [] : availableTables,
+        viewNames: isRedis ? [] : viewNames,
         primaryKeys,
         foreignKeys,
         columns: markRaw(finalCols),
@@ -3313,7 +3526,12 @@ async function executeStatementsBatch(
           } (${summary.durationMs} ms)`,
         });
       } else {
-        lastError = summary.errorMessage ?? '执行失败';
+        const rawErr = summary.errorMessage ?? '执行失败';
+        const friendlyViewErr = formatViewMutationError(rawErr);
+        lastError = friendlyViewErr ?? rawErr;
+        if (friendlyViewErr) {
+          showToast(friendlyViewErr, 'warn');
+        }
         if (looksLikeConnectionFailure(lastError)) {
           setConnHealth(profile.id, 'error', lastError);
         }
@@ -3335,7 +3553,7 @@ async function executeStatementsBatch(
       resultTabs.value = mergeResultTabsWithPins(newTabs);
       resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
       activeResultTabId.value = newTabs[0].id;
-      activeServiceTab.value = lastError && newTabs[0].columns.length === 0 ? 'output' : 'result';
+      openServiceTab(lastError && newTabs[0].columns.length === 0 ? 'output' : 'result');
     }
 
     if (lastError) {
@@ -3368,7 +3586,7 @@ async function executeStatementsBatch(
       summary: 'SQL 执行异常',
       detail: msg,
     });
-    activeServiceTab.value = 'output';
+    openServiceTab('output');
     setStatus(`执行 SQL 出错: ${msg}`, true);
   } finally {
     stopQueryTimer();
@@ -3629,8 +3847,7 @@ function handleInspectRoutine(profile: ConnectionProfile, dbName: string, routin
   ddlText.value = routine.definition?.trim()
     ? `${header}\n${routine.definition}`
     : `${header}\n-- 当前数据库驱动未返回例程源码正文。`;
-  activeServiceTab.value = 'ddl';
-  bottomVisible.value = true;
+  openServiceTab('ddl');
 }
 
 function handlePreviewGridMutations(payload: GridMutationPreviewPayload) {
@@ -3680,6 +3897,49 @@ async function runGridSqlExecution(
       return;
     }
 
+    // Reject modifying database views before touching the database
+    if (!isRedisProfile(profile) && payload.dbName) {
+      const payloadMeta = await findTableMetaInDb(profile, payload.dbName, payload.tableName);
+      if (payloadMeta && isViewTableType(payloadMeta.tableType)) {
+        const msg = `「${payloadMeta.name}」是数据库视图（${payloadMeta.tableType || 'VIEW'}），不能修改数据！`;
+        setStatus(msg, true);
+        showToast(msg, 'warn');
+        pushProjectLog({
+          projectId: targetProjectId,
+          profileId: profile.id,
+          profileName: profile.name,
+          dbName: payload.dbName,
+          level: 'error',
+          summary: '已阻止修改视图',
+          detail: msg,
+        });
+        opts?.onDone?.(false, msg);
+        return;
+      }
+      for (const stmt of stmts) {
+        const dmlTarget = extractDmlTargetTable(stmt);
+        if (!dmlTarget) continue;
+        const targetDb = dmlTarget.db || payload.dbName;
+        const stmtMeta = await findTableMetaInDb(profile, targetDb, dmlTarget.table);
+        if (stmtMeta && isViewTableType(stmtMeta.tableType)) {
+          const msg = `「${stmtMeta.name}」是数据库视图（${stmtMeta.tableType || 'VIEW'}），不能修改数据！`;
+          setStatus(msg, true);
+          showToast(msg, 'warn');
+          pushProjectLog({
+            projectId: targetProjectId,
+            profileId: profile.id,
+            profileName: profile.name,
+            dbName: targetDb,
+            level: 'error',
+            summary: '已阻止修改视图',
+            detail: `${msg}\n${stmt}`,
+          });
+          opts?.onDone?.(false, msg);
+          return;
+        }
+      }
+    }
+
     for (const stmt of stmts) {
       pushProjectLog({
         projectId: targetProjectId,
@@ -3712,7 +3972,12 @@ async function runGridSqlExecution(
           summary: `修改成功，影响 ${summary.affectedRows ?? 0} 行 (${summary.durationMs} ms)`,
         });
       } else {
-        failedErr = summary.errorMessage ?? '修改提交失败';
+        const rawErr = summary.errorMessage ?? '修改提交失败';
+        const friendlyViewErr = formatViewMutationError(rawErr, payload.tableName);
+        failedErr = friendlyViewErr ?? rawErr;
+        if (friendlyViewErr) {
+          showToast(friendlyViewErr, 'warn');
+        }
         pushProjectLog({
           projectId: targetProjectId,
           profileId: profile.id,
@@ -3728,7 +3993,7 @@ async function runGridSqlExecution(
 
     if (failedErr) {
       if (!opts?.onDone) {
-        activeServiceTab.value = 'output';
+        openServiceTab('output');
       }
       setStatus(`数据修改失败: ${failedErr}`, true);
       opts?.onDone?.(false, failedErr);
@@ -3787,7 +4052,7 @@ async function runGridSqlExecution(
       detail: msg,
     });
     if (!opts?.onDone) {
-      activeServiceTab.value = 'output';
+      openServiceTab('output');
     }
     setStatus(`数据修改异常: ${msg}`, true);
     opts?.onDone?.(false, msg);
@@ -4011,7 +4276,7 @@ async function runExplainSql(sql: string, customTitle?: string) {
     resultTabs.value = mergeResultTabsWithPins([item]);
     resultGridRef.value?.pruneTabState(resultTabs.value.map((r) => r.id));
     activeResultTabId.value = tabId;
-    activeServiceTab.value = 'result';
+    openServiceTab('result');
     pushProjectLog({
       projectId: prof.projectId,
       profileId: prof.id,
@@ -4191,6 +4456,9 @@ async function handleRerunHistorySql(entry: QueryHistoryEntry) {
 // ==================== File & Markdown Operations ====================
 
 function createNewConsoleTab(initialSql = '', profileId?: string, dbName?: string) {
+  if (editorCollapsed.value) {
+    setEditorCollapsed(false);
+  }
   consoleCounter += 1;
   const id = `console-${Date.now()}-${consoleCounter}`;
   const current = activeTab.value;
@@ -4427,7 +4695,7 @@ function recordRecentFile(path: string) {
 
 function openFileDtoInTab(dto: OpenedFileDto) {
   const existing = tabs.value.find((t) => t.path && t.path === dto.path);
-  const defaultMdMode = window.innerWidth >= 1120 ? 'split' : 'source';
+  const defaultMdMode: EditorTab['mdViewMode'] = 'preview';
   const savedBinding = getFileDbBinding(dto.path);
   const boundProf = savedBinding
     ? connections.value.find((c) => c.id === savedBinding.profileId)
@@ -4480,6 +4748,9 @@ function openFileDtoInTab(dto: OpenedFileDto) {
     };
     tabs.value.push(targetTab);
     activeTabId.value = id;
+  }
+  if (editorCollapsed.value) {
+    setEditorCollapsed(false);
   }
   void applyTabDatabaseBinding(targetTab, false);
   recordRecentFile(dto.path);
@@ -4751,6 +5022,9 @@ async function handleRevealInExplorer(targetPath: string) {
 // ==================== Snippets ====================
 
 function insertSnippetIntoEditor(sql: string) {
+  if (editorCollapsed.value) {
+    setEditorCollapsed(false);
+  }
   if (!activeTab.value) {
     createNewConsoleTab(sql);
   } else {
@@ -5167,7 +5441,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
   if (matchesCombo(e, keymap.getCombo('toggleBottomPanel'))) {
     e.preventDefault();
-    bottomVisible.value = !bottomVisible.value;
+    toggleBottomMinimize();
     return;
   }
 
@@ -5447,7 +5721,7 @@ async function restoreEditorSession() {
             readOnly: Boolean(s.readOnly),
             profileId: fallbackProfId,
             dbName: fallbackDb,
-            mdViewMode: s.mdViewMode || 'split',
+            mdViewMode: dto.fileKind === 'markdown' ? (s.mdViewMode || 'preview') : 'source',
             cursor: createEmptyCursor(dto.content),
           });
         } catch {
@@ -5548,6 +5822,10 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   stopQueryTimer();
+  if (toastTimer !== null) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
+  }
   window.removeEventListener('keydown', onGlobalKeydown, { capture: true });
   window.removeEventListener('keyup', onGlobalKeyup);
   window.removeEventListener('click', onGlobalClick);
@@ -5558,6 +5836,16 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="ide-shell">
+    <div
+      v-if="toastNotice"
+      class="pacer-toast"
+      :class="`tone-${toastNotice.tone}`"
+      role="alert"
+    >
+      <span>{{ toastNotice.tone === 'error' ? '✕' : toastNotice.tone === 'warn' ? '⚠' : 'ℹ' }}</span>
+      <span style="flex: 1">{{ toastNotice.message }}</span>
+      <button class="pacer-toast-close" title="关闭提示" @click="toastNotice = null">×</button>
+    </div>
     <!-- ==================== 1. Top Header (38px JetBrains New UI) ==================== -->
     <header class="ide-header">
       <div class="header-left">
@@ -6264,6 +6552,7 @@ onBeforeUnmount(() => {
           @edit-profile="openConnectionModal"
           @delete-profile="handleDeleteProfile"
           @copy-text="copyText"
+          @minimize-panel="leftTool = null"
         />
 
         <FileExplorer
@@ -6296,6 +6585,7 @@ onBeforeUnmount(() => {
           @clear-recent-files="clearRecentFiles"
           @open-demo-md="openDemoMarkdownHandbook"
           @refresh-dir="loadDirectory(mountedDir)"
+          @minimize-panel="minimizeFilesPanel"
         />
 
         <!-- SQL Snippets Tool Window -->
@@ -6340,6 +6630,13 @@ onBeforeUnmount(() => {
                 @click="handleImportCustomSnippets"
               >
                 导入
+              </button>
+              <button
+                class="icon-btn compact"
+                title="最小化 SQL 片段面板"
+                @click="leftTool = null"
+              >
+                <IdeIcon name="minimize" :size="13" />
               </button>
             </div>
           </div>
@@ -6483,7 +6780,10 @@ onBeforeUnmount(() => {
               tab.id === activeTabId && activeProfile ? `env-${activeProfile.env}` : '',
             ]"
             :title="tab.path ?? tab.title"
-            @click="activeTabId = tab.id"
+            @click="
+              activeTabId = tab.id;
+              if (editorCollapsed) setEditorCollapsed(false);
+            "
             @contextmenu.prevent="openTabContextMenu($event, tab)"
             @auxclick.middle.prevent="closeEditorTab(tab.id)"
           >
@@ -6532,8 +6832,24 @@ onBeforeUnmount(() => {
               ×
             </button>
           </span>
+
+          <div class="editor-tabs-win-controls">
+            <button
+              class="icon-btn compact"
+              :class="{ active: editorCollapsed }"
+              :title="
+                editorCollapsed
+                  ? '展开 SQL 查询控制台编辑器'
+                  : '最小化 SQL 查询控制台编辑器（下方结果集/输出将自动占满空间）'
+              "
+              @click="toggleEditorMinimize"
+            >
+              <IdeIcon :name="editorCollapsed ? 'chevron-down' : 'minimize'" :size="13" />
+            </button>
+          </div>
         </div>
 
+        <div v-show="!editorCollapsed" class="editor-workspace-wrap">
         <!-- Contextual Editor Sub-Toolbar -->
         <div v-if="activeTab" class="editor-subbar">
           <div class="subbar-group subbar-left">
@@ -6773,7 +7089,7 @@ onBeforeUnmount(() => {
               "
               style="cursor: pointer"
               title="点击查看 SQL 静态检查详情"
-              @click="activeServiceTab = 'problems'"
+              @click="openServiceTab('problems')"
             >
               AST: {{ astAnalysis.overallKind }}
               <template
@@ -7012,17 +7328,41 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
+        </div>
+
+        <!-- Placeholder when both SQL Console and Bottom Services Panel are minimized -->
+        <div v-if="editorCollapsed && !bottomVisible" class="center-both-minimized">
+          <div class="center-both-minimized-title">SQL 查询控制台与底部结果面板均已最小化</div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center">
+            <button class="btn btn-primary btn-sm" @click="setEditorCollapsed(false)">
+              <IdeIcon name="sql-file" :size="12" /> 展开 SQL 控制台
+            </button>
+            <button class="btn btn-sm" @click="openServiceTab('result')">
+              <IdeIcon name="table" :size="12" /> 展开结果集
+            </button>
+            <button class="btn btn-sm" @click="openServiceTab('output')">
+              <IdeIcon name="bolt" :size="12" /> 展开控制台输出
+            </button>
+          </div>
+        </div>
 
         <!-- Horizontal Resizer -->
         <div
-          v-if="bottomVisible"
+          v-if="bottomVisible && !editorCollapsed"
           class="resizer-h"
           :class="{ dragging: draggingPane === 'bottom' }"
           @mousedown="startResize('bottom', $event)"
         />
 
-        <!-- Bottom Services / Result Grid Panel -->
-        <section v-if="bottomVisible" class="services-panel" :style="{ height: `${bottomHeight}px` }">
+        <!-- Bottom Services / Result Grid Panel (Dock header stays accessible when minimized) -->
+        <section
+          class="services-panel"
+          :class="{
+            minimized: !bottomVisible,
+            maximized: bottomVisible && editorCollapsed,
+          }"
+          :style="bottomVisible && !editorCollapsed ? { height: `${bottomHeight}px` } : undefined"
+        >
           <ResultGrid
             ref="resultGridRef"
             :projects="projects"
@@ -7038,7 +7378,13 @@ onBeforeUnmount(() => {
             :history-entries="historyEntries"
             :ast-analysis="astAnalysis"
             :executing="queryExecuting"
-            @update:active-service-tab="activeServiceTab = $event"
+            :minimized="!bottomVisible"
+            :maximized="bottomVisible && editorCollapsed"
+            :toggle-shortcut-hint="keymap.getDisplay('toggleBottomPanel')"
+            @update:active-service-tab="openServiceTab($event)"
+            @select-service-tab="handleSelectServiceTab"
+            @toggle-minimize="toggleBottomMinimize"
+            @toggle-maximize="toggleBottomMaximize"
             @update:active-result-tab-id="activeResultTabId = $event"
             @close-result-tab="closeResultTab"
             @toggle-pin-result-tab="togglePinResultTab"
@@ -7063,7 +7409,7 @@ onBeforeUnmount(() => {
             @toggle-history-pin="handleToggleHistoryPin"
             @delete-history-entry="handleDeleteHistoryEntry"
             @rerun-history-sql="handleRerunHistorySql"
-            @notify="setStatus($event)"
+            @notify="handleGridNotify"
           />
         </section>
       </main>
@@ -7112,13 +7458,15 @@ onBeforeUnmount(() => {
           @clear-recent-files="clearRecentFiles"
           @open-demo-md="openDemoMarkdownHandbook"
           @refresh-dir="loadDirectory(mountedDir)"
+          @minimize-panel="minimizeFilesPanel"
         />
 
         <!-- Structure & Indexes Inspector -->
         <template v-else-if="rightTool === 'structure'">
           <div class="tw-header">
             <span>{{ t('toolStructure') }}</span>
-            <div v-if="inspectedTable" class="tw-actions" style="gap: 4px">
+            <div class="tw-actions" style="gap: 4px">
+              <template v-if="inspectedTable">
               <template
                 v-if="!isRedisProfile(connections.find((c) => c.id === inspectedTable?.profileId))"
               >
@@ -7182,6 +7530,14 @@ onBeforeUnmount(() => {
                     ? 'INFO'
                     : 'DDL'
                 }}
+              </button>
+              </template>
+              <button
+                class="icon-btn compact"
+                title="最小化结构与索引面板"
+                @click="rightTool = null"
+              >
+                <IdeIcon name="minimize" :size="13" />
               </button>
             </div>
           </div>
@@ -7329,6 +7685,13 @@ onBeforeUnmount(() => {
                 @click="refreshLocalPlugins"
               >
                 <IdeIcon name="refresh" :size="13" />
+              </button>
+              <button
+                class="icon-btn compact"
+                title="最小化扩展能力面板"
+                @click="rightTool = null"
+              >
+                <IdeIcon name="minimize" :size="13" />
               </button>
             </div>
           </div>

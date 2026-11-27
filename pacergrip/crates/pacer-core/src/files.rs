@@ -560,11 +560,11 @@ mod tests {
         let outside_file = outside.join("secret.txt");
         std::fs::write(&outside_file, b"secret").unwrap();
 
-        assert!(ensure_path_within_roots(&inside_file, &[allowed.clone()], true).is_ok());
-        assert!(ensure_path_within_roots(&allowed.join("new_sub/export.csv"), &[allowed.clone()], false).is_ok());
+        assert!(ensure_path_within_roots(&inside_file, std::slice::from_ref(&allowed), true).is_ok());
+        assert!(ensure_path_within_roots(&allowed.join("new_sub/export.csv"), std::slice::from_ref(&allowed), false).is_ok());
 
         let traversal = allowed.join("../outside/secret.txt");
-        assert!(ensure_path_within_roots(&traversal, &[allowed.clone()], true).is_err());
+        assert!(ensure_path_within_roots(&traversal, std::slice::from_ref(&allowed), true).is_err());
         assert!(ensure_path_within_roots(&outside_file, &[allowed], true).is_err());
 
         let _ = std::fs::remove_dir_all(&base);

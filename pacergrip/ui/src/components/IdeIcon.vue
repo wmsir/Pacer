@@ -8,6 +8,7 @@ export type IdeIconName =
   | 'database'
   | 'schema'
   | 'table'
+  | 'view'
   | 'column'
   | 'key'
   | 'index'
@@ -36,9 +37,13 @@ export type IdeIconName =
   | 'dock-left'
   | 'dock-right'
   | 'collapse-all'
+  | 'minimize'
+  | 'maximize'
+  | 'restore'
   | 'close'
   | 'chevron-right'
   | 'chevron-down'
+  | 'chevron-up'
   | 'lock'
   | 'unlock'
   | 'bolt'
@@ -212,6 +217,12 @@ withDefaults(
       <path d="M2.2 6H13.8M6.6 6V13.4M10.4 6V13.4M2.2 9.6H13.8" stroke="#38BDF8" stroke-width="1.15" />
     </template>
 
+    <template v-else-if="name === 'view'">
+      <rect x="2" y="2.6" width="12" height="10.8" rx="1.8" fill="#8B5CF6" fill-opacity="0.14" stroke="#8B5CF6" stroke-width="1.25" />
+      <path d="M3.6 8C4.7 6.05 6.25 5.1 8 5.1C9.75 5.1 11.3 6.05 12.4 8C11.3 9.95 9.75 10.9 8 10.9C6.25 10.9 4.7 9.95 3.6 8Z" stroke="#8B5CF6" stroke-width="1.2" stroke-linejoin="round" />
+      <circle cx="8" cy="8" r="1.4" fill="#8B5CF6" />
+    </template>
+
     <template v-else-if="name === 'column'">
       <rect x="3" y="3.2" width="10" height="9.6" rx="1.6" stroke="currentColor" stroke-width="1.25" opacity="0.72" />
       <path d="M6.4 3.2V12.8" stroke="currentColor" stroke-width="1.2" opacity="0.72" />
@@ -347,6 +358,20 @@ withDefaults(
       <path d="M5.2 2.2H12.2C13 2.2 13.6 2.8 13.6 3.6V10.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity="0.65" />
     </template>
 
+    <template v-else-if="name === 'minimize'">
+      <path d="M3 11.5H13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+    </template>
+
+    <template v-else-if="name === 'maximize'">
+      <rect x="2.6" y="2.8" width="10.8" height="10.4" rx="1.4" stroke="currentColor" stroke-width="1.35" />
+      <path d="M2.6 5.6H13.4" stroke="currentColor" stroke-width="1.2" />
+    </template>
+
+    <template v-else-if="name === 'restore'">
+      <rect x="4.6" y="2.6" width="8.6" height="8" rx="1.2" stroke="currentColor" stroke-width="1.25" />
+      <path d="M11.2 10.6V12.2C11.2 12.86 10.66 13.4 10 13.4H3.8C3.14 13.4 2.6 12.86 2.6 12.2V6.4C2.6 5.74 3.14 5.2 3.8 5.2H4.6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" />
+    </template>
+
     <template v-else-if="name === 'close'">
       <path d="M4.2 4.2L11.8 11.8M11.8 4.2L4.2 11.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
     </template>
@@ -357,6 +382,10 @@ withDefaults(
 
     <template v-else-if="name === 'chevron-down'">
       <path d="M4 6L8 10L12 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+    </template>
+
+    <template v-else-if="name === 'chevron-up'">
+      <path d="M4.2 10L8 6.2L11.8 10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
     </template>
 
     <template v-else-if="name === 'lock'">
