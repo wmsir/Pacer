@@ -102,9 +102,38 @@ export type MarkdownSegment =
   | { kind: 'blockquote'; text: string }
   | { kind: 'hr' }
   | { kind: 'list'; items: string[] }
+  | { kind: 'table'; headers: string[]; rows: string[][] }
   | { kind: 'paragraph'; text: string }
   | { kind: 'sql-code'; block: MarkdownSqlBlock }
   | { kind: 'code'; language: string; text: string };
+
+function isMarkdownTableSeparator(line: string): boolean {
+  const s = line.trim();
+  return s.includes('|') && /^\|?(?:\s*:?-{2,}:?\s*\|)+\s*(?::?-{2,}:?\s*\|?)?$/.test(s);
+}
+
+function parseMarkdownTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  const cells: string[] = [];
+  let cur = '';
+  for (let k = 0; k < s.length; k += 1) {
+    if (s[k] === '\\' && s[k + 1] === '|') {
+      cur += '|';
+      k += 1;
+      continue;
+    }
+    if (s[k] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+      continue;
+    }
+    cur += s[k];
+  }
+  cells.push(cur.trim());
+  return cells;
+}
 
 /** Safe XSS-free Markdown block tokenizer used by the split Preview pane (no v-html). */
 export function parseMarkdownSegments(markdown: string): MarkdownSegment[] {
@@ -197,6 +226,31 @@ export function parseMarkdownSegments(markdown: string): MarkdownSegment[] {
       continue;
     }
 
+    if (trimmed.includes('|') && i + 1 < lines.length && isMarkdownTableSeparator(lines[i + 1])) {
+      const headers = parseMarkdownTableRow(raw);
+      const colCount = Math.max(1, headers.length);
+      const tableRows: string[][] = [];
+      i += 2;
+      while (i < lines.length) {
+        const rowRaw = lines[i];
+        const rowTrim = rowRaw.trim();
+        if (
+          !rowTrim ||
+          !rowTrim.includes('|') ||
+          rowTrim.startsWith('```') ||
+          rowTrim.startsWith('~~~')
+        ) {
+          break;
+        }
+        const cells = parseMarkdownTableRow(rowRaw);
+        while (cells.length < colCount) cells.push('');
+        tableRows.push(cells.slice(0, colCount));
+        i += 1;
+      }
+      segments.push({ kind: 'table', headers, rows: tableRows });
+      continue;
+    }
+
     if (/^([-*+]|\d+\.)\s+/.test(trimmed)) {
       const items: string[] = [];
       while (i < lines.length && /^([-*+]|\d+\.)\s+/.test(lines[i].trim())) {
@@ -215,7 +269,9 @@ export function parseMarkdownSegments(markdown: string): MarkdownSegment[] {
       !lines[i].trim().startsWith('#') &&
       !lines[i].trim().startsWith('>') &&
       !lines[i].trimStart().startsWith('```') &&
-      !lines[i].trimStart().startsWith('~~~')
+      !lines[i].trimStart().startsWith('~~~') &&
+      !/^(-{3,}|\*{3,}|_{3,})$/.test(lines[i].trim()) &&
+      !(lines[i].includes('|') && i + 1 < lines.length && isMarkdownTableSeparator(lines[i + 1]))
     ) {
       paraLines.push(lines[i]);
       i += 1;

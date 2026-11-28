@@ -48,17 +48,17 @@ pub(crate) fn resolve_pool_limits(
     options: Option<&ConnectionOptionsConfig>,
 ) -> (u32, Option<Duration>, bool) {
     let Some(opts) = options else {
-        return (4, None, false);
+        return (6, Some(Duration::from_secs(180)), true);
     };
-    let max_conns = if opts.single_session_mode { 1 } else { 4 };
+    let max_conns = if opts.single_session_mode { 1 } else { 6 };
     let idle_timeout = if opts.auto_disconnect_enabled {
         Some(Duration::from_secs(u64::from(
             opts.auto_disconnect_sec.unwrap_or(300).max(10),
         )))
     } else {
-        None
+        Some(Duration::from_secs(180))
     };
-    (max_conns, idle_timeout, opts.keep_alive_enabled)
+    (max_conns, idle_timeout, true)
 }
 
 pub(crate) fn build_connection_init_stmts(
@@ -1229,5 +1229,25 @@ mod tests {
 
         drop(backend);
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_resolve_pool_limits_defaults_and_single_session() {
+        let (max_c, idle, test_acquire) = resolve_pool_limits(None);
+        assert_eq!(max_c, 6);
+        assert_eq!(idle, Some(Duration::from_secs(180)));
+        assert!(test_acquire);
+
+        let single = ConnectionOptionsConfig {
+            single_session_mode: true,
+            auto_disconnect_enabled: true,
+            auto_disconnect_sec: Some(45),
+            keep_alive_enabled: false,
+            ..Default::default()
+        };
+        let (s_max, s_idle, s_test) = resolve_pool_limits(Some(&single));
+        assert_eq!(s_max, 1);
+        assert_eq!(s_idle, Some(Duration::from_secs(45)));
+        assert!(s_test);
     }
 }

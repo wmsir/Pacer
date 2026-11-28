@@ -500,9 +500,12 @@ function colStyle(col: string) {
   return w ? { width: `${w}px`, minWidth: `${w}px`, maxWidth: `${w}px` } : undefined;
 }
 
+let activeColResizeCleanup: (() => void) | null = null;
+
 function startColResize(e: MouseEvent, col: string) {
   const res = currentResult.value;
   if (!res) return;
+  activeColResizeCleanup?.();
   const th = (e.currentTarget as HTMLElement)?.parentElement;
   const startX = e.clientX;
   const key = `${res.id}:${col}`;
@@ -511,12 +514,16 @@ function startColResize(e: MouseEvent, col: string) {
   const onMove = (mv: MouseEvent) => {
     colWidths[key] = Math.max(52, Math.min(680, startWidth + (mv.clientX - startX)));
   };
-  const onUp = () => {
+  const cleanup = () => {
     window.removeEventListener('mousemove', onMove);
-    window.removeEventListener('mouseup', onUp);
+    window.removeEventListener('mouseup', cleanup);
+    if (activeColResizeCleanup === cleanup) {
+      activeColResizeCleanup = null;
+    }
   };
+  activeColResizeCleanup = cleanup;
   window.addEventListener('mousemove', onMove);
-  window.addEventListener('mouseup', onUp);
+  window.addEventListener('mouseup', cleanup);
 }
 
 function resetColWidth(col: string) {
@@ -2304,6 +2311,11 @@ onBeforeUnmount(() => {
     window.clearInterval(watchTimerHandle);
     watchTimerHandle = null;
   }
+  if (savedFlashTimer !== null) {
+    window.clearTimeout(savedFlashTimer);
+    savedFlashTimer = null;
+  }
+  activeColResizeCleanup?.();
   resizeObserver?.disconnect();
   resizeObserver = null;
 });

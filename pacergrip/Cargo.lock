@@ -2786,7 +2786,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "pacer-client"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "async-trait",
  "pacer-core",
@@ -2799,7 +2799,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-core"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "aes",
  "async-trait",
@@ -2819,7 +2819,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-dbeaver-io"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "aes",
  "cbc",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-drivers"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2855,7 +2855,7 @@ dependencies = [
 
 [[package]]
 name = "pacer-sql-ast"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "pacer-core",
  "serde",
@@ -2864,7 +2864,7 @@ dependencies = [
 
 [[package]]
 name = "pacergrip-app"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "aes",
  "cbc",

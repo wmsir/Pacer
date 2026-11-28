@@ -1105,6 +1105,52 @@ code,
   background: var(--bg-editor);
 }
 
+.md-sql-card-flash {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.md-table-wrap {
+  margin: 10px 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.md-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.md-preview-table th,
+.md-preview-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+.md-preview-table th:last-child,
+.md-preview-table td:last-child {
+  border-right: none;
+}
+
+.md-preview-table th {
+  background: var(--bg-chrome);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.md-preview-table tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--bg-chrome) 45%, transparent);
+}
+
+.md-preview-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 /* ==================== Bottom Services / Result Panel ==================== */
 .services-panel {
   display: flex;

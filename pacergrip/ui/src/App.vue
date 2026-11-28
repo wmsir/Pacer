@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, markRaw, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useI18n } from './i18n';
 import {
   analyzeSql,
@@ -516,6 +516,19 @@ const inspectedForeignKeys = computed(() => {
   const k = `${inspectedTable.value.profileId}:${inspectedTable.value.dbName}:${inspectedTable.value.tableName}`;
   return foreignKeysByKey[k] ?? [];
 });
+
+const inspectedIsView = computed(() => {
+  if (!inspectedTable.value) return false;
+  return isCachedView(
+    inspectedTable.value.profileId,
+    inspectedTable.value.dbName,
+    inspectedTable.value.tableName,
+  );
+});
+
+const mdPreviewPaneRef = ref<HTMLDivElement | null>(null);
+const highlightedMdBlockIdx = ref<number | null>(null);
+let mdHighlightTimer: number | null = null;
 
 // Files Explorer (Recursive Tree) & Snippets State
 const mountedDir = ref<string>(localStorage.getItem('pacergrip.mountedDir') || '');
@@ -1379,25 +1392,28 @@ async function loadTablesForDb(profile: ConnectionProfile, dbName: string) {
         })
         .catch(() => {});
     }
-    // Prefetch first few tables' columns silently and apply in one batch
-    const toPrefetch = tables
-      .slice(0, 12)
-      .filter((tbl) => !columnsByKey[`${profile.id}:${dbName}:${tbl.name}`]);
-    if (toPrefetch.length > 0) {
-      void Promise.allSettled(
-        toPrefetch.map((tbl) =>
-          listColumns(profile.id, dbName, tbl.name).then((cols) => ({
-            key: `${profile.id}:${dbName}:${tbl.name}`,
-            cols,
-          })),
-        ),
-      ).then((results) => {
-        for (const r of results) {
-          if (r.status === 'fulfilled') {
-            setBoundedCacheEntry(columnsByKey, r.value.key, r.value.cols);
+    // Throttled column prefetch (max 6 tables, concurrency 2; skip in single-session mode to prevent pool blocking)
+    if (!cfg.options?.singleSessionMode) {
+      const toPrefetch = tables
+        .slice(0, 6)
+        .filter((tbl) => !columnsByKey[`${profile.id}:${dbName}:${tbl.name}`]);
+      if (toPrefetch.length > 0) {
+        let cursor = 0;
+        const workerCount = Math.min(2, toPrefetch.length);
+        const runPrefetchWorker = async () => {
+          while (cursor < toPrefetch.length) {
+            const tbl = toPrefetch[cursor];
+            cursor += 1;
+            try {
+              const cols = await listColumns(profile.id, dbName, tbl.name);
+              setBoundedCacheEntry(columnsByKey, `${profile.id}:${dbName}:${tbl.name}`, cols);
+            } catch {
+              // Silent background prefetch failure
+            }
           }
-        }
-      });
+        };
+        void Promise.all(Array.from({ length: workerCount }, () => runPrefetchWorker()));
+      }
     }
   } catch (err) {
     setStatus(`加载表列表失败 (${dbName}): ${String(err)}`, true);
@@ -5529,12 +5545,40 @@ async function copyText(text: string) {
   }
 }
 
+function handleMdHeadingClick(line: number) {
+  if (!activeTab.value) return;
+  if (activeTab.value.mdViewMode === 'preview') {
+    activeTab.value.mdViewMode = 'split';
+    void nextTick(() => {
+      editorRef.value?.jumpToLine(line);
+    });
+    return;
+  }
+  editorRef.value?.jumpToLine(line);
+}
+
 function onMdBlockJump(e: Event) {
-  const idx = Number((e.target as HTMLSelectElement).value);
+  const select = e.target as HTMLSelectElement;
+  const idx = Number(select.value);
   const blk = activeMdBlocks.value[idx];
   if (blk) {
-    editorRef.value?.jumpToLine(blk.contentStartLine);
+    if (activeTab.value?.mdViewMode !== 'preview') {
+      editorRef.value?.jumpToLine(blk.contentStartLine);
+    }
+    if (mdPreviewPaneRef.value) {
+      const card = mdPreviewPaneRef.value.querySelector<HTMLElement>(
+        `.md-sql-card[data-md-block-idx="${blk.index}"]`,
+      );
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      highlightedMdBlockIdx.value = blk.index;
+      if (mdHighlightTimer !== null) window.clearTimeout(mdHighlightTimer);
+      mdHighlightTimer = window.setTimeout(() => {
+        highlightedMdBlockIdx.value = null;
+        mdHighlightTimer = null;
+      }, 1400);
+    }
   }
+  select.value = '-1';
 }
 
 function toggleLeftTool(tool: 'database' | 'files' | 'snippets') {
@@ -5825,6 +5869,22 @@ onBeforeUnmount(() => {
   if (toastTimer !== null) {
     window.clearTimeout(toastTimer);
     toastTimer = null;
+  }
+  if (mdDebounceTimer !== null) {
+    window.clearTimeout(mdDebounceTimer);
+    mdDebounceTimer = null;
+  }
+  if (astTimer !== null) {
+    window.clearTimeout(astTimer);
+    astTimer = null;
+  }
+  if (sessionSaveTimer !== null) {
+    window.clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = null;
+  }
+  if (mdHighlightTimer !== null) {
+    window.clearTimeout(mdHighlightTimer);
+    mdHighlightTimer = null;
   }
   window.removeEventListener('keydown', onGlobalKeydown, { capture: true });
   window.removeEventListener('keyup', onGlobalKeyup);
@@ -7167,6 +7227,7 @@ onBeforeUnmount(() => {
           <!-- XSS-safe Interactive Markdown Preview Pane (zero v-html) -->
           <div
             v-if="isMarkdownTab && activeTab.mdViewMode !== 'source'"
+            ref="mdPreviewPaneRef"
             class="md-preview-pane"
           >
             <template v-for="(seg, idx) in activeMdSegments" :key="idx">
@@ -7174,8 +7235,8 @@ onBeforeUnmount(() => {
                 :is="`h${Math.min(seg.level, 4)}`"
                 v-if="seg.kind === 'heading'"
                 style="cursor: pointer"
-                title="点击跳转到源码行"
-                @click="editorRef?.jumpToLine(seg.line)"
+                :title="activeTab.mdViewMode === 'preview' ? '点击切至分屏并跳转到源码行' : '点击跳转到源码行'"
+                @click="handleMdHeadingClick(seg.line)"
               >
                 {{ seg.text }}
               </component>
@@ -7193,12 +7254,32 @@ onBeforeUnmount(() => {
                 <li v-for="(item, liIdx) in seg.items" :key="liIdx">{{ item }}</li>
               </ul>
 
+              <div v-else-if="seg.kind === 'table'" class="md-table-wrap">
+                <table class="md-preview-table">
+                  <thead>
+                    <tr>
+                      <th v-for="(hdr, hIdx) in seg.headers" :key="hIdx">{{ hdr }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(row, rIdx) in seg.rows" :key="rIdx">
+                      <td v-for="(cell, cIdx) in row" :key="cIdx">{{ cell }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
               <p v-else-if="seg.kind === 'paragraph'" style="margin: 6px 0; white-space: pre-wrap">
                 {{ seg.text }}
               </p>
 
               <!-- Interactive Runnable SQL Card -->
-              <div v-else-if="seg.kind === 'sql-code'" class="md-sql-card">
+              <div
+                v-else-if="seg.kind === 'sql-code'"
+                class="md-sql-card"
+                :class="{ 'md-sql-card-flash': highlightedMdBlockIdx === seg.block.index }"
+                :data-md-block-idx="seg.block.index"
+              >
                 <div class="md-sql-card-head">
                   <span>
                     SQL 块 #{{ seg.block.index + 1 }} · {{ seg.block.language.toUpperCase() }}
@@ -7225,6 +7306,13 @@ onBeforeUnmount(() => {
                     >
                       ⧉ 控制台打开
                     </button>
+                    <button
+                      class="cm-md-sql-lens-btn secondary"
+                      title="复制此 SQL 块"
+                      @click="copyText(seg.block.sql)"
+                    >
+                      复制
+                    </button>
                   </div>
                 </div>
                 <pre>{{ seg.block.sql }}</pre>
@@ -7233,6 +7321,13 @@ onBeforeUnmount(() => {
               <div v-else-if="seg.kind === 'code'" class="md-sql-card">
                 <div class="md-sql-card-head">
                   <span>{{ seg.language }}</span>
+                  <button
+                    class="cm-md-sql-lens-btn secondary"
+                    title="复制代码内容"
+                    @click="copyText(seg.text)"
+                  >
+                    复制
+                  </button>
                 </div>
                 <pre>{{ seg.text }}</pre>
               </div>
@@ -7471,6 +7566,7 @@ onBeforeUnmount(() => {
                 v-if="!isRedisProfile(connections.find((c) => c.id === inspectedTable?.profileId))"
               >
                 <button
+                  v-if="!inspectedIsView"
                   class="icon-btn compact"
                   title="导入 CSV / JSON 数据到当前表"
                   @click="
@@ -7499,6 +7595,7 @@ onBeforeUnmount(() => {
                   代码
                 </button>
                 <button
+                  v-if="!inspectedIsView"
                   class="icon-btn compact"
                   title="生成 10 行 Mock INSERT 数据"
                   @click="
@@ -7557,8 +7654,9 @@ onBeforeUnmount(() => {
                   font-size: 12px;
                 "
               >
-                <div style="font-weight: 700; font-family: var(--font-mono)">
-                  {{ inspectedTable.dbName }}.{{ inspectedTable.tableName }}
+                <div style="display: flex; align-items: center; gap: 6px; font-weight: 700; font-family: var(--font-mono)">
+                  <span>{{ inspectedTable.dbName }}.{{ inspectedTable.tableName }}</span>
+                  <span v-if="inspectedIsView" class="tree-view-badge">视图</span>
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px">
                   {{ t('columnsLabel') }}: {{ inspectedColumns.length }} ·

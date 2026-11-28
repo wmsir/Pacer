@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
-use tokio::sync::{mpsc, oneshot, RwLock as AsyncRwLock};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, RwLock as AsyncRwLock};
 use uuid::Uuid;
 use zeroize::Zeroize;
 
@@ -95,6 +95,7 @@ pub struct AppState {
     /// Subset of passwords persisted to disk (`Save: Forever`).
     pub persisted_passwords: RwLock<HashMap<String, String>>,
     pub active_backends: AsyncRwLock<HashMap<String, CachedBackend>>,
+    pub connect_locks: AsyncRwLock<HashMap<String, Arc<AsyncMutex<()>>>>,
     pub running_queries: AsyncRwLock<HashMap<String, RunningQueryHandle>>,
     pub history: RwLock<Vec<QueryHistoryEntry>>,
     pub history_dirty: Arc<AtomicBool>,
@@ -156,6 +157,7 @@ impl AppState {
             passwords: RwLock::new(persisted.clone()),
             persisted_passwords: RwLock::new(persisted),
             active_backends: AsyncRwLock::new(HashMap::new()),
+            connect_locks: AsyncRwLock::new(HashMap::new()),
             running_queries: AsyncRwLock::new(HashMap::new()),
             history: RwLock::new(history),
             history_dirty: Arc::new(AtomicBool::new(false)),
@@ -587,12 +589,40 @@ impl AppState {
         Ok(profiles)
     }
 
+    async fn profile_connect_lock(&self, profile_id: &str) -> Arc<AsyncMutex<()>> {
+        if let Some(lock) = self.connect_locks.read().await.get(profile_id).cloned() {
+            return lock;
+        }
+        let mut guard = self.connect_locks.write().await;
+        Arc::clone(
+            guard
+                .entry(profile_id.to_string())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(()))),
+        )
+    }
+
+    pub async fn evict_backend_if_error_msg(&self, profile_id: &str, msg: &str) {
+        if looks_like_broken_transport_error(msg) {
+            self.active_backends.write().await.remove(profile_id);
+        }
+    }
+
     async fn resolve_backend(
         &self,
         profile_id: &str,
         password_override: Option<String>,
     ) -> Result<(ConnectionProfile, Arc<dyn DbBackend>), String> {
         let profile = self.get_profile(profile_id)?;
+
+        if password_override.is_none() {
+            if let Some(cached) = self.active_backends.read().await.get(profile_id).cloned() {
+                cached.touch();
+                return Ok((profile, Arc::clone(&cached.backend)));
+            }
+        }
+
+        let connect_lock = self.profile_connect_lock(profile_id).await;
+        let _connect_guard = connect_lock.lock().await;
 
         let mut transient_override: Option<String> = None;
         if let Some(pwd) = password_override {
@@ -885,6 +915,25 @@ fn load_connections_from_disk(storage_dir: &Path) -> Vec<ConnectionProfile> {
         return Vec::new();
     };
     serde_json::from_str::<Vec<ConnectionProfile>>(&raw).unwrap_or_default()
+}
+
+fn looks_like_broken_transport_error(msg: &str) -> bool {
+    let low = msg.to_ascii_lowercase();
+    [
+        "pool timed out",
+        "transport error",
+        "connection closed",
+        "connection reset",
+        "broken pipe",
+        "unexpected eof",
+        "server has gone away",
+        "lost connection",
+        "channel closed",
+        "eof",
+        "ssh",
+    ]
+    .iter()
+    .any(|kw| low.contains(kw))
 }
 
 fn map_err(err: CoreError) -> String {
@@ -1438,6 +1487,7 @@ pub async fn delete_connection(
         }
     }
     state.active_backends.write().await.remove(&profile_id);
+    state.connect_locks.write().await.remove(&profile_id);
     state.persist_connections()?;
     state.persist_vault()?;
     Ok(())
@@ -1450,7 +1500,14 @@ pub async fn test_connection_cmd(
     password: Option<String>,
 ) -> Result<PingMetrics, String> {
     let (_, backend) = state.resolve_backend(&profile_id, password).await?;
-    backend.test_connection().await.map_err(map_err)
+    match backend.test_connection().await {
+        Ok(m) => Ok(m),
+        Err(err) => {
+            let msg = map_err(err);
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1876,7 +1933,14 @@ pub async fn list_databases_cmd(
     password: Option<String>,
 ) -> Result<Vec<DatabaseMeta>, String> {
     let (_, backend) = state.resolve_backend(&profile_id, password).await?;
-    backend.list_databases().await.map_err(map_err)
+    match backend.list_databases().await {
+        Ok(list) => Ok(list),
+        Err(err) => {
+            let msg = map_err(err);
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1886,7 +1950,14 @@ pub async fn list_tables_cmd(
     db_name: String,
 ) -> Result<Vec<TableMeta>, String> {
     let (_, backend) = state.resolve_backend(&profile_id, None).await?;
-    backend.list_tables(&db_name).await.map_err(map_err)
+    match backend.list_tables(&db_name).await {
+        Ok(list) => Ok(list),
+        Err(err) => {
+            let msg = map_err(err);
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1897,10 +1968,14 @@ pub async fn list_columns_cmd(
     table_name: String,
 ) -> Result<Vec<ColumnMeta>, String> {
     let (_, backend) = state.resolve_backend(&profile_id, None).await?;
-    backend
-        .list_columns(&db_name, &table_name)
-        .await
-        .map_err(map_err)
+    match backend.list_columns(&db_name, &table_name).await {
+        Ok(list) => Ok(list),
+        Err(err) => {
+            let msg = map_err(err);
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1911,10 +1986,14 @@ pub async fn get_table_ddl_cmd(
     table_name: String,
 ) -> Result<String, String> {
     let (_, backend) = state.resolve_backend(&profile_id, None).await?;
-    backend
-        .get_table_ddl(&db_name, &table_name)
-        .await
-        .map_err(map_err)
+    match backend.get_table_ddl(&db_name, &table_name).await {
+        Ok(ddl) => Ok(ddl),
+        Err(err) => {
+            let msg = map_err(err);
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
+            Err(msg)
+        }
+    }
 }
 
 #[tauri::command]
@@ -2034,6 +2113,11 @@ pub async fn execute_sql_cmd(
     let record_history = !skip_history.unwrap_or(false);
     match exec_result {
         Ok(summary) => {
+            if !summary.success {
+                if let Some(ref err_msg) = summary.error_message {
+                    state.evict_backend_if_error_msg(&profile_id, err_msg).await;
+                }
+            }
             if record_history {
                 state.push_history(QueryHistoryEntry {
                     id: Uuid::new_v4().to_string(),
@@ -2069,6 +2153,7 @@ pub async fn execute_sql_cmd(
         }
         Err(err) => {
             let msg = err.to_string();
+            state.evict_backend_if_error_msg(&profile_id, &msg).await;
             if record_history {
                 state.push_history(QueryHistoryEntry {
                     id: Uuid::new_v4().to_string(),

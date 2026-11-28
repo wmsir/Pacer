@@ -146,7 +146,7 @@ impl MySqlBackend {
         let init_stmts = build_connection_init_stmts(config.options.as_ref(), Some("SET time_zone = "));
         let mut pool_opts = MySqlPoolOptions::new()
             .max_connections(max_conns)
-            .acquire_timeout(Duration::from_secs(8))
+            .acquire_timeout(Duration::from_secs(15))
             .test_before_acquire(test_before_acquire);
         if let Some(idle) = idle_timeout {
             pool_opts = pool_opts.idle_timeout(Some(idle));
