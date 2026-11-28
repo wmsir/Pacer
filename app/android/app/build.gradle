@@ -1,8 +1,60 @@
+import java.util.Properties
+
 plugins {
     id "com.android.application"
     id "kotlin-android"
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id "dev.flutter.flutter-gradle-plugin"
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = [
+    rootProject.file("../key.properties"),
+    rootProject.file("key.properties")
+].find { it.exists() }
+if (keystorePropertiesFile != null) {
+    keystorePropertiesFile.withReader("UTF-8") { reader ->
+        keystoreProperties.load(reader)
+    }
+}
+
+def resolveSigningValue = { String envKey, String propKey ->
+    def envVal = System.getenv(envKey)
+    if (envVal != null && !envVal.trim().isEmpty()) {
+        return envVal.trim()
+    }
+    def propVal = keystoreProperties.getProperty(propKey)
+    return (propVal != null && !propVal.trim().isEmpty()) ? propVal.trim() : null
+}
+
+def envStoreFilePath = System.getenv("PACER_KEYSTORE_FILE")?.trim()
+def propStoreFilePath = keystoreProperties.getProperty("storeFile")?.trim()
+def releaseStoreFilePath = (envStoreFilePath && !envStoreFilePath.isEmpty()) ? envStoreFilePath : (propStoreFilePath ?: null)
+def releaseStoreFile = null
+if (releaseStoreFilePath) {
+    def candidate = new File(releaseStoreFilePath)
+    if (candidate.isAbsolute()) {
+        releaseStoreFile = candidate
+    } else if (envStoreFilePath && !envStoreFilePath.isEmpty()) {
+        releaseStoreFile = rootProject.file(releaseStoreFilePath)
+    } else if (keystorePropertiesFile != null) {
+        releaseStoreFile = new File(keystorePropertiesFile.parentFile, releaseStoreFilePath)
+    } else {
+        releaseStoreFile = rootProject.file(releaseStoreFilePath)
+    }
+}
+def releaseStorePassword = resolveSigningValue("PACER_KEYSTORE_PASSWORD", "storePassword")
+def releaseKeyAlias = resolveSigningValue("PACER_KEY_ALIAS", "keyAlias")
+def releaseKeyPassword = resolveSigningValue("PACER_KEY_PASSWORD", "keyPassword")
+def hasReleaseSigning = releaseStoreFile != null && releaseStoreFile.exists() && releaseStorePassword && releaseKeyAlias && releaseKeyPassword
+def isReleaseTaskRequested = gradle.startParameter.taskNames.any {
+    def lower = it.toLowerCase()
+    lower.contains("release") || lower.contains("bundle")
+}
+if (isReleaseTaskRequested && !hasReleaseSigning) {
+    throw new GradleException(
+        "Missing Android release signing configuration! Provide pacer/app/android/key.properties or PACER_KEYSTORE_* env vars (storeFile=${releaseStoreFilePath ?: 'unset'})."
+    )
 }
 
 android {
@@ -19,6 +71,17 @@ android {
         jvmTarget = JavaVersion.VERSION_1_8
     }
 
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     defaultConfig {
         applicationId = "cn.fwpt.pacer"
         // You can update the following values to match your application needs.
@@ -31,9 +94,7 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            signingConfig = signingConfigs.release
         }
     }
 }
